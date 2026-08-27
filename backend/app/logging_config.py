@@ -3,7 +3,7 @@ Application-wide logging.
 
 Every log record is:
   1. Written to a rotating file on disk (logs/nexus.log)
-  2. Mirrored into the TinyDB `logs` table so the React admin interface can
+  2. Mirrored into the SQLite `logs` table so the React admin interface can
      query/filter/paginate logs through the API without needing file access.
 """
 import logging
@@ -13,8 +13,8 @@ from .config import settings
 _MAX_DB_LOG_RECORDS = 5000
 
 
-class TinyDBLogHandler(logging.Handler):
-    """Logging handler that mirrors records into the TinyDB logs table."""
+class DBLogHandler(logging.Handler):
+    """Logging handler that mirrors records into the SQLite-backed logs table."""
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -63,7 +63,7 @@ def setup_logging() -> logging.Logger:
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(fmt)
 
-    db_handler = TinyDBLogHandler()
+    db_handler = DBLogHandler()
 
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)

@@ -20,6 +20,7 @@ from .routers import events as events_router
 from .routers import transactions as transactions_router
 from .routers import logs as logs_router
 from .routers import dashboard as dashboard_router
+from .routers import admin_config as admin_config_router
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIST = BACKEND_DIR.parent / "frontend" / "dist"
@@ -63,6 +64,7 @@ app.include_router(events_router.router)
 app.include_router(transactions_router.router)
 app.include_router(logs_router.router)
 app.include_router(dashboard_router.router)
+app.include_router(admin_config_router.router)
 
 
 @app.get("/api/health")

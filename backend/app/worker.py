@@ -13,6 +13,7 @@ Salesforce as a new platform event, so the whole pipeline is decoupled at
 every stage via the broker and can be scaled independently later.
 """
 from typing import Optional
+import requests
 from .broker import broker
 from .database import orgs_table, event_configs_table, Q
 from .logging_config import log_event
@@ -22,15 +23,48 @@ from .salesforce_client import sf_client
 
 def process_payload(payload: dict) -> dict:
     """
-    Placeholder for the real business / AI processing logic.
-    Replace this function with a call into your model, rules engine, or
-    downstream service. It must return a JSON-serialisable dict.
+    Business / AI processing logic for every inbound event.
+
+    If the DSSClient admin configuration (Admin Configuration -> DSSClient)
+    has a URL set, the payload is forwarded to that endpoint along with the
+    configured project name / LLM identifier / API key, and the endpoint's
+    JSON response is returned as the processing result. If no DSSClient URL
+    is configured, or the call fails, a simple local fallback result is
+    returned instead so the pipeline never breaks because of a downstream
+    outage.
     """
-    return {
-        "status": "ok",
-        "summary": "Event processed by Salesforce Nexus AI Server",
-        "echo": payload,
-    }
+    from .routers.admin_config import get_dss_client_config_raw  # local import avoids a circular import at module load time
+
+    config = get_dss_client_config_raw()
+
+    if not config.get("url"):
+        return {
+            "status": "ok",
+            "summary": "Event processed by Salesforce Nexus AI Server (no DSSClient configured)",
+            "echo": payload,
+        }
+
+    try:
+        response = requests.post(
+            config["url"],
+            json={
+                "project": config.get("project_name", ""),
+                "llm": config.get("llm", ""),
+                "input": payload,
+            },
+            headers={"Authorization": f"Bearer {config.get('api_key', '')}"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as exc:  # noqa: BLE001
+        log_event("error", f"DSSClient call failed, falling back to local processing: {exc}")
+        return {
+            "status": "error",
+            "summary": "DSSClient call failed; returning local fallback result",
+            "error": str(exc),
+            "echo": payload,
+        }
 
 
 def _default_publish_channel(org_id: str) -> Optional[str]:

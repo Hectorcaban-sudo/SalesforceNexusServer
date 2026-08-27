@@ -1,6 +1,6 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
-  LayoutDashboard, Building2, Radio, ListTree, ScrollText, Search, LogOut, Settings,
+  LayoutDashboard, Building2, Radio, ListTree, ScrollText, Search, LogOut, Settings, SlidersHorizontal,
 } from 'lucide-react'
 import { logout } from '../lib/api'
 import { useEffect, useState } from 'react'
@@ -12,6 +12,10 @@ const NAV_ITEMS = [
   { to: '/events', label: 'Event Config', icon: Radio },
   { to: '/transactions', label: 'Transactions', icon: ListTree },
   { to: '/logs', label: 'System Logs', icon: ScrollText },
+]
+
+const ADMIN_NAV_ITEMS = [
+  { to: '/admin-config', label: 'Admin Configuration', icon: SlidersHorizontal },
 ]
 
 export default function Layout({ children }) {
@@ -45,6 +49,20 @@ export default function Layout({ children }) {
               key={item.to}
               to={item.to}
               end={item.end}
+              className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}
+            >
+              <item.icon />
+              {item.label}
+            </NavLink>
+          ))}
+        </div>
+
+        <div className="nav-group">
+          <div className="nav-label">Administration</div>
+          {ADMIN_NAV_ITEMS.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
               className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}
             >
               <item.icon />

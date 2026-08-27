@@ -1,4 +1,6 @@
 # Backend
+backend/data/*.db
+backend/data/*.db-*
 backend/data/*.json
 backend/logs/*.log*
 backend/__pycache__/

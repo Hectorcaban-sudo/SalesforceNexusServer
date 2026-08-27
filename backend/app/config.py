@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 8
 
-    # Database (TinyDB) file locations
-    db_path: str = str(DATA_DIR / "nexus_db.json")
+    # Database (SQLite) file location
+    db_path: str = str(DATA_DIR / "nexus.db")
 
     # Logging
     log_file: str = str(LOG_DIR / "nexus.log")

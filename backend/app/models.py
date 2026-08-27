@@ -144,6 +144,29 @@ class PublishEventRequest(BaseModel):
     payload: dict
 
 
+# ---------- Admin configuration: DSSClient ----------
+class DSSClientConfig(BaseModel):
+    url: str = ""
+    project_name: str = ""
+    llm: str = ""
+    api_key: str = ""
+
+
+class DSSClientConfigUpdate(BaseModel):
+    url: Optional[str] = None
+    project_name: Optional[str] = None
+    llm: Optional[str] = None
+    api_key: Optional[str] = None
+
+
+class DSSClientConfigOut(BaseModel):
+    url: str = ""
+    project_name: str = ""
+    llm: str = ""
+    api_key: str = ""          # masked when returned to the browser
+    configured: bool = False   # true once a URL has been set
+
+
 # ---------- Logs ----------
 class LogEntryOut(BaseModel):
     id: str

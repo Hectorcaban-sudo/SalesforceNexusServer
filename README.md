@@ -17,25 +17,29 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
 
 - **Multi-org support** — connect to as many Salesforce instances/orgs as you like, each with its
   own auth credentials, API version, and independent CometD connection.
-- **CometD platform event subscriber** (`aiocometd`) — subscribes to any Platform Event / CDC /
+- **CometD platform event subscriber** (`aiocometd_ng`) — subscribes to any Platform Event / CDC /
   custom streaming channel you configure, per org.
 - **Internal message broker** — an in-process async broker (`app/broker.py`) decouples the
   Salesforce listener from the processing logic and the Salesforce publisher. It's written behind
   a small interface so it can be swapped for Kafka/RabbitMQ/SQS later without touching callers.
 - **Pluggable worker/processor** — `app/worker.py:process_payload()` is the single place to plug in
   your real business logic or AI model; it receives the raw event payload and returns the result to
-  publish back.
+  publish back. If a **DSSClient** endpoint is configured (see Admin Configuration below), the
+  payload is forwarded there automatically; otherwise a local fallback result is returned.
 - **Salesforce publisher** — publishes the processed result back to Salesforce as a new Platform
   Event using the standard REST `sobjects` endpoint (OAuth password or client-credentials flow).
   A manual "publish test event" action is also available from the admin UI.
+- **Transaction reprocessing** — requeue any single transaction, or bulk-requeue every failed one,
+  back through the broker without re-sending anything from Salesforce.
 - **Admin console (React)** — dashboard, org management, per-org subscribe/publish channel
-  configuration, full transaction history with payload/result inspection, and a live log viewer.
-- **Local storage only** — everything is stored in **TinyDB** (`backend/data/nexus_db.json`), a
-  local JSON document database. No external database or message broker required to run this.
+  configuration, full transaction history with payload/result inspection, a live log viewer, and a
+  separate **Admin Configuration** section for global settings (currently: DSSClient).
+- **Local storage only** — everything is stored in a local **SQLite** database
+  (`backend/data/nexus.db`). No external database or message broker required to run this.
 - **Username/password protected admin** — JWT-based auth, bcrypt-hashed passwords, default
   bootstrap account (`admin` / `admin123` — change this immediately, see below).
 - **Structured logging** — every component logs to a rotating file (`backend/logs/nexus.log`) *and*
-  into TinyDB, so the admin UI's Logs page can filter/search without touching the filesystem.
+  into SQLite, so the admin UI's Logs page can filter/search without touching the filesystem.
 
 ## Project layout
 
@@ -45,25 +49,27 @@ sfnexus/
 │   ├── app/
 │   │   ├── main.py              FastAPI app, lifespan startup, serves the built React app
 │   │   ├── config.py            Settings (env-driven)
-│   │   ├── database.py          TinyDB tables
+│   │   ├── database.py          SQLite datastore (table/query-object interface)
 │   │   ├── models.py            Pydantic schemas
 │   │   ├── auth.py               JWT auth + bcrypt password hashing
-│   │   ├── logging_config.py     File + TinyDB logging sink
+│   │   ├── logging_config.py     File + SQLite logging sink
 │   │   ├── broker.py             Internal async pub/sub broker (inbound/outbound topics)
 │   │   ├── cometd_client.py      Per-org CometD subscription manager
 │   │   ├── salesforce_client.py  OAuth login + publish Platform Events via REST
-│   │   ├── worker.py             The "internal function": processes inbound events,
-│   │   │                         publishes results to the outbound topic
+│   │   ├── worker.py             The "internal function": processes inbound events
+│   │   │                         (via DSSClient if configured), publishes results, and
+│   │   │                         handles transaction reprocessing
 │   │   ├── transactions.py       Transaction audit-trail helpers
 │   │   └── routers/              /api/auth, /api/orgs, /api/events, /api/transactions,
-│   │                             /api/logs, /api/dashboard
-│   ├── data/                     TinyDB JSON file lives here (gitignored)
+│   │                             /api/logs, /api/dashboard, /api/admin-config
+│   ├── data/                     nexus.db (SQLite) lives here (gitignored)
 │   ├── logs/                     Rotating log file lives here (gitignored)
 │   ├── requirements.txt
 │   └── run.py                    `python run.py` to start the server
 └── frontend/
     ├── src/
-    │   ├── pages/                Login, Dashboard, Orgs, EventsConfig, Transactions, Logs
+    │   ├── pages/                Login, Dashboard, Orgs, EventsConfig, Transactions, Logs,
+    │   │                         AdminConfig
     │   ├── components/           Layout (sidebar/topbar), shared UI bits
     │   └── lib/api.js            Axios client with JWT handling
     └── dist/                     Production build output (served by FastAPI) — run `npm run build`
@@ -116,11 +122,27 @@ npm run build       # rebuilds frontend/dist, which FastAPI serves automatically
 > access to your Salesforce instance's host. If you're running this behind a restrictive egress
 > proxy/firewall, allow-list your Salesforce login/instance domains.
 
+## Admin Configuration: DSSClient
+
+The **Admin Configuration** section (separate from per-org Salesforce connections) currently holds
+one named configuration block, **DSSClient**: `url`, `project_name`, `llm`, and `api_key`.
+
+- Saving it is an **upsert** — the first save creates the record, every save after that updates it
+  in place; the API key field is never blanked out by leaving it empty on a later save (same
+  pattern as Salesforce org secrets).
+- It's stored in the `admin_settings` SQLite table and is read fresh on every event by
+  `worker.py:process_payload()`.
+- When a URL is set, every inbound event is POSTed to that URL as
+  `{"project": project_name, "llm": llm, "input": payload}` with an `Authorization: Bearer <api_key>`
+  header, and the JSON response becomes the processing result published back to Salesforce. If the
+  call fails, or no URL is configured, a local fallback result is used instead so the pipeline
+  never breaks because of a downstream outage.
+
 ## Configuration durability
 
-Every configuration change made in the admin UI — Salesforce orgs, event channels, admin users —
-is written straight to the local TinyDB file (`backend/data/nexus_db.json`) on every create/update/
-delete call, with no in-memory write cache in front of it. That means a change is durable the
+Every configuration change made in the admin UI — Salesforce orgs, event channels, admin users,
+DSSClient settings — is written straight to the local SQLite database (`backend/data/nexus.db`) on
+every create/update/delete call. SQLite commits each write immediately, so a change is durable the
 moment the API call returns, even if the process is killed immediately afterward (verified by
 hard-killing the server mid-session and confirming all config survives a restart).
 

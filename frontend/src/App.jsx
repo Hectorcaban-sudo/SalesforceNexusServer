@@ -6,6 +6,7 @@ import Orgs from './pages/Orgs'
 import EventsConfig from './pages/EventsConfig'
 import Transactions from './pages/Transactions'
 import Logs from './pages/Logs'
+import AdminConfig from './pages/AdminConfig'
 import Layout from './components/Layout'
 import { isAuthed } from './lib/api'
 
@@ -32,6 +33,7 @@ export default function App() {
         <Route path="/events" element={<RequireAuth><EventsConfig /></RequireAuth>} />
         <Route path="/transactions" element={<RequireAuth><Transactions /></RequireAuth>} />
         <Route path="/logs" element={<RequireAuth><Logs /></RequireAuth>} />
+        <Route path="/admin-config" element={<RequireAuth><AdminConfig /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
