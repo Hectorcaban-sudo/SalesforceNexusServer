@@ -45,6 +45,10 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
 
 ```
 sfnexus/
+├── Dockerfile                    Multi-stage build: React frontend + Python backend
+├── docker-compose.yml            One-command startup with persistent volumes
+├── .dockerignore
+├── .env.example                  Env vars for docker-compose (SECRET_KEY, etc.)
 ├── backend/
 │   ├── app/
 │   │   ├── main.py              FastAPI app, lifespan startup, serves the built React app
@@ -77,7 +81,39 @@ sfnexus/
 
 ## Running it
 
-### 1. Backend
+### Option A — Docker (recommended)
+
+```bash
+cp .env.example .env          # edit SECRET_KEY at minimum
+docker compose up --build
+```
+
+That's it — the multi-stage `Dockerfile` builds the React admin console and installs the Python
+backend in one image, and `docker-compose.yml` wires up:
+- Port **8000** exposed on the host — open **http://localhost:8000**
+- Two named volumes (`nexus-data`, `nexus-logs`) so the SQLite database and log files survive
+  container restarts and rebuilds
+- A container healthcheck against `/api/health`
+
+To run it without Compose:
+
+```bash
+docker build -t salesforce-nexus-ai-server .
+docker run -d --name nexus \
+  -p 8000:8000 \
+  -e SECRET_KEY=change_me \
+  -v nexus-data:/app/data \
+  -v nexus-logs:/app/logs \
+  salesforce-nexus-ai-server
+```
+
+To update after making code changes: `docker compose up --build` again (or `docker build` +
+`docker run` as above) — the named volumes keep your orgs, event configs, transactions, and
+DSSClient settings intact across rebuilds.
+
+### Option B — run directly with Python/Node
+
+#### 1. Backend
 
 ```bash
 cd backend
@@ -91,7 +127,7 @@ The API + admin UI will be available at **http://localhost:8000**.
 On first startup, a default admin account is created: **admin / admin123** — the login screen
 reminds you to change it; do so from the admin UI or `POST /api/auth/change-password`.
 
-### 2. Frontend (only needed if you're changing the UI)
+#### 2. Frontend (only needed if you're changing the UI)
 
 A production build is already included in `frontend/dist/` and is served directly by FastAPI, so
 you don't need Node.js just to run the server. If you want to modify the React app:

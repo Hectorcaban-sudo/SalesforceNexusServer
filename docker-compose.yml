@@ -1,0 +1,29 @@
+services:
+  nexus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: salesforce-nexus-ai-server:latest
+    container_name: salesforce-nexus-ai-server
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Override in a .env file (see .env.example) or here directly.
+      SECRET_KEY: ${SECRET_KEY:-change_me_to_a_long_random_value}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      # Persist the SQLite database and log files across container restarts/rebuilds
+      - nexus-data:/app/data
+      - nexus-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  nexus-data:
+  nexus-logs:
