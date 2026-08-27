@@ -116,6 +116,49 @@ npm run build       # rebuilds frontend/dist, which FastAPI serves automatically
 > access to your Salesforce instance's host. If you're running this behind a restrictive egress
 > proxy/firewall, allow-list your Salesforce login/instance domains.
 
+## Configuration durability
+
+Every configuration change made in the admin UI — Salesforce orgs, event channels, admin users —
+is written straight to the local TinyDB file (`backend/data/nexus_db.json`) on every create/update/
+delete call, with no in-memory write cache in front of it. That means a change is durable the
+moment the API call returns, even if the process is killed immediately afterward (verified by
+hard-killing the server mid-session and confirming all config survives a restart).
+
+## Reprocessing transactions
+
+Any transaction can be re-driven back through the internal broker from the **Transactions** page:
+
+- **Per-transaction "Reprocess"** (row action or in the detail view) — requeues that exact
+  transaction. The system is smart about where to put it back in the pipeline:
+  - A **publish** transaction (including manual test publishes) is requeued directly onto the
+    outbound topic to retry sending it to Salesforce.
+  - A **subscribe** transaction that already finished processing but failed only at the final
+    publish-back step is requeued onto the outbound topic using its existing processed result
+    (it is not reprocessed twice).
+  - A **subscribe** transaction that never finished processing is requeued onto the inbound topic
+    to run through `process_payload()` again from scratch.
+- **"Reprocess all failed"** (toolbar button, optionally scoped to the org filter) — bulk-requeues
+  every transaction currently in a `failed` state in one click.
+
+Each transaction record tracks an `attempts` counter so you can see retry history at a glance, and
+every reprocess action is written to the system log.
+
+## A note on the CometD library
+
+This project targets **`aiocometd_ng`** (an actively-maintained fork of the original `aiocometd`,
+needed on newer Python versions where the original package can be difficult to install).
+`backend/app/cometd_client.py` imports from `aiocometd_ng` first and falls back to `aiocometd` if
+that's what you have installed instead — the two share the same `Client`/`AuthExtension` API,
+with one difference to be aware of if you're modifying this code: the `Client` constructor takes
+`connection_types` (plural), not `connection_type`.
+
+If you hit `'str' object is not callable` (or any other odd error) when subscribing, it usually
+means something that should be a callable — most commonly the `auth=` argument, or one of
+`AuthExtension.incoming` / `.outgoing` / `.authenticate` — has been replaced with a plain string
+somewhere. Double check that `auth=` is given an *instance* of an `AuthExtension` subclass (not a
+token string), and that none of its methods have been accidentally shadowed by a same-named
+instance attribute.
+
 ## Customizing the processing logic
 
 All business logic (or a call out to an AI model) lives in one place:

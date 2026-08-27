@@ -132,6 +132,7 @@ class TransactionOut(BaseModel):
     payload: dict
     result: Optional[dict] = None
     error: Optional[str] = None
+    attempts: int = 0
     created_at: float
     updated_at: float
 

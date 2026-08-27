@@ -107,6 +107,60 @@ async def outbound_publisher():
     await broker.consume_forever("outbound", handle)
 
 
+async def reprocess_transaction(transaction_id: str) -> dict:
+    """
+    Re-drive a transaction back through the broker so it can be handled again.
+
+    - A 'subscribe' transaction that already has a processed `result` (i.e. it
+      failed only at the publish-back-to-Salesforce step) is requeued straight
+      onto the 'outbound' topic with that same result, so it isn't reprocessed
+      twice.
+    - A 'subscribe' transaction that never made it past processing (or has no
+      stored result) is requeued onto the 'inbound' topic to run through
+      `process_payload` again from scratch, using its original payload.
+    - A 'publish' transaction (a manual/outbound-only event) is requeued
+      directly onto the 'outbound' topic with its original payload.
+
+    In every case the transaction's existing record is reused (its status/
+    error are reset) rather than creating a new transaction, so the audit
+    trail shows the retry history on the same row.
+    """
+    record = tx.get_transaction(transaction_id)
+    if not record:
+        raise ValueError("Transaction not found")
+
+    org_id = record["org_id"]
+    channel = record["channel"]
+    attempts = record.get("attempts", 0) + 1
+
+    if record["direction"] == "publish":
+        tx.update_transaction(transaction_id, status="publishing", error=None, attempts=attempts)
+        await broker.publish(
+            "outbound",
+            {"transaction_id": transaction_id, "org_id": org_id, "channel": channel, "payload": record["payload"]},
+        )
+        log_event("info", f"Transaction requeued to outbound for republish (attempt {attempts})", transaction_id=transaction_id)
+
+    elif record.get("result"):
+        publish_channel = _default_publish_channel(org_id) or channel
+        tx.update_transaction(transaction_id, status="publishing", error=None, attempts=attempts)
+        await broker.publish(
+            "outbound",
+            {"transaction_id": transaction_id, "org_id": org_id, "channel": publish_channel, "payload": record["result"]},
+        )
+        log_event("info", f"Transaction requeued to outbound using existing processed result (attempt {attempts})", transaction_id=transaction_id)
+
+    else:
+        tx.update_transaction(transaction_id, status="queued", error=None, result=None, attempts=attempts)
+        await broker.publish(
+            "inbound",
+            {"transaction_id": transaction_id, "org_id": org_id, "channel": channel, "payload": record["payload"]},
+        )
+        log_event("info", f"Transaction requeued to inbound for full reprocessing (attempt {attempts})", transaction_id=transaction_id)
+
+    return tx.get_transaction(transaction_id)
+
+
 async def publish_manual_event(org_id: str, channel: str, payload: dict) -> dict:
     """Used by the admin API to let a user manually push an event to Salesforce
     outside of the automatic inbound->process->outbound pipeline."""

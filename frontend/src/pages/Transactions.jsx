@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Eye, X } from 'lucide-react'
+import { Eye, X, RotateCcw, RefreshCcw } from 'lucide-react'
 import api from '../lib/api'
 import { StatusBadge, fmtTime } from '../components/UI'
 
@@ -8,6 +8,9 @@ export default function Transactions() {
   const [rows, setRows] = useState([])
   const [filters, setFilters] = useState({ org_id: '', status: '', direction: '' })
   const [selected, setSelected] = useState(null)
+  const [reprocessingId, setReprocessingId] = useState(null)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [toast, setToast] = useState('')
 
   async function load() {
     const [o, t] = await Promise.all([
@@ -25,14 +28,55 @@ export default function Transactions() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters])
 
+  function flashToast(msg) {
+    setToast(msg)
+    setTimeout(() => setToast(''), 4000)
+  }
+
+  async function reprocess(t) {
+    setReprocessingId(t.id)
+    try {
+      await api.post(`/transactions/${t.id}/reprocess`)
+      flashToast(`Requeued transaction ${t.id}`)
+      await load()
+      if (selected?.id === t.id) {
+        const { data } = await api.get('/transactions', { params: { limit: 1 } })
+        setSelected(data.find((r) => r.id === t.id) || selected)
+      }
+    } catch (err) {
+      flashToast(err?.response?.data?.detail || 'Failed to requeue transaction')
+    } finally {
+      setReprocessingId(null)
+    }
+  }
+
+  async function reprocessAllFailed() {
+    if (!confirm('Requeue every failed transaction back through the broker?')) return
+    setBulkBusy(true)
+    try {
+      const { data } = await api.post('/transactions/reprocess-failed', null, {
+        params: filters.org_id ? { org_id: filters.org_id } : {},
+      })
+      flashToast(data.detail)
+      await load()
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
   return (
     <div>
       <div className="page-title-row">
         <div>
           <h1>Transactions</h1>
-          <p>Full audit trail of every event received, processed, and published</p>
+          <p>Full audit trail of every event received, processed, and published — requeue any transaction back through the broker if needed</p>
         </div>
+        <button className="btn btn-sm" onClick={reprocessAllFailed} disabled={bulkBusy}>
+          <RefreshCcw size={13} /> {bulkBusy ? 'Requeuing…' : 'Reprocess all failed'}
+        </button>
       </div>
+
+      {toast && <div className="login-hint" style={{ textAlign: 'left', marginBottom: 12, color: 'var(--accent-cyan)' }}>{toast}</div>}
 
       <div className="toolbar">
         <div className="filter-row">
@@ -57,10 +101,10 @@ export default function Transactions() {
       <div className="panel">
         <table>
           <thead>
-            <tr><th>Time</th><th>Org</th><th>Direction</th><th>Channel</th><th>Status</th><th></th></tr>
+            <tr><th>Time</th><th>Org</th><th>Direction</th><th>Channel</th><th>Status</th><th>Attempts</th><th></th></tr>
           </thead>
           <tbody>
-            {rows.length === 0 && <tr><td colSpan={6} className="empty-state">No transactions match these filters</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={7} className="empty-state">No transactions match these filters</td></tr>}
             {rows.map((t) => (
               <tr key={t.id}>
                 <td className="mono" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{fmtTime(t.created_at)}</td>
@@ -68,7 +112,18 @@ export default function Transactions() {
                 <td style={{ textTransform: 'capitalize' }}>{t.direction}</td>
                 <td><code className="pill">{t.channel}</code></td>
                 <td><StatusBadge status={t.status} /></td>
-                <td><button className="btn btn-sm btn-icon" onClick={() => setSelected(t)}><Eye size={14} /></button></td>
+                <td className="mono" style={{ color: 'var(--text-muted)' }}>{t.attempts || 0}</td>
+                <td style={{ display: 'flex', gap: 6 }}>
+                  <button className="btn btn-sm btn-icon" onClick={() => setSelected(t)}><Eye size={14} /></button>
+                  <button
+                    className="btn btn-sm btn-icon"
+                    title="Reprocess through broker"
+                    onClick={() => reprocess(t)}
+                    disabled={reprocessingId === t.id}
+                  >
+                    <RotateCcw size={14} className={reprocessingId === t.id ? 'spin' : ''} />
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -91,6 +146,19 @@ export default function Transactions() {
               <div className="form-row-2">
                 <div className="field"><label>Direction</label><div style={{ textTransform: 'capitalize' }}>{selected.direction}</div></div>
                 <div className="field"><label>Channel</label><code className="pill">{selected.channel}</code></div>
+              </div>
+              <div className="field">
+                <label>Attempts</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span className="mono">{selected.attempts || 0}</span>
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => reprocess(selected)}
+                    disabled={reprocessingId === selected.id}
+                  >
+                    <RotateCcw size={13} /> {reprocessingId === selected.id ? 'Requeuing…' : 'Reprocess'}
+                  </button>
+                </div>
               </div>
               {selected.error && (
                 <div className="field"><label>Error</label>

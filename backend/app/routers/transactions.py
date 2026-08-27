@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Optional, List
 
 from ..auth import get_current_user
 from ..database import transactions_table, Q
 from ..models import TransactionOut
+from ..worker import reprocess_transaction
+from ..logging_config import log_event
 
 router = APIRouter(prefix="/api/transactions", tags=["transactions"], dependencies=[Depends(get_current_user)])
 
@@ -47,3 +49,32 @@ def transaction_stats():
         "published": published,
         "success_rate": success_rate,
     }
+
+
+@router.post("/{transaction_id}/reprocess")
+async def reprocess(transaction_id: str):
+    """Re-drive a single transaction back through the internal broker."""
+    try:
+        record = await reprocess_transaction(transaction_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+    return {"detail": "requeued", "transaction": record}
+
+
+@router.post("/reprocess-failed")
+async def reprocess_all_failed(org_id: Optional[str] = None):
+    """Bulk-requeue every transaction currently in a 'failed' state
+    (optionally scoped to one org)."""
+    rows = transactions_table.search(Q.status == "failed")
+    if org_id:
+        rows = [r for r in rows if r["org_id"] == org_id]
+
+    requeued = []
+    for r in rows:
+        try:
+            await reprocess_transaction(r["id"])
+            requeued.append(r["id"])
+        except Exception as exc:  # noqa: BLE001
+            log_event("error", f"Bulk reprocess failed for transaction {r['id']}: {exc}", transaction_id=r["id"])
+
+    return {"detail": f"requeued {len(requeued)} transaction(s)", "transaction_ids": requeued}

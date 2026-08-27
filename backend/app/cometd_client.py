@@ -18,8 +18,16 @@ whole server.
 """
 import asyncio
 from typing import Dict, Optional
-from aiocometd import Client, ConnectionType
-from aiocometd.extensions import AuthExtension
+
+try:
+    # Primary target: aiocometd_ng (actively maintained fork, required on
+    # newer Python versions where the original `aiocometd` package may not
+    # install cleanly).
+    from aiocometd_ng import Client, ConnectionType
+    from aiocometd_ng.extensions import AuthExtension
+except ImportError:  # pragma: no cover - fallback for environments with the original package
+    from aiocometd import Client, ConnectionType
+    from aiocometd.extensions import AuthExtension
 
 from .salesforce_client import sf_client, SalesforceAuthError
 from .broker import broker
@@ -102,7 +110,7 @@ class OrgStreamManager:
         auth_ext = SalesforceAuthHeaderExtension(lambda: session.access_token)
 
         try:
-            async with Client(url, auth=auth_ext, connection_type=ConnectionType.LONG_POLLING) as client:
+            async with Client(url, auth=auth_ext, connection_types=ConnectionType.LONG_POLLING) as client:
                 self._client = client
                 self._running = True
                 orgs_table.update(

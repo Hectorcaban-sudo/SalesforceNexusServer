@@ -25,6 +25,7 @@ def record_transaction(
         "payload": payload,
         "result": result,
         "error": error,
+        "attempts": 0,
         "created_at": now_ts(),
         "updated_at": now_ts(),
     }
