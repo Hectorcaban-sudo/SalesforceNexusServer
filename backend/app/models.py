@@ -13,7 +13,13 @@ def now_ts() -> float:
     return time.time()
 
 
-# ---------- Auth ----------
+# ---------- Auth / RBAC ----------
+class Role(str, Enum):
+    admin = "admin"        # full access: orgs, events, users, integrations, admin config
+    operator = "operator"  # can manage orgs/events/reprocess transactions, no user/integration admin
+    viewer = "viewer"      # read-only: dashboard, transactions, logs
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -27,6 +33,19 @@ class Token(BaseModel):
 class UserOut(BaseModel):
     username: str
     role: str = "admin"
+    auth_provider: str = "local"   # local | sso
+    created_at: Optional[float] = None
+
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    role: Role = Role.viewer
+
+
+class UserUpdate(BaseModel):
+    role: Optional[Role] = None
+    password: Optional[str] = None
 
 
 class ChangePasswordRequest(BaseModel):
@@ -152,6 +171,14 @@ class DSSClientConfig(BaseModel):
     api_key: str = ""
 
 
+class DSSClientConfigOut(BaseModel):
+    url: str = ""
+    project_name: str = ""
+    llm: str = ""
+    api_key: str = ""          # masked when returned to the browser
+    configured: bool = False   # true once a URL has been set
+
+
 class DSSClientConfigUpdate(BaseModel):
     url: Optional[str] = None
     project_name: Optional[str] = None
@@ -159,12 +186,48 @@ class DSSClientConfigUpdate(BaseModel):
     api_key: Optional[str] = None
 
 
-class DSSClientConfigOut(BaseModel):
-    url: str = ""
-    project_name: str = ""
-    llm: str = ""
-    api_key: str = ""          # masked when returned to the browser
-    configured: bool = False   # true once a URL has been set
+# ---------- Outbound integrations (fan-out sinks) ----------
+class IntegrationType(str, Enum):
+    webhook = "webhook"
+    slack = "slack"
+    teams = "teams"
+    snowflake = "snowflake"
+    bigquery = "bigquery"
+    custom_api = "custom_api"
+
+
+class IntegrationTrigger(str, Enum):
+    always = "always"
+    on_success = "on_success"
+    on_failure = "on_failure"
+
+
+class IntegrationBase(BaseModel):
+    name: str
+    type: IntegrationType
+    enabled: bool = True
+    trigger: IntegrationTrigger = IntegrationTrigger.always
+    org_id: Optional[str] = None   # None = applies to every org
+    config: dict = Field(default_factory=dict)
+
+
+class IntegrationCreate(IntegrationBase):
+    pass
+
+
+class IntegrationUpdate(BaseModel):
+    name: Optional[str] = None
+    enabled: Optional[bool] = None
+    trigger: Optional[IntegrationTrigger] = None
+    org_id: Optional[str] = None
+    config: Optional[dict] = None
+
+
+class IntegrationOut(IntegrationBase):
+    id: str
+    last_status: Optional[str] = None
+    last_run_at: Optional[float] = None
+    last_error: Optional[str] = None
 
 
 # ---------- Logs ----------

@@ -19,6 +19,8 @@ from .database import orgs_table, event_configs_table, Q
 from .logging_config import log_event
 from . import transactions as tx
 from .salesforce_client import sf_client
+from .tracing import start_span
+from .integrations import dispatch_integrations
 
 
 def process_payload(payload: dict) -> dict:
@@ -82,17 +84,19 @@ async def inbound_worker():
         org_id = message["org_id"]
         payload = message["payload"]
 
-        tx.update_transaction(transaction_id, status="processing")
-        log_event("info", "Worker: processing event", transaction_id=transaction_id, org_id=org_id)
+        with start_span("worker.process_payload", transaction_id=transaction_id, org_id=org_id):
+            tx.update_transaction(transaction_id, status="processing")
+            log_event("info", "Worker: processing event", transaction_id=transaction_id, org_id=org_id)
 
-        try:
-            result = process_payload(payload)
-        except Exception as exc:  # noqa: BLE001
-            tx.update_transaction(transaction_id, status="failed", error=str(exc))
-            log_event("error", f"Worker: processing failed: {exc}", transaction_id=transaction_id)
-            return
+            try:
+                result = process_payload(payload)
+            except Exception as exc:  # noqa: BLE001
+                tx.update_transaction(transaction_id, status="failed", error=str(exc))
+                log_event("error", f"Worker: processing failed: {exc}", transaction_id=transaction_id)
+                dispatch_integrations(tx.get_transaction(transaction_id))
+                return
 
-        tx.update_transaction(transaction_id, status="processed", result=result)
+            tx.update_transaction(transaction_id, status="processed", result=result)
 
         publish_channel = _default_publish_channel(org_id)
         if publish_channel:
@@ -124,19 +128,23 @@ async def outbound_publisher():
         channel = message["channel"]
         payload = message["payload"]
 
-        org = orgs_table.get(Q.id == org_id)
-        if not org:
-            tx.update_transaction(transaction_id, status="failed", error="Org no longer exists")
-            return
+        with start_span("worker.publish_to_salesforce", transaction_id=transaction_id, org_id=org_id, channel=channel):
+            org = orgs_table.get(Q.id == org_id)
+            if not org:
+                tx.update_transaction(transaction_id, status="failed", error="Org no longer exists")
+                dispatch_integrations(tx.get_transaction(transaction_id))
+                return
 
-        tx.update_transaction(transaction_id, status="publishing")
-        try:
-            sf_client.publish_platform_event(org, channel, payload)
-            tx.update_transaction(transaction_id, status="published")
-            log_event("info", "Publisher: event published back to Salesforce", transaction_id=transaction_id, org_id=org_id, channel=channel)
-        except Exception as exc:  # noqa: BLE001
-            tx.update_transaction(transaction_id, status="failed", error=str(exc))
-            log_event("error", f"Publisher: failed to publish to Salesforce: {exc}", transaction_id=transaction_id)
+            tx.update_transaction(transaction_id, status="publishing")
+            try:
+                sf_client.publish_platform_event(org, channel, payload)
+                tx.update_transaction(transaction_id, status="published")
+                log_event("info", "Publisher: event published back to Salesforce", transaction_id=transaction_id, org_id=org_id, channel=channel)
+            except Exception as exc:  # noqa: BLE001
+                tx.update_transaction(transaction_id, status="failed", error=str(exc))
+                log_event("error", f"Publisher: failed to publish to Salesforce: {exc}", transaction_id=transaction_id)
+
+        dispatch_integrations(tx.get_transaction(transaction_id))
 
     await broker.consume_forever("outbound", handle)
 
@@ -206,10 +214,13 @@ async def publish_manual_event(org_id: str, channel: str, payload: dict) -> dict
         org_id=org_id, org_name=org["name"], direction="publish", channel=channel,
         status="publishing", payload=payload,
     )
-    try:
-        result = sf_client.publish_platform_event(org, channel, payload)
-        tx.update_transaction(record["id"], status="published", result=result)
-    except Exception as exc:  # noqa: BLE001
-        tx.update_transaction(record["id"], status="failed", error=str(exc))
-        raise
+    with start_span("worker.publish_manual_event", transaction_id=record["id"], org_id=org_id, channel=channel):
+        try:
+            result = sf_client.publish_platform_event(org, channel, payload)
+            tx.update_transaction(record["id"], status="published", result=result)
+        except Exception as exc:  # noqa: BLE001
+            tx.update_transaction(record["id"], status="failed", error=str(exc))
+            dispatch_integrations(tx.get_transaction(record["id"]))
+            raise
+    dispatch_integrations(tx.get_transaction(record["id"]))
     return record

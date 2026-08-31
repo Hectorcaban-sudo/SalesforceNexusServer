@@ -33,6 +33,20 @@ class Settings(BaseSettings):
     # Worker
     worker_poll_interval_seconds: float = 0.25
 
+    # OpenTelemetry
+    otel_service_name: str = "salesforce-nexus-ai-server"
+    otel_exporter_otlp_endpoint: str = ""     # e.g. http://otel-collector:4318 - leave blank to disable OTLP export
+    otel_console_exporter: bool = False       # print spans to stdout - handy for local debugging without a collector
+
+    # SSO (generic OIDC - works with Okta, Azure AD, Auth0, Google Workspace, etc.)
+    sso_issuer: str = ""             # e.g. https://your-tenant.okta.com  - leave blank to disable SSO
+    sso_client_id: str = ""
+    sso_client_secret: str = ""
+    sso_redirect_uri: str = "http://localhost:8000/api/auth/sso/callback"
+    sso_scope: str = "openid email profile"
+    sso_default_role: str = "viewer"  # role assigned to newly-created SSO users
+    frontend_base_url: str = "http://localhost:8000"  # where to send the browser back to after SSO login
+
     class Config:
         env_file = ".env"
 

@@ -31,10 +31,30 @@ def bootstrap_default_admin():
                 "username": "admin",
                 "password_hash": hash_password("admin123"),
                 "role": "admin",
+                "auth_provider": "local",
                 "created_at": now_ts(),
                 "must_change_password": True,
             }
         )
+
+
+def find_or_create_sso_user(username: str, default_role: str = "viewer") -> dict:
+    """Used by the SSO callback: look up a user provisioned via SSO by their
+    IdP-supplied username/email, creating one on first login (no password -
+    they always authenticate via the IdP)."""
+    user = users_table.get(Q.username == username)
+    if user:
+        return user
+    record = {
+        "username": username,
+        "password_hash": None,
+        "role": default_role,
+        "auth_provider": "sso",
+        "created_at": now_ts(),
+        "must_change_password": False,
+    }
+    users_table.insert(record)
+    return record
 
 
 def authenticate_user(username: str, password: str) -> Optional[dict]:
@@ -73,3 +93,28 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
     if user is None:
         raise credentials_exception
     return user
+
+
+# ---------- RBAC ----------
+# Role hierarchy: admin > operator > viewer. Every route that mutates state
+# should depend on `require_role(...)` with the minimum role allowed to call
+# it; read-only routes just depend on `get_current_user` (any authenticated
+# role can view).
+ROLE_RANK = {"viewer": 0, "operator": 1, "admin": 2}
+
+
+def require_role(*allowed_roles: str):
+    """FastAPI dependency factory: 403s unless the current user's role is one
+    of `allowed_roles` (or ranks at or above the lowest of them)."""
+    min_rank = min(ROLE_RANK.get(r, 99) for r in allowed_roles) if allowed_roles else 0
+
+    async def _dependency(current_user: dict = Depends(get_current_user)) -> dict:
+        user_rank = ROLE_RANK.get(current_user.get("role", "viewer"), -1)
+        if user_rank < min_rank:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"This action requires the '{allowed_roles[0]}' role or higher",
+            )
+        return current_user
+
+    return _dependency

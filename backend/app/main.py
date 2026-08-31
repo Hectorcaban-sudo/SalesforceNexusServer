@@ -14,6 +14,7 @@ from .database import flush
 from .broker import broker
 from .worker import inbound_worker, outbound_publisher
 from .cometd_client import cometd_manager
+from .tracing import setup_tracing
 from .routers import auth as auth_router
 from .routers import orgs as orgs_router
 from .routers import events as events_router
@@ -21,6 +22,8 @@ from .routers import transactions as transactions_router
 from .routers import logs as logs_router
 from .routers import dashboard as dashboard_router
 from .routers import admin_config as admin_config_router
+from .routers import users as users_router
+from .routers import integrations as integrations_router
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIST = BACKEND_DIR.parent / "frontend" / "dist"
@@ -50,6 +53,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
+# Logging + tracing instrumentation must happen before the app starts (OTel's
+# FastAPI instrumentor adds middleware, which Starlette forbids once the
+# lifespan has begun) - setup_logging() is idempotent so it's safe to call
+# again inside lifespan() above too.
+setup_logging()
+setup_tracing(app)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -65,6 +75,8 @@ app.include_router(transactions_router.router)
 app.include_router(logs_router.router)
 app.include_router(dashboard_router.router)
 app.include_router(admin_config_router.router)
+app.include_router(users_router.router)
+app.include_router(integrations_router.router)
 
 
 @app.get("/api/health")

@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends
 
-from ..auth import get_current_user
+from ..auth import require_role
 from ..database import admin_settings_table, Q
 from ..models import DSSClientConfigUpdate, DSSClientConfigOut
 from ..logging_config import log_event
 
-router = APIRouter(prefix="/api/admin-config", tags=["admin-config"], dependencies=[Depends(get_current_user)])
+router = APIRouter(prefix="/api/admin-config", tags=["admin-config"], dependencies=[Depends(require_role("admin"))])
 
 DSS_CLIENT_ID = "dss_client"
 

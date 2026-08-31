@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List
 
-from ..auth import get_current_user
+from ..auth import get_current_user, require_role
 from ..database import orgs_table, Q
 from ..models import OrgCreate, OrgUpdate, OrgOut, new_id
 from ..logging_config import log_event
@@ -27,7 +27,7 @@ def list_orgs():
     return [_mask(o) for o in orgs]
 
 
-@router.post("", response_model=OrgOut)
+@router.post("", response_model=OrgOut, dependencies=[Depends(require_role("operator"))])
 async def create_org(org: OrgCreate):
     record = org.model_dump()
     record.update({"id": new_id(), "status": "disconnected", "last_error": None, "last_connected_at": None})
@@ -37,7 +37,7 @@ async def create_org(org: OrgCreate):
     return _mask(record)
 
 
-@router.put("/{org_id}", response_model=OrgOut)
+@router.put("/{org_id}", response_model=OrgOut, dependencies=[Depends(require_role("operator"))])
 async def update_org(org_id: str, updates: OrgUpdate):
     existing = orgs_table.get(Q.id == org_id)
     if not existing:
@@ -49,7 +49,7 @@ async def update_org(org_id: str, updates: OrgUpdate):
     return _mask(orgs_table.get(Q.id == org_id))
 
 
-@router.delete("/{org_id}")
+@router.delete("/{org_id}", dependencies=[Depends(require_role("admin"))])
 async def delete_org(org_id: str):
     existing = orgs_table.get(Q.id == org_id)
     if not existing:
@@ -60,7 +60,7 @@ async def delete_org(org_id: str):
     return {"detail": "deleted"}
 
 
-@router.post("/{org_id}/test-connection")
+@router.post("/{org_id}/test-connection", dependencies=[Depends(require_role("operator"))])
 def test_connection(org_id: str):
     from ..salesforce_client import sf_client, SalesforceAuthError
 
@@ -74,7 +74,7 @@ def test_connection(org_id: str):
         raise HTTPException(400, str(exc))
 
 
-@router.post("/resync")
+@router.post("/resync", dependencies=[Depends(require_role("operator"))])
 async def resync():
     """Force the CometD manager to re-read org/event configuration and
     reconnect all active orgs. Useful after bulk config changes."""

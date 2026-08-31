@@ -31,9 +31,27 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   A manual "publish test event" action is also available from the admin UI.
 - **Transaction reprocessing** — requeue any single transaction, or bulk-requeue every failed one,
   back through the broker without re-sending anything from Salesforce.
+- **Outbound integrations** — fan any processed transaction out to a **webhook** (HMAC-signed),
+  **Slack**, **Microsoft Teams**, **Snowflake**, **BigQuery**, or a generic **custom API**, each
+  independently scoped by org and trigger (always / on success / on failure). See "Integrations"
+  below.
+- **Role-based access control** — three roles (**admin**, **operator**, **viewer**) enforced on
+  every mutating API route. Viewers get read-only access to the dashboard/transactions/logs;
+  operators can manage orgs/events and reprocess transactions; admins additionally manage users,
+  integrations, and global admin configuration.
+- **Single sign-on (optional)** — generic OpenID Connect support that works with Okta, Azure AD /
+  Entra ID, Auth0, Google Workspace, Keycloak, or any other OIDC-compliant IdP. Disabled by default
+  (falls back to local username/password); enable by setting `SSO_ISSUER`/`SSO_CLIENT_ID`. New SSO
+  users are auto-provisioned with a configurable default role.
+- **OpenTelemetry tracing** — a single trace follows each event through CometD receive → broker →
+  worker processing → Salesforce publish → integration fan-out, plus automatic instrumentation of
+  every HTTP request and outbound `requests` call. Safe to leave fully unconfigured; export to any
+  OTLP collector (Jaeger, Tempo, Honeycomb, Datadog, etc.) via `OTEL_EXPORTER_OTLP_ENDPOINT`, or
+  print spans to stdout with `OTEL_CONSOLE_EXPORTER=true`.
 - **Admin console (React)** — dashboard, org management, per-org subscribe/publish channel
-  configuration, full transaction history with payload/result inspection, a live log viewer, and a
-  separate **Admin Configuration** section for global settings (currently: DSSClient).
+  configuration, full transaction history with payload/result inspection, a live log viewer, user
+  management, integrations, and a separate **Admin Configuration** section for global settings
+  (currently: DSSClient).
 - **Local storage only** — everything is stored in a local **SQLite** database
   (`backend/data/nexus.db`). No external database or message broker required to run this.
 - **Username/password protected admin** — JWT-based auth, bcrypt-hashed passwords, default
@@ -55,27 +73,33 @@ sfnexus/
 │   │   ├── config.py            Settings (env-driven)
 │   │   ├── database.py          SQLite datastore (table/query-object interface)
 │   │   ├── models.py            Pydantic schemas
-│   │   ├── auth.py               JWT auth + bcrypt password hashing
+│   │   ├── auth.py               JWT auth, bcrypt password hashing, RBAC (require_role)
+│   │   ├── sso.py                 Generic OIDC SSO (login/callback, auto-provisioning)
+│   │   ├── tracing.py             OpenTelemetry setup + span helper
 │   │   ├── logging_config.py     File + SQLite logging sink
 │   │   ├── broker.py             Internal async pub/sub broker (inbound/outbound topics)
 │   │   ├── cometd_client.py      Per-org CometD subscription manager
 │   │   ├── salesforce_client.py  OAuth login + publish Platform Events via REST
+│   │   ├── integrations.py        Outbound fan-out: webhook/Slack/Teams/Snowflake/BigQuery/custom
 │   │   ├── worker.py             The "internal function": processes inbound events
-│   │   │                         (via DSSClient if configured), publishes results, and
-│   │   │                         handles transaction reprocessing
+│   │   │                         (via DSSClient if configured), publishes results, dispatches
+│   │   │                         integrations, and handles transaction reprocessing
 │   │   ├── transactions.py       Transaction audit-trail helpers
 │   │   └── routers/              /api/auth, /api/orgs, /api/events, /api/transactions,
-│   │                             /api/logs, /api/dashboard, /api/admin-config
+│   │                             /api/logs, /api/dashboard, /api/admin-config, /api/users,
+│   │                             /api/integrations
+│   ├── dev_tools/
+│   │   └── fake_oidc_provider.py  Local fake IdP for testing SSO without a real provider
 │   ├── data/                     nexus.db (SQLite) lives here (gitignored)
 │   ├── logs/                     Rotating log file lives here (gitignored)
 │   ├── requirements.txt
 │   └── run.py                    `python run.py` to start the server
 └── frontend/
     ├── src/
-    │   ├── pages/                Login, Dashboard, Orgs, EventsConfig, Transactions, Logs,
-    │   │                         AdminConfig
-    │   ├── components/           Layout (sidebar/topbar), shared UI bits
-    │   └── lib/api.js            Axios client with JWT handling
+    │   ├── pages/                Login, SsoCallback, Dashboard, Orgs, EventsConfig,
+    │   │                         Transactions, Logs, AdminConfig, Users, Integrations
+    │   ├── components/           Layout (role-gated sidebar/topbar), shared UI bits
+    │   └── lib/                  api.js (JWT client), AuthContext.jsx (role-aware auth state)
     └── dist/                     Production build output (served by FastAPI) — run `npm run build`
 ```
 
@@ -157,6 +181,78 @@ npm run build       # rebuilds frontend/dist, which FastAPI serves automatically
 > **Note on network access:** CometD and the OAuth token endpoint both require outbound HTTPS
 > access to your Salesforce instance's host. If you're running this behind a restrictive egress
 > proxy/firewall, allow-list your Salesforce login/instance domains.
+
+## Roles & access control (RBAC)
+
+Three roles, enforced server-side on every route (not just hidden in the UI):
+
+| Role | Can do |
+|---|---|
+| **viewer** | Dashboard, transactions, logs — read-only |
+| **operator** | Everything a viewer can, plus create/edit Salesforce orgs and event channels, manually publish test events, reprocess transactions |
+| **admin** | Everything an operator can, plus delete orgs/event channels, manage users, manage integrations, manage Admin Configuration (DSSClient) |
+
+Manage users from **Users** in the admin console (admin role required), or via the API
+(`GET/POST/PUT/DELETE /api/users`). You can't delete or demote your own account — have another
+admin do it if needed.
+
+## Single sign-on (SSO)
+
+SSO is optional and off by default. To enable it, set these (in `.env` or your environment) to
+match your identity provider's OIDC app registration:
+
+```
+SSO_ISSUER=https://your-tenant.okta.com          # or Azure AD, Auth0, Google Workspace, etc.
+SSO_CLIENT_ID=...
+SSO_CLIENT_SECRET=...
+SSO_REDIRECT_URI=http://localhost:8000/api/auth/sso/callback
+SSO_DEFAULT_ROLE=viewer                           # role assigned to first-time SSO logins
+```
+
+Register `SSO_REDIRECT_URI` as an allowed redirect URI in your IdP's app settings. Once configured,
+a "Continue with single sign-on" button appears automatically on the login page. New SSO users are
+created on first login with `SSO_DEFAULT_ROLE`; promote them from the Users page afterward.
+Local username/password accounts keep working alongside SSO.
+
+A minimal fake OIDC provider for local testing (no real IdP needed) lives at
+`backend/dev_tools/fake_oidc_provider.py` — run it, point `SSO_ISSUER` at
+`http://127.0.0.1:9999`, and the whole login flow works end-to-end against it.
+
+## Tracing (OpenTelemetry)
+
+Tracing is always initialized but exports nowhere by default (near-zero overhead, no collector
+required to run the app). To see traces:
+
+- **Console** (quick local debugging): `OTEL_CONSOLE_EXPORTER=true`
+- **A real collector** (Jaeger, Grafana Tempo, Honeycomb, Datadog agent, etc.):
+  `OTEL_EXPORTER_OTLP_ENDPOINT=http://your-collector:4318`
+
+Every inbound event gets one connected trace across `cometd.receive_event` →
+`worker.process_payload` → `worker.publish_to_salesforce` → `integration.<type>` (per sink), plus
+automatic spans for every HTTP request the API serves and every outbound `requests` call (Salesforce
+OAuth/publish, DSSClient calls, webhook/Slack/Teams calls) — so a single slow or failed transaction
+can be traced end-to-end by its `transaction_id` span attribute.
+
+## Integrations (outbound fan-out)
+
+From **Integrations** in the admin console (admin role required), configure any number of sinks
+that every processed transaction is fanned out to, independent of the Salesforce publish step:
+
+- **Webhook** — POSTs the full transaction JSON to a URL you provide; optionally HMAC-signs the
+  body (`X-Nexus-Signature: sha256=...`) if you set a signing secret.
+- **Slack** / **Microsoft Teams** — posts a formatted status card to an incoming webhook URL.
+- **Snowflake** / **BigQuery** — inserts a row per transaction into a table you specify. These use
+  optional client libraries not installed by default — if you enable one, add it to your
+  environment: `pip install snowflake-connector-python` or `pip install google-cloud-bigquery`
+  (BigQuery uses Application Default Credentials; no key needs to be pasted into the UI).
+- **Custom API** — a generic HTTP call (method, URL, and an `Authorization` header you choose) for
+  any other SaaS's event API.
+
+Each integration has a **trigger** (`always`, `on_success`, `on_failure`) and an optional **org
+scope** (leave blank to apply to every org). Use the **Test** button on any integration to send a
+synthetic transaction through it immediately and confirm it's wired up correctly. A failing
+integration never affects the Salesforce publish outcome or blocks other integrations — failures
+are logged and shown as the integration's last status.
 
 ## Admin Configuration: DSSClient
 

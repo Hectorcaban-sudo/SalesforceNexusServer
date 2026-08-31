@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Optional, List
 
-from ..auth import get_current_user
+from ..auth import get_current_user, require_role
 from ..database import transactions_table, Q
 from ..models import TransactionOut
 from ..worker import reprocess_transaction
@@ -51,7 +51,7 @@ def transaction_stats():
     }
 
 
-@router.post("/{transaction_id}/reprocess")
+@router.post("/{transaction_id}/reprocess", dependencies=[Depends(require_role("operator"))])
 async def reprocess(transaction_id: str):
     """Re-drive a single transaction back through the internal broker."""
     try:
@@ -61,7 +61,7 @@ async def reprocess(transaction_id: str):
     return {"detail": "requeued", "transaction": record}
 
 
-@router.post("/reprocess-failed")
+@router.post("/reprocess-failed", dependencies=[Depends(require_role("operator"))])
 async def reprocess_all_failed(org_id: Optional[str] = None):
     """Bulk-requeue every transaction currently in a 'failed' state
     (optionally scoped to one org)."""

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from typing import Optional, List
 
-from ..auth import get_current_user
+from ..auth import get_current_user, require_role
 from ..database import logs_table
 from ..models import LogEntryOut
 
@@ -24,7 +24,7 @@ def list_logs(
     return rows[:limit]
 
 
-@router.delete("")
+@router.delete("", dependencies=[Depends(require_role("admin"))])
 def clear_logs():
     logs_table.truncate()
     return {"detail": "logs cleared"}

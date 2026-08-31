@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Optional
 
-from ..auth import get_current_user
+from ..auth import get_current_user, require_role
 from ..database import event_configs_table, orgs_table, Q
 from ..models import EventConfigCreate, EventConfigUpdate, EventConfigOut, PublishEventRequest, new_id
 from ..logging_config import log_event
@@ -18,7 +18,7 @@ def list_event_configs(org_id: Optional[str] = None):
     return event_configs_table.all()
 
 
-@router.post("", response_model=EventConfigOut)
+@router.post("", response_model=EventConfigOut, dependencies=[Depends(require_role("operator"))])
 async def create_event_config(cfg: EventConfigCreate):
     if not orgs_table.get(Q.id == cfg.org_id):
         raise HTTPException(404, "Org not found")
@@ -30,7 +30,7 @@ async def create_event_config(cfg: EventConfigCreate):
     return record
 
 
-@router.put("/{config_id}", response_model=EventConfigOut)
+@router.put("/{config_id}", response_model=EventConfigOut, dependencies=[Depends(require_role("operator"))])
 async def update_event_config(config_id: str, updates: EventConfigUpdate):
     existing = event_configs_table.get(Q.id == config_id)
     if not existing:
@@ -42,7 +42,7 @@ async def update_event_config(config_id: str, updates: EventConfigUpdate):
     return event_configs_table.get(Q.id == config_id)
 
 
-@router.delete("/{config_id}")
+@router.delete("/{config_id}", dependencies=[Depends(require_role("admin"))])
 async def delete_event_config(config_id: str):
     existing = event_configs_table.get(Q.id == config_id)
     if not existing:
@@ -53,7 +53,7 @@ async def delete_event_config(config_id: str):
     return {"detail": "deleted"}
 
 
-@router.post("/publish")
+@router.post("/publish", dependencies=[Depends(require_role("operator"))])
 async def publish_event(req: PublishEventRequest):
     try:
         record = await publish_manual_event(req.org_id, req.channel, req.payload)

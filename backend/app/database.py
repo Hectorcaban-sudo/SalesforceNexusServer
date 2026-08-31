@@ -189,6 +189,7 @@ event_configs_table = _db.table("event_configs")
 transactions_table = _db.table("transactions")
 logs_table = _db.table("logs")
 admin_settings_table = _db.table("admin_settings")
+integrations_table = _db.table("integrations")
 
 
 def db_lock():

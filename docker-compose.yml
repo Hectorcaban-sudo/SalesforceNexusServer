@@ -13,6 +13,14 @@ services:
       SECRET_KEY: ${SECRET_KEY:-change_me_to_a_long_random_value}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_CONSOLE_EXPORTER: ${OTEL_CONSOLE_EXPORTER:-false}
+      SSO_ISSUER: ${SSO_ISSUER:-}
+      SSO_CLIENT_ID: ${SSO_CLIENT_ID:-}
+      SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET:-}
+      SSO_REDIRECT_URI: ${SSO_REDIRECT_URI:-http://localhost:8000/api/auth/sso/callback}
+      SSO_DEFAULT_ROLE: ${SSO_DEFAULT_ROLE:-viewer}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:8000}
     volumes:
       # Persist the SQLite database and log files across container restarts/rebuilds
       - nexus-data:/app/data
