@@ -1,0 +1,130 @@
+"""
+Uploadable custom payload processors.
+
+Admins can upload a .py file that becomes an alternative to the built-in
+DSSClient/local processing in `worker.py:process_payload()`. Selection of
+which processing mode is active lives in the `admin_settings` table
+(`processing_mode` record) so it's configured the same way as DSSClient.
+
+SECURITY NOTE: uploaded scripts are executed as a real Python subprocess with
+the same OS-level permissions as the server process. This is intentionally
+isolated from the server's own memory (it cannot read secrets already loaded
+into the running app, mutate live objects, or crash the server directly),
+but it is NOT a security sandbox - it can still read/write the filesystem
+and make network calls with whatever permissions the host process has.
+Treat uploading a processor script exactly like deploying new server code:
+admin-role only, and only from sources you trust.
+
+Contract for an uploaded script:
+  - Read a single JSON object from stdin (the event payload)
+  - Print a single JSON object to stdout (the result to publish back)
+  - Anything printed to stderr, or a non-zero exit code, is treated as a
+    processing failure and logged with that output for debugging
+  - Must finish within PROCESSOR_TIMEOUT_SECONDS or it is killed and treated
+    as a failure
+"""
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Optional
+
+from .config import DATA_DIR
+from .database import processors_table, Q
+from .logging_config import log_event
+
+PROCESSORS_DIR = DATA_DIR / "processors"
+PROCESSORS_DIR.mkdir(exist_ok=True)
+
+PROCESSOR_TIMEOUT_SECONDS = 20
+
+EXAMPLE_TEMPLATE = '''"""
+Example Salesforce Nexus AI Server payload processor.
+
+Contract: read one JSON object from stdin, print one JSON object to stdout.
+Anything printed to stderr, a non-zero exit code, or exceeding the timeout
+is treated as a processing failure.
+"""
+import sys
+import json
+
+
+def process(payload: dict) -> dict:
+    # Your custom logic goes here. This example just echoes the payload
+    # back with a computed field, as a starting point.
+    return {
+        "status": "ok",
+        "summary": "Processed by custom uploaded script",
+        "echo": payload,
+    }
+
+
+if __name__ == "__main__":
+    input_payload = json.loads(sys.stdin.read() or "{}")
+    result = process(input_payload)
+    print(json.dumps(result))
+'''
+
+
+def _script_path(processor_id: str) -> Path:
+    return PROCESSORS_DIR / f"{processor_id}.py"
+
+
+def validate_syntax(code: str) -> Optional[str]:
+    """Returns an error message string if the code doesn't even parse as
+    valid Python, or None if it looks syntactically fine."""
+    try:
+        compile(code, "<uploaded processor>", "exec")
+        return None
+    except SyntaxError as exc:
+        return f"Syntax error at line {exc.lineno}: {exc.msg}"
+
+
+def save_processor_file(processor_id: str, code: str):
+    _script_path(processor_id).write_text(code)
+
+
+def read_processor_code(processor_id: str) -> str:
+    path = _script_path(processor_id)
+    return path.read_text() if path.exists() else ""
+
+
+def delete_processor_file(processor_id: str):
+    path = _script_path(processor_id)
+    if path.exists():
+        path.unlink()
+
+
+def run_processor(processor_id: str, payload: dict) -> dict:
+    """Executes an uploaded processor script in an isolated subprocess and
+    returns its JSON result. Raises RuntimeError with a descriptive message
+    on any failure (non-zero exit, bad JSON output, or timeout)."""
+    path = _script_path(processor_id)
+    if not path.exists():
+        raise RuntimeError(f"Processor script file not found for id '{processor_id}'")
+
+    start = time.time()
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(path)],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=PROCESSOR_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"Processor timed out after {PROCESSOR_TIMEOUT_SECONDS}s") from exc
+
+    duration_ms = round((time.time() - start) * 1000)
+
+    if proc.returncode != 0:
+        raise RuntimeError(f"Processor exited with code {proc.returncode}: {proc.stderr.strip()[:500]}")
+
+    try:
+        result = json.loads(proc.stdout.strip() or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Processor did not print valid JSON to stdout: {proc.stdout.strip()[:300]}") from exc
+
+    log_event("info", f"Processor '{processor_id}' ran in {duration_ms}ms", processor_id=processor_id)
+    return result

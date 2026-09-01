@@ -1,0 +1,79 @@
+# syntax=docker/dockerfile:1
+# escape=`
+#
+# Windows-native container image for Salesforce Nexus AI Server, intended to
+# run on Windows Server 2022 (build 20348 / ltsc2022) using Windows containers
+# (not the Linux-container/WSL2 path - use the top-level `Dockerfile` for
+# that instead).
+#
+# IMPORTANT - base image / host build matching:
+#   Windows containers use "process isolation" by default, which requires the
+#   container base image's Windows build to match the host's build exactly.
+#   The `ltsc2022` tags below correspond to Windows Server 2022. If your host
+#   has since taken a cumulative update that bumps its build number and you
+#   hit an isolation error, either patch the host to the matching build, or
+#   run with Hyper-V isolation instead: `docker run --isolation=hyperv ...`
+#   (also settable in docker-compose.windows.yml).
+#
+# Build with:
+#   docker build -f Dockerfile.windows -t salesforce-nexus-ai-server:windows .
+# (must be run with the Docker daemon in "Windows containers" mode - see
+# docs/WINDOWS_DEPLOYMENT.md for full host setup instructions)
+
+# ---------- Stage 1: build the React admin console ----------
+# There is no official Node.js image for Windows containers on Docker Hub
+# (only Linux variants are published), so this stage installs Node.js the
+# same way the official Python Windows image installs Python: by fetching
+# the official release archive directly from nodejs.org onto a plain
+# Windows Server Core base, rather than depending on an unofficial
+# third-party Node-on-Windows image.
+FROM mcr.microsoft.com/windows/servercore:ltsc2022 AS frontend-build
+SHELL ["powershell", "-NoLogo", "-NoProfile", "-Command", "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue';"]
+
+ENV NODE_VERSION=24.18.1
+RUN Invoke-WebRequest -Uri "https://nodejs.org/dist/v$env:NODE_VERSION/node-v$env:NODE_VERSION-win-x64.zip" -OutFile C:/node.zip ; `
+    Expand-Archive -Path C:/node.zip -DestinationPath C:/ ; `
+    Rename-Item -Path "C:/node-v$env:NODE_VERSION-win-x64" -NewName C:/nodejs ; `
+    Remove-Item -Path C:/node.zip
+
+ENV PATH="C:\nodejs;C:\nodejs\node_modules\npm\bin;${PATH}"
+
+WORKDIR C:/frontend
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install
+COPY frontend/ .
+RUN npm run build
+
+# ---------- Stage 2: backend runtime ----------
+FROM python:3.12-windowsservercore-ltsc2022 AS backend
+SHELL ["powershell", "-NoLogo", "-NoProfile", "-Command", "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue';"]
+
+# Prevent Python from writing .pyc files and enable unbuffered logging output
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR C:/app
+
+COPY backend/requirements.txt ./requirements.txt
+# NOTE: uvicorn[standard]'s optional uvloop/httptools speedups are Unix-only
+# and are automatically skipped by pip on Windows (they're gated behind a
+# `sys_platform != 'win32'` marker upstream) - no requirements.txt changes
+# needed, uvicorn falls back to its pure-Python asyncio event loop here.
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY backend/ .
+
+# Built React admin console goes where main.py expects it: ../frontend/dist
+# (i.e. a sibling of the backend's WORKDIR, exactly like the Linux image)
+COPY --from=frontend-build C:/frontend/dist C:/frontend/dist
+
+# Persistent local storage - mount a volume here in production
+RUN New-Item -ItemType Directory -Force -Path C:/app/data, C:/app/logs | Out-Null
+VOLUME ["C:/app/data", "C:/app/logs"]
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 `
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

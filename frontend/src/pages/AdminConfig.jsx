@@ -1,39 +1,128 @@
-import { useEffect, useState } from 'react'
-import { SlidersHorizontal, Save, CheckCircle2, CircleDashed } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import {
+  SlidersHorizontal, Save, CheckCircle2, CircleDashed, Upload, Trash2, Play,
+  FileCode2, Download, Radio,
+} from 'lucide-react'
 import api from '../lib/api'
 
-const EMPTY = { url: '', project_name: '', llm: '', api_key: '' }
+const EMPTY_DSS = { url: '', project_name: '', llm: '', api_key: '' }
 
 export default function AdminConfig() {
-  const [form, setForm] = useState(EMPTY)
+  // ---- DSSClient ----
+  const [form, setForm] = useState(EMPTY_DSS)
   const [configured, setConfigured] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState('')
 
+  // ---- Processing mode ----
+  const [mode, setMode] = useState('local')
+  const [activeProcessorId, setActiveProcessorId] = useState('')
+
+  // ---- Processors ----
+  const [processors, setProcessors] = useState([])
+  const [uploadName, setUploadName] = useState('')
+  const [uploadFile, setUploadFile] = useState(null)
+  const [uploading, setUploading] = useState(false)
+  const [testResult, setTestResult] = useState(null)
+  const fileInputRef = useRef(null)
+
   async function load() {
-    const { data } = await api.get('/admin-config/dss-client')
-    setForm({ url: data.url, project_name: data.project_name, llm: data.llm, api_key: '' })
-    setConfigured(data.configured)
+    const [dss, pm, procs] = await Promise.all([
+      api.get('/admin-config/dss-client'),
+      api.get('/admin-config/processing-mode'),
+      api.get('/processors'),
+    ])
+    setForm({ url: dss.data.url, project_name: dss.data.project_name, llm: dss.data.llm, api_key: '' })
+    setConfigured(dss.data.configured)
+    setMode(pm.data.mode)
+    setActiveProcessorId(pm.data.active_processor_id || '')
+    setProcessors(procs.data)
     setLoading(false)
   }
 
   useEffect(() => { load() }, [])
 
-  async function save(e) {
+  function flashToast(msg) {
+    setToast(msg)
+    setTimeout(() => setToast(''), 4000)
+  }
+
+  async function saveDss(e) {
     e.preventDefault()
     setSaving(true)
     try {
       const payload = { ...form }
-      if (!payload.api_key) delete payload.api_key // keep existing key unless a new one is entered
+      if (!payload.api_key) delete payload.api_key
       const { data } = await api.put('/admin-config/dss-client', payload)
       setConfigured(data.configured)
       setForm({ url: data.url, project_name: data.project_name, llm: data.llm, api_key: '' })
-      setToast('DSSClient configuration saved')
-      setTimeout(() => setToast(''), 4000)
+      flashToast('DSSClient configuration saved')
     } finally {
       setSaving(false)
     }
+  }
+
+  async function saveMode(newMode, newActiveId) {
+    setMode(newMode)
+    if (newActiveId !== undefined) setActiveProcessorId(newActiveId)
+    await api.put('/admin-config/processing-mode', {
+      mode: newMode,
+      active_processor_id: newMode === 'custom_script' ? (newActiveId ?? activeProcessorId) || null : activeProcessorId || null,
+    })
+    flashToast('Processing mode updated')
+  }
+
+  async function downloadExample() {
+    const { data } = await api.get('/processors/example')
+    const blob = new Blob([data.code], { type: 'text/x-python' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'example_processor.py'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function upload(e) {
+    e.preventDefault()
+    if (!uploadFile) return
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('name', uploadName || uploadFile.name)
+      fd.append('file', uploadFile)
+      await api.post('/processors', fd)
+      setUploadName('')
+      setUploadFile(null)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      load()
+      flashToast('Processor uploaded')
+    } catch (err) {
+      flashToast(err?.response?.data?.detail || 'Upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  async function testProcessor(id) {
+    setTestResult({ id, status: 'running' })
+    try {
+      const { data } = await api.post(`/processors/${id}/test`, { payload: { Message__c: 'test payload' } })
+      setTestResult({ id, status: 'ok', detail: JSON.stringify(data.result) })
+    } catch (err) {
+      setTestResult({ id, status: 'fail', detail: err?.response?.data?.detail })
+    }
+    load()
+  }
+
+  async function removeProcessor(p) {
+    if (!confirm(`Delete processor "${p.name}"?`)) return
+    if (activeProcessorId === p.id) {
+      await saveMode('local', null)
+    }
+    await api.delete(`/processors/${p.id}`)
+    load()
   }
 
   return (
@@ -45,7 +134,43 @@ export default function AdminConfig() {
         </div>
       </div>
 
-      <div className="panel" style={{ maxWidth: 640 }}>
+      {toast && <div className="login-hint" style={{ textAlign: 'left', marginBottom: 14, color: 'var(--accent-cyan)' }}>{toast}</div>}
+
+      {/* Processing mode selector */}
+      <div className="panel" style={{ maxWidth: 720, marginBottom: 16 }}>
+        <div className="panel-header"><h3><Radio size={15} /> Active processing mode</h3></div>
+        <div className="panel-body">
+          <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
+            Chooses what <code className="pill">process_payload()</code> does for every inbound event. Switch anytime — it takes effect on the next event.
+          </p>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {['local', 'dss_client', 'custom_script'].map((m) => (
+              <div
+                key={m}
+                className={`tab-pill ${mode === m ? 'active' : ''}`}
+                style={{ border: '1px solid var(--border-light)', padding: '10px 16px' }}
+                onClick={() => saveMode(m)}
+              >
+                {m === 'local' && 'Local fallback'}
+                {m === 'dss_client' && 'DSSClient'}
+                {m === 'custom_script' && 'Custom uploaded script'}
+              </div>
+            ))}
+          </div>
+          {mode === 'custom_script' && (
+            <div className="field" style={{ marginTop: 14 }}>
+              <label>Active processor</label>
+              <select value={activeProcessorId} onChange={(e) => saveMode('custom_script', e.target.value)}>
+                <option value="">Select an uploaded processor…</option>
+                {processors.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* DSSClient config */}
+      <div className="panel" style={{ maxWidth: 720, marginBottom: 16 }}>
         <div className="panel-header">
           <h3><SlidersHorizontal size={15} /> DSSClient</h3>
           {configured ? (
@@ -55,15 +180,10 @@ export default function AdminConfig() {
           )}
         </div>
         <div className="panel-body">
-          <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
-            When set, every inbound event is forwarded to this endpoint from <code className="pill">process_payload()</code> before
-            the result is published back to Salesforce. Leave it blank to use the built-in local fallback processing instead.
-          </p>
-
           {loading ? (
             <div className="empty-state">Loading…</div>
           ) : (
-            <form onSubmit={save}>
+            <form onSubmit={saveDss}>
               <div className="field">
                 <label>URL</label>
                 <input
@@ -91,13 +211,77 @@ export default function AdminConfig() {
                   placeholder={configured ? '(unchanged) enter a new key to replace it' : ''}
                 />
               </div>
-
-              {toast && <div style={{ color: 'var(--accent-green)', fontSize: 12.5, marginBottom: 12 }}>{toast}</div>}
-
               <button className="btn btn-primary" disabled={saving}>
                 <Save size={14} /> {saving ? 'Saving…' : 'Save configuration'}
               </button>
             </form>
+          )}
+        </div>
+      </div>
+
+      {/* Payload processors */}
+      <div className="panel" style={{ maxWidth: 720 }}>
+        <div className="panel-header">
+          <h3><FileCode2 size={15} /> Payload processors</h3>
+          <button className="btn btn-sm" onClick={downloadExample}><Download size={13} /> Download example</button>
+        </div>
+        <div className="panel-body">
+          <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
+            Upload a Python script to use as a custom processor. Contract: read one JSON object from stdin, print one
+            JSON object to stdout. It runs in an isolated subprocess with a 20s timeout — treat uploads like deploying
+            server code (admin-only, trusted sources only).
+          </p>
+
+          <form onSubmit={upload} style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 18, flexWrap: 'wrap' }}>
+            <div className="field" style={{ flex: 1, minWidth: 160, marginBottom: 0 }}>
+              <label>Name</label>
+              <input value={uploadName} onChange={(e) => setUploadName(e.target.value)} placeholder="My processor" />
+            </div>
+            <div className="field" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
+              <label>File (.py)</label>
+              <input ref={fileInputRef} type="file" accept=".py" onChange={(e) => setUploadFile(e.target.files[0])} />
+            </div>
+            <button className="btn btn-primary" disabled={uploading || !uploadFile}>
+              <Upload size={14} /> {uploading ? 'Uploading…' : 'Upload'}
+            </button>
+          </form>
+
+          {processors.length === 0 ? (
+            <div className="empty-state">No processors uploaded yet.</div>
+          ) : (
+            <table>
+              <thead><tr><th>Name</th><th>File</th><th>Last test</th><th></th></tr></thead>
+              <tbody>
+                {processors.map((p) => (
+                  <tr key={p.id}>
+                    <td>
+                      {p.name}
+                      {activeProcessorId === p.id && mode === 'custom_script' && (
+                        <span className="badge badge-blue" style={{ marginLeft: 8 }}><span className="badge-dot" />Active</span>
+                      )}
+                    </td>
+                    <td className="mono" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{p.filename}</td>
+                    <td>
+                      {p.last_status ? (
+                        <span className={`badge ${p.last_status === 'ok' ? 'badge-green' : 'badge-red'}`}>
+                          <span className="badge-dot" />{p.last_status}
+                        </span>
+                      ) : <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>never run</span>}
+                    </td>
+                    <td style={{ display: 'flex', gap: 6 }}>
+                      <button className="btn btn-sm btn-icon" title="Test run" onClick={() => testProcessor(p.id)}><Play size={13} /></button>
+                      <button className="btn btn-sm btn-icon btn-danger" onClick={() => removeProcessor(p)}><Trash2 size={13} /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {testResult && (
+            <div style={{ marginTop: 12, fontSize: 12, color: testResult.status === 'ok' ? 'var(--accent-green)' : testResult.status === 'fail' ? 'var(--accent-red)' : 'var(--text-muted)' }}>
+              {testResult.status === 'running' ? 'Running test…' : testResult.status === 'ok' ? `Result: ${testResult.detail}` : `Failed: ${testResult.detail}`}
+            </div>
           )}
         </div>
       </div>

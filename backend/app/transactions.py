@@ -7,13 +7,14 @@ from .models import new_id, now_ts
 
 def record_transaction(
     org_id: str,
-    org_name: str,
+    org_name: Optional[str],
     direction: str,
     channel: str,
     status: str,
     payload: dict,
     result: Optional[dict] = None,
     error: Optional[str] = None,
+    parent_transaction_id: Optional[str] = None,
 ) -> dict:
     record = {
         "id": new_id(),
@@ -26,6 +27,7 @@ def record_transaction(
         "result": result,
         "error": error,
         "attempts": 0,
+        "parent_transaction_id": parent_transaction_id,
         "created_at": now_ts(),
         "updated_at": now_ts(),
     }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Radio, Trash2, Send, ArrowDownToLine, ArrowUpFromLine } from 'lucide-react'
+import { Plus, Radio, Trash2, Send, ArrowDownToLine, ArrowUpFromLine, Share2, GitBranch } from 'lucide-react'
 import api from '../lib/api'
 
 const EMPTY = { org_id: '', channel: '', direction: 'subscribe', enabled: true, description: '', broker_topic: 'default' }
@@ -7,6 +7,7 @@ const EMPTY = { org_id: '', channel: '', direction: 'subscribe', enabled: true, 
 export default function EventsConfig() {
   const [orgs, setOrgs] = useState([])
   const [configs, setConfigs] = useState([])
+  const [integrations, setIntegrations] = useState([])
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState(EMPTY)
   const [saving, setSaving] = useState(false)
@@ -15,10 +16,16 @@ export default function EventsConfig() {
   const [publishForm, setPublishForm] = useState({ org_id: '', channel: '', payload: '{\n  "Message__c": "hello"\n}' })
   const [publishResult, setPublishResult] = useState(null)
 
+  const [routingTarget, setRoutingTarget] = useState(null)
+  const [routingChannels, setRoutingChannels] = useState([])
+  const [routingIntegrations, setRoutingIntegrations] = useState([])
+  const [savingRouting, setSavingRouting] = useState(false)
+
   async function load() {
-    const [o, c] = await Promise.all([api.get('/orgs'), api.get('/events')])
+    const [o, c, i] = await Promise.all([api.get('/orgs'), api.get('/events'), api.get('/integrations')])
     setOrgs(o.data)
     setConfigs(c.data)
+    setIntegrations(i.data)
   }
 
   useEffect(() => { load() }, [])
@@ -67,8 +74,34 @@ export default function EventsConfig() {
     }
   }
 
+  function openRouting(cfg) {
+    setRoutingTarget(cfg)
+    setRoutingChannels(cfg.route_publish_channel_ids || [])
+    setRoutingIntegrations(cfg.route_integration_ids || [])
+  }
+
+  function toggleInList(list, setList, id) {
+    setList(list.includes(id) ? list.filter((x) => x !== id) : [...list, id])
+  }
+
+  async function saveRouting(e) {
+    e.preventDefault()
+    setSavingRouting(true)
+    try {
+      await api.put(`/events/${routingTarget.id}`, {
+        route_publish_channel_ids: routingChannels,
+        route_integration_ids: routingIntegrations,
+      })
+      setRoutingTarget(null)
+      load()
+    } finally {
+      setSavingRouting(false)
+    }
+  }
+
   const subs = configs.filter((c) => c.direction === 'subscribe')
   const pubs = configs.filter((c) => c.direction === 'publish')
+  const orgPublishChannels = routingTarget ? pubs.filter((p) => p.org_id === routingTarget.org_id) : []
 
   return (
     <div>
@@ -89,22 +122,32 @@ export default function EventsConfig() {
         <div className="panel">
           <div className="panel-header"><h3><ArrowDownToLine size={14} /> Subscribed channels (Salesforce → Nexus)</h3></div>
           <table>
-            <thead><tr><th>Channel</th><th>Org</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Channel</th><th>Org</th><th>Routing</th><th>Status</th><th></th></tr></thead>
             <tbody>
-              {subs.length === 0 && <tr><td colSpan={4} className="empty-state">No subscribe channels configured</td></tr>}
-              {subs.map((c) => (
-                <tr key={c.id}>
-                  <td><code className="pill">{c.channel}</code></td>
-                  <td>{orgName(c.org_id)}</td>
-                  <td>
-                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: 0, cursor: 'pointer' }}>
-                      <input type="checkbox" style={{ width: 15 }} checked={c.enabled} onChange={() => toggle(c)} />
-                      {c.enabled ? 'Enabled' : 'Disabled'}
-                    </label>
-                  </td>
-                  <td><button className="btn btn-sm btn-icon btn-danger" onClick={() => remove(c)}><Trash2 size={13} /></button></td>
-                </tr>
-              ))}
+              {subs.length === 0 && <tr><td colSpan={5} className="empty-state">No subscribe channels configured</td></tr>}
+              {subs.map((c) => {
+                const chCount = (c.route_publish_channel_ids || []).length
+                const intCount = (c.route_integration_ids || []).length
+                return (
+                  <tr key={c.id}>
+                    <td><code className="pill">{c.channel}</code></td>
+                    <td>{orgName(c.org_id)}</td>
+                    <td>
+                      <button className="btn btn-sm" onClick={() => openRouting(c)}>
+                        <GitBranch size={12} />
+                        {chCount === 0 && intCount === 0 ? 'Auto (default)' : `${chCount} channel${chCount === 1 ? '' : 's'} · ${intCount} hook${intCount === 1 ? '' : 's'}`}
+                      </button>
+                    </td>
+                    <td>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: 0, cursor: 'pointer' }}>
+                        <input type="checkbox" style={{ width: 15 }} checked={c.enabled} onChange={() => toggle(c)} />
+                        {c.enabled ? 'Enabled' : 'Disabled'}
+                      </label>
+                    </td>
+                    <td><button className="btn btn-sm btn-icon btn-danger" onClick={() => remove(c)}><Trash2 size={13} /></button></td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -198,6 +241,73 @@ export default function EventsConfig() {
               <div className="modal-footer">
                 <button type="button" className="btn" onClick={() => setPublishOpen(false)}>Close</button>
                 <button type="submit" className="btn btn-primary">Publish</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {routingTarget && (
+        <div className="modal-overlay" onClick={() => setRoutingTarget(null)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="panel-header">
+              <h3><GitBranch size={15} /> Route <code className="pill">{routingTarget.channel}</code></h3>
+            </div>
+            <form onSubmit={saveRouting}>
+              <div className="panel-body">
+                <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
+                  Pick which publish channels and integration hooks should receive the processed result of events
+                  received on this channel. Leave everything unchecked to use the default behavior (first enabled
+                  publish channel for the org, integrations auto-matched by their own trigger rules).
+                </p>
+
+                <label style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8, display: 'block' }}>
+                  <ArrowUpFromLine size={13} style={{ verticalAlign: -2, marginRight: 5 }} />
+                  Publish channels ({orgName(routingTarget.org_id)})
+                </label>
+                {orgPublishChannels.length === 0 ? (
+                  <div className="empty-state" style={{ padding: '14px 0' }}>No publish channels configured for this org yet.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
+                    {orgPublishChannels.map((p) => (
+                      <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 9, margin: 0, cursor: 'pointer', fontSize: 13 }}>
+                        <input
+                          type="checkbox"
+                          style={{ width: 16 }}
+                          checked={routingChannels.includes(p.id)}
+                          onChange={() => toggleInList(routingChannels, setRoutingChannels, p.id)}
+                        />
+                        <code className="pill">{p.channel}</code>
+                      </label>
+                    ))}
+                  </div>
+                )}
+
+                <label style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8, display: 'block' }}>
+                  <Share2 size={13} style={{ verticalAlign: -2, marginRight: 5 }} />
+                  Integration hooks
+                </label>
+                {integrations.length === 0 ? (
+                  <div className="empty-state" style={{ padding: '14px 0' }}>No integrations configured yet.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {integrations.map((i) => (
+                      <label key={i.id} style={{ display: 'flex', alignItems: 'center', gap: 9, margin: 0, cursor: 'pointer', fontSize: 13 }}>
+                        <input
+                          type="checkbox"
+                          style={{ width: 16 }}
+                          checked={routingIntegrations.includes(i.id)}
+                          onChange={() => toggleInList(routingIntegrations, setRoutingIntegrations, i.id)}
+                        />
+                        {i.name} <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>({i.type})</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn" onClick={() => setRoutingTarget(null)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={savingRouting}>{savingRouting ? 'Saving…' : 'Save routing'}</button>
               </div>
             </form>
           </div>

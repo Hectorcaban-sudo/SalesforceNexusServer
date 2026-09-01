@@ -113,6 +113,13 @@ class EventConfigBase(BaseModel):
     description: Optional[str] = ""
     # optional mapping used when publishing: which broker topic feeds this channel
     broker_topic: Optional[str] = "default"
+    # Routing (only meaningful on direction="subscribe" entries): which
+    # publish-direction event configs and which integrations should receive
+    # the processed result of events received on this channel. Empty lists
+    # fall back to legacy behavior (first enabled publish channel for the
+    # org, and integrations auto-matched by their own org/trigger rules).
+    route_publish_channel_ids: List[str] = Field(default_factory=list)
+    route_integration_ids: List[str] = Field(default_factory=list)
 
 
 class EventConfigCreate(EventConfigBase):
@@ -124,6 +131,8 @@ class EventConfigUpdate(BaseModel):
     enabled: Optional[bool] = None
     description: Optional[str] = None
     broker_topic: Optional[str] = None
+    route_publish_channel_ids: Optional[List[str]] = None
+    route_integration_ids: Optional[List[str]] = None
 
 
 class EventConfigOut(EventConfigBase):
@@ -152,6 +161,7 @@ class TransactionOut(BaseModel):
     result: Optional[dict] = None
     error: Optional[str] = None
     attempts: int = 0
+    parent_transaction_id: Optional[str] = None
     created_at: float
     updated_at: float
 
@@ -184,6 +194,32 @@ class DSSClientConfigUpdate(BaseModel):
     project_name: Optional[str] = None
     llm: Optional[str] = None
     api_key: Optional[str] = None
+
+
+# ---------- Custom payload processors (uploaded Python scripts) ----------
+class ProcessorOut(BaseModel):
+    id: str
+    name: str
+    filename: str
+    uploaded_at: float
+    last_status: Optional[str] = None
+    last_run_at: Optional[float] = None
+    last_error: Optional[str] = None
+
+
+class ProcessingMode(str, Enum):
+    local = "local"
+    dss_client = "dss_client"
+    custom_script = "custom_script"
+
+
+class ProcessingModeConfig(BaseModel):
+    mode: ProcessingMode = ProcessingMode.local
+    active_processor_id: Optional[str] = None
+
+
+class ProcessorTestRequest(BaseModel):
+    payload: dict = Field(default_factory=lambda: {"Message__c": "test payload"})
 
 
 # ---------- Outbound integrations (fan-out sinks) ----------

@@ -182,16 +182,26 @@ def _matches_trigger(trigger: str, status: str) -> bool:
     return False
 
 
-def dispatch_integrations(transaction: dict):
+def dispatch_integrations(transaction: dict, only_ids: Optional[list] = None):
     """Fan a completed transaction out to every enabled, matching integration
     sink. Best-effort: exceptions are caught and logged per-sink so one
-    broken integration never blocks another or affects the pipeline."""
+    broken integration never blocks another or affects the pipeline.
+
+    If `only_ids` is provided (an explicit routing selection made on the
+    source subscribe event config), dispatch is restricted to exactly those
+    integration ids - each still respects its own `trigger` setting. When
+    `only_ids` is None, falls back to the legacy behavior of matching every
+    enabled integration by org scope + trigger.
+    """
     org_id = transaction.get("org_id")
     status = transaction.get("status")
 
     candidates = integrations_table.search(Q.enabled == True)  # noqa: E712
+    if only_ids is not None:
+        candidates = [c for c in candidates if c["id"] in only_ids]
+
     for cfg in candidates:
-        if cfg.get("org_id") not in (None, "", org_id):
+        if only_ids is None and cfg.get("org_id") not in (None, "", org_id):
             continue
         if not _matches_trigger(cfg.get("trigger", "always"), status):
             continue

@@ -22,10 +22,14 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
 - **Internal message broker** — an in-process async broker (`app/broker.py`) decouples the
   Salesforce listener from the processing logic and the Salesforce publisher. It's written behind
   a small interface so it can be swapped for Kafka/RabbitMQ/SQS later without touching callers.
-- **Pluggable worker/processor** — `app/worker.py:process_payload()` is the single place to plug in
-  your real business logic or AI model; it receives the raw event payload and returns the result to
-  publish back. If a **DSSClient** endpoint is configured (see Admin Configuration below), the
-  payload is forwarded there automatically; otherwise a local fallback result is returned.
+- **Pluggable worker/processor** — `app/worker.py:process_payload()` supports three interchangeable
+  processing modes, switchable from Admin Configuration: a **local fallback**, a **DSSClient** HTTP
+  endpoint, or an **uploaded custom Python script**. Upload a `.py` file that reads a JSON payload
+  from stdin and prints a JSON result to stdout; it runs in an isolated subprocess with a timeout.
+  See "Custom payload processors" below.
+- **Graphical event routing** — for any subscribed event channel, visually select (checkboxes) which
+  publish channels *and* which integration hooks the processed result should fan out to, instead of
+  one implicit default channel. See "Event routing" below.
 - **Salesforce publisher** — publishes the processed result back to Salesforce as a new Platform
   Event using the standard REST `sobjects` endpoint (OAuth password or client-credentials flow).
   A manual "publish test event" action is also available from the admin UI.
@@ -63,8 +67,11 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
 
 ```
 sfnexus/
-├── Dockerfile                    Multi-stage build: React frontend + Python backend
-├── docker-compose.yml            One-command startup with persistent volumes
+├── Dockerfile                    Multi-stage build: React frontend + Python backend (Linux)
+├── docker-compose.yml            One-command startup with persistent volumes (Linux)
+├── Dockerfile.windows            Native Windows container build (Windows Server 2022)
+├── docker-compose.windows.yml    One-command startup on Windows containers
+├── docs/WINDOWS_DEPLOYMENT.md    Windows Server 2022 host setup + deployment guide
 ├── .dockerignore
 ├── .env.example                  Env vars for docker-compose (SECRET_KEY, etc.)
 ├── backend/
@@ -81,13 +88,14 @@ sfnexus/
 │   │   ├── cometd_client.py      Per-org CometD subscription manager
 │   │   ├── salesforce_client.py  OAuth login + publish Platform Events via REST
 │   │   ├── integrations.py        Outbound fan-out: webhook/Slack/Teams/Snowflake/BigQuery/custom
+│   │   ├── processors.py          Uploaded Python processor storage + isolated subprocess execution
 │   │   ├── worker.py             The "internal function": processes inbound events
-│   │   │                         (via DSSClient if configured), publishes results, dispatches
-│   │   │                         integrations, and handles transaction reprocessing
+│   │   │                         (via DSSClient/custom script if configured), fans results out to
+│   │   │                         selected publish channels + integrations, and handles reprocessing
 │   │   ├── transactions.py       Transaction audit-trail helpers
 │   │   └── routers/              /api/auth, /api/orgs, /api/events, /api/transactions,
 │   │                             /api/logs, /api/dashboard, /api/admin-config, /api/users,
-│   │                             /api/integrations
+│   │                             /api/integrations, /api/processors
 │   ├── dev_tools/
 │   │   └── fake_oidc_provider.py  Local fake IdP for testing SSO without a real provider
 │   ├── data/                     nexus.db (SQLite) lives here (gitignored)
@@ -134,6 +142,11 @@ docker run -d --name nexus \
 To update after making code changes: `docker compose up --build` again (or `docker build` +
 `docker run` as above) — the named volumes keep your orgs, event configs, transactions, and
 DSSClient settings intact across rebuilds.
+
+**Hosting on Windows Server 2022?** Use `Dockerfile.windows` and `docker-compose.windows.yml`
+instead — a native Windows container image (not the Linux image above run under WSL2). See
+[docs/WINDOWS_DEPLOYMENT.md](docs/WINDOWS_DEPLOYMENT.md) for full host setup, build, and run
+instructions specific to Windows containers.
 
 ### Option B — run directly with Python/Node
 
@@ -253,6 +266,49 @@ scope** (leave blank to apply to every org). Use the **Test** button on any inte
 synthetic transaction through it immediately and confirm it's wired up correctly. A failing
 integration never affects the Salesforce publish outcome or blocks other integrations — failures
 are logged and shown as the integration's last status.
+
+## Custom payload processors
+
+From **Admin Configuration** (admin role required), upload a Python script as an alternative to
+DSSClient or the local fallback for `process_payload()`. Contract:
+
+```python
+import sys, json
+
+def process(payload: dict) -> dict:
+    # your logic here
+    return {"status": "ok", "echo": payload}
+
+if __name__ == "__main__":
+    input_payload = json.loads(sys.stdin.read() or "{}")
+    print(json.dumps(process(input_payload)))
+```
+
+- Read one JSON object from stdin, print one JSON object to stdout.
+- Anything on stderr, a non-zero exit code, or exceeding a 20-second timeout is treated as a
+  processing failure (and falls back to local processing so the pipeline never breaks).
+- Use the **Test** button to run it against a sample payload before activating it.
+- Only one processor is "active" at a time, selected from Admin Configuration's mode selector.
+
+**Security note:** uploaded scripts run in an isolated subprocess (not `exec()`'d in-process), so
+they can't directly touch the running server's memory or already-loaded secrets — but they do run
+with the same OS-level filesystem/network permissions as the server process. This is not a security
+sandbox. Uploading a processor script is admin-only and should be treated like deploying new server
+code: only from sources you trust.
+
+## Event routing
+
+Each **subscribed** event channel (Event Configuration page) has a **Routing** button that opens a
+graphical multi-select: pick any number of that org's **publish channels** and any number of
+**integration hooks** to fan the processed result out to. This mirrors a typical event-broker
+architecture (one event in, many consumers out) — each selected publish channel is delivered to
+and tracked independently (so one Salesforce org accepting the event and another rejecting it don't
+affect each other), and integration dispatch is restricted to exactly the hooks you picked rather
+than every integration that happens to match by trigger/org.
+
+Leaving both selections empty preserves the original behavior: the first enabled publish channel
+for the org, and integrations auto-matched by their own trigger/org settings — so existing setups
+keep working unchanged until you opt into explicit routing.
 
 ## Admin Configuration: DSSClient
 

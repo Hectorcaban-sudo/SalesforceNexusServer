@@ -1,0 +1,47 @@
+services:
+  nexus:
+    build:
+      context: .
+      dockerfile: Dockerfile.windows
+    image: salesforce-nexus-ai-server:windows
+    container_name: salesforce-nexus-ai-server
+    restart: unless-stopped
+    # Process isolation (the default) requires the image's Windows build to
+    # exactly match the host's build. If your host has since patched to a
+    # newer build than the ltsc2022 base images and containers fail to start,
+    # uncomment the line below to fall back to Hyper-V isolation instead.
+    # isolation: hyperv
+    ports:
+      - "8000:8000"
+    environment:
+      SECRET_KEY: ${SECRET_KEY:-change_me_to_a_long_random_value}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_CONSOLE_EXPORTER: ${OTEL_CONSOLE_EXPORTER:-false}
+      SSO_ISSUER: ${SSO_ISSUER:-}
+      SSO_CLIENT_ID: ${SSO_CLIENT_ID:-}
+      SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET:-}
+      SSO_REDIRECT_URI: ${SSO_REDIRECT_URI:-http://localhost:8000/api/auth/sso/callback}
+      SSO_DEFAULT_ROLE: ${SSO_DEFAULT_ROLE:-viewer}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:8000}
+    volumes:
+      # Windows container paths contain a drive-letter colon (C:\...), which
+      # collides with Compose's short "source:target" volume syntax - use
+      # the explicit long form instead to avoid any ambiguity.
+      - type: volume
+        source: nexus-data
+        target: C:\app\data
+      - type: volume
+        source: nexus-logs
+        target: C:\app\logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  nexus-data:
+  nexus-logs:
