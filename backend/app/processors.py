@@ -18,8 +18,11 @@ admin-role only, and only from sources you trust.
 Contract for an uploaded script:
   - Read a single JSON object from stdin (the event payload)
   - Print a single JSON object to stdout (the result to publish back)
-  - Anything printed to stderr, or a non-zero exit code, is treated as a
-    processing failure and logged with that output for debugging
+  - Print any log/diagnostic messages to stderr - every line is mirrored
+    into the System Logs page (tagged with this processor's name),
+    regardless of whether the run succeeds or fails
+  - A non-zero exit code, or invalid JSON on stdout, is treated as a
+    processing failure
   - Must finish within PROCESSOR_TIMEOUT_SECONDS or it is killed and treated
     as a failure
 """
@@ -43,14 +46,22 @@ EXAMPLE_TEMPLATE = '''"""
 Example Salesforce Nexus AI Server payload processor.
 
 Contract: read one JSON object from stdin, print one JSON object to stdout.
-Anything printed to stderr, a non-zero exit code, or exceeding the timeout
-is treated as a processing failure.
+A non-zero exit code, invalid JSON on stdout, or exceeding the timeout is
+treated as a processing failure.
+
+Logging: print any diagnostic/log messages to stderr (not stdout - stdout is
+reserved for the JSON result). Every stderr line is automatically mirrored
+into the Salesforce Nexus AI Server System Logs page, tagged with this
+processor's name, whether the run succeeds or fails.
 """
 import sys
 import json
 
 
 def process(payload: dict) -> dict:
+    # Anything printed here goes to the System Logs page automatically.
+    print(f"Received payload with keys: {list(payload.keys())}", file=sys.stderr)
+
     # Your custom logic goes here. This example just echoes the payload
     # back with a computed field, as a starting point.
     return {
@@ -96,13 +107,32 @@ def delete_processor_file(processor_id: str):
         path.unlink()
 
 
+def _log_processor_stderr(processor_id: str, name: str, stderr: str):
+    """Custom processor scripts are expected to print their own log lines to
+    stderr (stdout is reserved for the JSON result) - pipe each non-empty
+    line into the system Logs page under a distinct logger name so they're
+    visible and attributable to this specific processor, exactly like any
+    other component's logs."""
+    if not stderr:
+        return
+    logger_name = f"nexus.processor.{name or processor_id}"
+    for line in stderr.strip().splitlines():
+        if line.strip():
+            log_event("info", line.strip(), logger_name=logger_name, processor_id=processor_id)
+
+
 def run_processor(processor_id: str, payload: dict) -> dict:
     """Executes an uploaded processor script in an isolated subprocess and
     returns its JSON result. Raises RuntimeError with a descriptive message
-    on any failure (non-zero exit, bad JSON output, or timeout)."""
+    on any failure (non-zero exit, bad JSON output, or timeout). Anything
+    the script prints to stderr is captured and mirrored into the system
+    Logs page regardless of success or failure - see `_log_processor_stderr`."""
     path = _script_path(processor_id)
     if not path.exists():
         raise RuntimeError(f"Processor script file not found for id '{processor_id}'")
+
+    record = processors_table.get(Q.id == processor_id)
+    name = record["name"] if record else processor_id
 
     start = time.time()
     try:
@@ -114,9 +144,11 @@ def run_processor(processor_id: str, payload: dict) -> dict:
             timeout=PROCESSOR_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as exc:
+        _log_processor_stderr(processor_id, name, exc.stderr or "")
         raise RuntimeError(f"Processor timed out after {PROCESSOR_TIMEOUT_SECONDS}s") from exc
 
     duration_ms = round((time.time() - start) * 1000)
+    _log_processor_stderr(processor_id, name, proc.stderr)
 
     if proc.returncode != 0:
         raise RuntimeError(f"Processor exited with code {proc.returncode}: {proc.stderr.strip()[:500]}")

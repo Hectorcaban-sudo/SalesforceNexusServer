@@ -122,6 +122,51 @@ def _send_teams(cfg: dict, transaction: dict) -> dict:
     return _response_summary(resp)
 
 
+def _send_email(cfg: dict, transaction: dict) -> dict:
+    import smtplib
+    from email.mime.text import MIMEText
+    from .routers.admin_config import get_email_settings_raw  # local import avoids a circular import at module load time
+
+    settings = get_email_settings_raw()
+    if not settings.get("host") or not settings.get("from_address"):
+        raise RuntimeError("Email is not configured (set SMTP host and from-address in Admin Configuration -> Email)")
+
+    to_addresses = cfg["config"].get("to") or []
+    if isinstance(to_addresses, str):
+        to_addresses = [a.strip() for a in to_addresses.split(",") if a.strip()]
+    if not to_addresses:
+        raise RuntimeError("This email integration has no recipient addresses configured")
+
+    status = transaction.get("status")
+    subject = cfg["config"].get("subject") or f"[Salesforce Nexus AI Server] {transaction.get('channel', 'event')} — {status}"
+
+    body_lines = [
+        f"Transaction: {transaction.get('id')}",
+        f"Org: {transaction.get('org_name')}",
+        f"Channel: {transaction.get('channel')}",
+        f"Direction: {transaction.get('direction')}",
+        f"Status: {status}",
+    ]
+    if transaction.get("error"):
+        body_lines.append(f"Error: {transaction['error']}")
+    body_lines.append("")
+    body_lines.append(f"Payload: {json.dumps(transaction.get('payload'), default=str)}")
+
+    msg = MIMEText("\n".join(body_lines))
+    msg["Subject"] = subject
+    msg["From"] = settings["from_address"]
+    msg["To"] = ", ".join(to_addresses)
+
+    with smtplib.SMTP(settings["host"], settings.get("port", 587), timeout=15) as smtp:
+        if settings.get("use_tls"):
+            smtp.starttls()
+        if settings.get("username"):
+            smtp.login(settings["username"], settings.get("password", ""))
+        smtp.sendmail(settings["from_address"], to_addresses, msg.as_string())
+
+    return {"to": to_addresses, "subject": subject}
+
+
 def _load_snowflake(cfg: dict, transaction: dict) -> dict:
     try:
         import snowflake.connector
@@ -191,6 +236,7 @@ _SENDERS = {
     "custom_api": _send_custom_api,
     "slack": _send_slack,
     "teams": _send_teams,
+    "email": _send_email,
     "snowflake": _load_snowflake,
     "bigquery": _load_bigquery,
 }

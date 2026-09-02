@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import {
   SlidersHorizontal, Save, CheckCircle2, CircleDashed, Upload, Trash2, Play,
   FileCode2, Download, Radio, Network, DatabaseZap, FileDown, FileUp, AlertTriangle,
-  Workflow,
+  Workflow, Mail,
 } from 'lucide-react'
 import api from '../lib/api'
 
 const EMPTY_DSS = { url: '', project_name: '', llm: '', api_key: '' }
 const EMPTY_LANGFLOW = { base_url: '', flow_id: '', api_key: '', input_field: 'input_value', output_path: '' }
 const EMPTY_RMQ = { host: 'localhost', port: 5672, username: 'guest', password: '', vhost: '/', use_tls: false }
+const EMPTY_EMAIL = { host: '', port: 587, username: '', password: '', use_tls: true, from_address: '' }
 
 const TABS = [
   { key: 'processing', label: 'Processing mode', icon: Radio },
@@ -16,6 +17,7 @@ const TABS = [
   { key: 'langflow', label: 'Langflow', icon: Workflow },
   { key: 'processors', label: 'Payload processors', icon: FileCode2 },
   { key: 'broker', label: 'Message broker', icon: Network },
+  { key: 'email', label: 'Email', icon: Mail },
   { key: 'backup', label: 'Configuration backup', icon: FileDown },
 ]
 
@@ -53,18 +55,24 @@ export default function AdminConfig() {
   const [brokerConnError, setBrokerConnError] = useState(null)
   const [savingBroker, setSavingBroker] = useState(false)
 
+  // ---- Email (SMTP) ----
+  const [emailForm, setEmailForm] = useState(EMPTY_EMAIL)
+  const [emailConfigured, setEmailConfigured] = useState(false)
+  const [savingEmail, setSavingEmail] = useState(false)
+
   // ---- Export / Import ----
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState(null)
   const importInputRef = useRef(null)
 
   async function load() {
-    const [dss, lf, pm, procs, brk] = await Promise.all([
+    const [dss, lf, pm, procs, brk, email] = await Promise.all([
       api.get('/admin-config/dss-client'),
       api.get('/admin-config/langflow'),
       api.get('/admin-config/processing-mode'),
       api.get('/processors'),
       api.get('/admin-config/broker'),
+      api.get('/admin-config/email'),
     ])
     setDssForm({ url: dss.data.url, project_name: dss.data.project_name, llm: dss.data.llm, api_key: '' })
     setDssConfigured(dss.data.configured)
@@ -77,6 +85,8 @@ export default function AdminConfig() {
     setRmqForm({ ...brk.data.rabbitmq, password: '' })
     setActiveBackend(brk.data.active_backend)
     setBrokerConnError(brk.data.connection_error)
+    setEmailForm({ host: email.data.host, port: email.data.port, username: email.data.username, password: '', use_tls: email.data.use_tls, from_address: email.data.from_address })
+    setEmailConfigured(email.data.configured)
     setLoading(false)
   }
 
@@ -192,6 +202,21 @@ export default function AdminConfig() {
       flashToast('Broker configuration saved — restart the server for this to take effect')
     } finally {
       setSavingBroker(false)
+    }
+  }
+
+  async function saveEmail(e) {
+    e.preventDefault()
+    setSavingEmail(true)
+    try {
+      const payload = { ...emailForm }
+      if (!payload.password) delete payload.password
+      const { data } = await api.put('/admin-config/email', payload)
+      setEmailConfigured(data.configured)
+      setEmailForm({ host: data.host, port: data.port, username: data.username, password: '', use_tls: data.use_tls, from_address: data.from_address })
+      flashToast('Email configuration saved')
+    } finally {
+      setSavingEmail(false)
     }
   }
 
@@ -377,7 +402,8 @@ export default function AdminConfig() {
               <div className="panel-body">
                 <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
                   Upload a Python script to use as a custom processor. Contract: read one JSON object from stdin, print one
-                  JSON object to stdout. It runs in an isolated subprocess with a 20s timeout — treat uploads like deploying
+                  JSON object to stdout, and print any log messages to stderr — those show up in System Logs automatically.
+                  It runs in an isolated subprocess with a 20s timeout — treat uploads like deploying
                   server code (admin-only, trusted sources only).
                 </p>
 
@@ -491,6 +517,60 @@ export default function AdminConfig() {
 
                   <button className="btn btn-primary" disabled={savingBroker}>
                     <DatabaseZap size={14} /> {savingBroker ? 'Saving…' : 'Save broker configuration'}
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {tab === 'email' && (
+            <div className="panel" style={{ maxWidth: 720 }}>
+              <div className="panel-header">
+                <h3><Mail size={15} /> Email (SMTP)</h3>
+                {emailConfigured ? (
+                  <span className="badge badge-green"><CheckCircle2 size={12} /> Configured</span>
+                ) : (
+                  <span className="badge badge-gray"><CircleDashed size={12} /> Not configured</span>
+                )}
+              </div>
+              <div className="panel-body">
+                <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
+                  Used by any "Email" integration sink (for normal transaction fan-out or as an alert
+                  delivery channel) to send mail via SMTP.
+                </p>
+                <form onSubmit={saveEmail}>
+                  <div className="form-row-2">
+                    <div className="field">
+                      <label>SMTP host</label>
+                      <input required value={emailForm.host} onChange={(e) => setEmailForm({ ...emailForm, host: e.target.value })} placeholder="smtp.example.com" />
+                    </div>
+                    <div className="field">
+                      <label>Port</label>
+                      <input required type="number" value={emailForm.port} onChange={(e) => setEmailForm({ ...emailForm, port: Number(e.target.value) })} />
+                    </div>
+                  </div>
+                  <div className="form-row-2">
+                    <div className="field">
+                      <label>Username (optional)</label>
+                      <input value={emailForm.username} onChange={(e) => setEmailForm({ ...emailForm, username: e.target.value })} />
+                    </div>
+                    <div className="field">
+                      <label>Password (optional)</label>
+                      <input type="password" value={emailForm.password} onChange={(e) => setEmailForm({ ...emailForm, password: e.target.value })} placeholder={emailConfigured ? '(unchanged)' : ''} />
+                    </div>
+                  </div>
+                  <div className="form-row-2">
+                    <div className="field">
+                      <label>From address</label>
+                      <input required value={emailForm.from_address} onChange={(e) => setEmailForm({ ...emailForm, from_address: e.target.value })} placeholder="nexus@yourcompany.com" />
+                    </div>
+                    <div className="field" style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 22 }}>
+                      <input type="checkbox" style={{ width: 16 }} checked={emailForm.use_tls} onChange={(e) => setEmailForm({ ...emailForm, use_tls: e.target.checked })} />
+                      <label style={{ margin: 0 }}>Use STARTTLS</label>
+                    </div>
+                  </div>
+                  <button className="btn btn-primary" disabled={savingEmail}>
+                    <Save size={14} /> {savingEmail ? 'Saving…' : 'Save configuration'}
                   </button>
                 </form>
               </div>

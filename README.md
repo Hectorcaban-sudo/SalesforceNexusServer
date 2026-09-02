@@ -52,9 +52,9 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   result (HTTP response body, rows inserted, etc.) is captured and shown on hover wherever it's
   logged. SSL/TLS certificate verification is disabled on every outbound integration call by
   design, to support internally-issued or self-signed certificates. See "Integrations" below.
-- **Alerts** — get notified through any configured integration sink when a transaction, a
-  Salesforce org's connection, an integration dispatch, or the message broker fails. See "Alerts"
-  below.
+- **Alerts** — get notified (including by **email**) through any configured integration sink when a
+  transaction, a Salesforce org's connection, an integration dispatch, or the message broker fails.
+  See "Alerts" below.
 - **Configuration export/import** — back up every Salesforce org, event channel, and integration to
   a single JSON file, and restore it (here or on another instance). See "Configuration backup"
   below.
@@ -83,7 +83,12 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   bootstrap account (`admin` / `admin123` — change this immediately, see below).
 - **Structured, rolling logging** — every component logs to a **daily-rotating file**
   (`backend/logs/nexus.log`, configurable — size-based rotation is also available) *and* into
-  SQLite, so the admin UI's Logs page can filter/search without touching the filesystem.
+  SQLite, so the admin UI's Logs page can filter/search without touching the filesystem. **Custom
+  processor scripts** are included — anything they print to stderr shows up here too, tagged with
+  the processor's name. Click any log row to see the full entry (message + context) in a modal.
+- **Optional publishing** — a subscribed event channel can be configured to process without
+  automatically publishing the result back to Salesforce (still runs through the configured
+  processor, integrations, and alerts) — useful for one-way "listen and notify" event types.
 
 ## Project layout
 
@@ -279,6 +284,8 @@ that every processed transaction is fanned out to, independent of the Salesforce
 - **Webhook** — POSTs the full transaction JSON to a URL you provide; optionally HMAC-signs the
   body (`X-Nexus-Signature: sha256=...`) if you set a signing secret.
 - **Slack** / **Microsoft Teams** — posts a formatted status card to an incoming webhook URL.
+- **Email** — sends an email via the SMTP server configured in Admin Configuration → Email (see
+  below), to one or more recipients you specify, with an optional custom subject.
 - **Snowflake** / **BigQuery** — inserts a row per transaction into a table you specify. These use
   optional client libraries not installed by default — if you enable one, add it to your
   environment: `pip install snowflake-connector-python` or `pip install google-cloud-bigquery`
@@ -307,6 +314,7 @@ DSSClient or the local fallback for `process_payload()`. Contract:
 import sys, json
 
 def process(payload: dict) -> dict:
+    print(f"Received: {list(payload.keys())}", file=sys.stderr)  # shows up in System Logs automatically
     # your logic here
     return {"status": "ok", "echo": payload}
 
@@ -316,10 +324,15 @@ if __name__ == "__main__":
 ```
 
 - Read one JSON object from stdin, print one JSON object to stdout.
-- Anything on stderr, a non-zero exit code, or exceeding a 20-second timeout is treated as a
+- Print any log/diagnostic messages to **stderr** — every line is mirrored into the **System Logs**
+  page automatically (tagged with the processor's name as its logger, e.g.
+  `nexus.processor.My Processor`), whether the run succeeds or fails.
+- A non-zero exit code, invalid JSON on stdout, or exceeding a 20-second timeout is treated as a
   processing failure (and falls back to local processing so the pipeline never breaks).
 - Use the **Test** button to run it against a sample payload before activating it.
-- Only one processor is "active" at a time, selected from Admin Configuration's mode selector.
+- Only one processor is "active" at a time globally, selected from Admin Configuration's mode
+  selector — or pin a specific processor to an individual event channel (see "Per-event processor
+  override" below).
 
 **Security note:** uploaded scripts run in an isolated subprocess (not `exec()`'d in-process), so
 they can't directly touch the running server's memory or already-loaded secrets — but they do run
@@ -343,6 +356,14 @@ channel for the org, integrations auto-matched by their own trigger/org settings
 auto-matched by their own scope/org settings — so existing setups keep working unchanged until you
 opt into explicit routing.
 
+The same **Route & process** dialog also has an **"Automatically publish the result back to
+Salesforce"** toggle (on by default). Turn it off for a channel that should be received and
+processed — running through DSSClient/Langflow/a custom script, going through integrations/alerts —
+without ever publishing anything back to Salesforce. Useful for one-way "listen and notify" event
+types that don't have a meaningful reply. The transaction's terminal status becomes `processed`
+instead of `published`/`failed`, and routed (or globally auto-matched) integrations/alerts still
+fire off of it.
+
 ## Alerts
 
 Admin Configuration → **Alerts** (its own page, alongside Integrations) notifies you through an
@@ -355,8 +376,9 @@ existing integration sink when something fails:
 | `integration_failed` | An integration dispatch raises an exception |
 | `broker_degraded` | The configured RabbitMQ broker fails to connect at startup |
 
-Alerts deliver through the same sender functions as normal integrations (webhook/Slack/Teams/custom
-API), so any integration you've already configured can double as an alert channel. If you want a
+Alerts deliver through the same sender functions as normal integrations (webhook/Slack/Teams/**email**/custom
+API), so any integration you've already configured can double as an alert channel — including a
+dedicated email integration for on-call notifications (see "Email" below). If you want a
 channel used *only* for alerts — not also receiving normal per-transaction fan-out — mark it
 **alert-only** on the Integrations page; otherwise a channel with `trigger="always"` and no org
 scope would fire twice for the same failure (once from normal dispatch, once from the alert). Use
@@ -458,6 +480,14 @@ needs a specific field extracted, e.g. `outputs.0.outputs.0.results.message.text
   set `output_path` explicitly.
 - Same fallback-to-local-on-failure behavior as DSSClient and custom scripts.
 - TLS verification is disabled on this call too, for internally-hosted Langflow instances.
+
+## Admin Configuration: Email
+
+Also under Admin Configuration: **Email** — a single global SMTP configuration (`host`, `port`,
+`username`/`password` optional, `use_tls` for STARTTLS, `from_address`) used by any **Email**
+integration sink, whether it's firing from normal per-transaction fan-out or from an Alert rule.
+Individual email integrations just specify recipients (and an optional subject) — the SMTP server
+itself is configured once, here.
 
 ## Direct execute API
 

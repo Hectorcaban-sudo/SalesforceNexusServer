@@ -4,7 +4,7 @@ from ..auth import require_role
 from ..database import admin_settings_table, Q
 from ..models import (
     DSSClientConfigUpdate, DSSClientConfigOut, ProcessingModeConfig, BrokerConfig, BrokerConfigOut,
-    LangflowConfigUpdate, LangflowConfigOut,
+    LangflowConfigUpdate, LangflowConfigOut, EmailSettingsUpdate, EmailSettingsOut,
 )
 from ..logging_config import log_event
 from ..broker import broker, BROKER_CONFIG_ID
@@ -14,6 +14,7 @@ router = APIRouter(prefix="/api/admin-config", tags=["admin-config"], dependenci
 DSS_CLIENT_ID = "dss_client"
 PROCESSING_MODE_ID = "processing_mode"
 LANGFLOW_ID = "langflow"
+EMAIL_SETTINGS_ID = "email_settings"
 
 
 def _get_raw() -> dict:
@@ -136,6 +137,55 @@ def upsert_langflow_config(updates: LangflowConfigUpdate):
         log_event("info", "Langflow admin configuration created")
 
     return _mask_langflow(admin_settings_table.get(Q.id == LANGFLOW_ID))
+
+
+# ---------- Email (SMTP) settings ----------
+def _get_email_raw() -> dict:
+    return admin_settings_table.get(Q.id == EMAIL_SETTINGS_ID) or {
+        "id": EMAIL_SETTINGS_ID, "host": "", "port": 587, "username": "", "password": "",
+        "use_tls": True, "from_address": "",
+    }
+
+
+def get_email_settings_raw() -> dict:
+    """Internal accessor (unmasked) used by integrations.py's email sender - not exposed as an API route."""
+    return _get_email_raw()
+
+
+def _mask_email(cfg: dict) -> EmailSettingsOut:
+    return EmailSettingsOut(
+        host=cfg.get("host", ""),
+        port=cfg.get("port", 587),
+        username=cfg.get("username", ""),
+        password="••••••••" if cfg.get("password") else "",
+        use_tls=cfg.get("use_tls", True),
+        from_address=cfg.get("from_address", ""),
+        configured=bool(cfg.get("host") and cfg.get("from_address")),
+    )
+
+
+@router.get("/email", response_model=EmailSettingsOut)
+def get_email_settings():
+    return _mask_email(_get_email_raw())
+
+
+@router.put("/email", response_model=EmailSettingsOut)
+def upsert_email_settings(updates: EmailSettingsUpdate):
+    """Upsert, same pattern as DSSClient/Langflow - password is never blanked out by leaving it empty."""
+    data = {k: v for k, v in updates.model_dump().items() if v is not None and v != ""}
+
+    existing = admin_settings_table.get(Q.id == EMAIL_SETTINGS_ID)
+    if existing:
+        if data:
+            admin_settings_table.update(data, Q.id == EMAIL_SETTINGS_ID)
+        log_event("info", "Email (SMTP) admin configuration updated", fields=list(data.keys()))
+    else:
+        record = {"id": EMAIL_SETTINGS_ID, "host": "", "port": 587, "username": "", "password": "", "use_tls": True, "from_address": ""}
+        record.update(data)
+        admin_settings_table.insert(record)
+        log_event("info", "Email (SMTP) admin configuration created")
+
+    return _mask_email(admin_settings_table.get(Q.id == EMAIL_SETTINGS_ID))
 
 
 # ---------- Message broker (internal in-process vs RabbitMQ) ----------

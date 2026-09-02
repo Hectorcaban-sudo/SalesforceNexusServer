@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Send, Share2, Webhook, MessageSquare, Database, Cloud, Link2, BellOff } from 'lucide-react'
+import { Plus, Trash2, Send, Share2, Webhook, MessageSquare, Database, Cloud, Link2, BellOff, Mail } from 'lucide-react'
 import api from '../lib/api'
 import { TruncatedWithPopup } from '../components/UI'
 
@@ -7,6 +7,7 @@ const TYPE_META = {
   webhook: { label: 'Webhook', icon: Webhook },
   slack: { label: 'Slack', icon: MessageSquare },
   teams: { label: 'Microsoft Teams', icon: MessageSquare },
+  email: { label: 'Email', icon: Mail },
   snowflake: { label: 'Snowflake', icon: Database },
   bigquery: { label: 'BigQuery', icon: Cloud },
   custom_api: { label: 'Custom API', icon: Link2 },
@@ -16,6 +17,7 @@ const DEFAULT_CONFIG = {
   webhook: { url: '', secret: '' },
   slack: { webhook_url: '' },
   teams: { webhook_url: '' },
+  email: { to: '', subject: '' },
   snowflake: { account: '', user: '', password: '', warehouse: '', database: '', schema: '', table: '' },
   bigquery: { project: '', dataset: '', table: '' },
   custom_api: { url: '', method: 'POST', auth_header: '' },
@@ -197,6 +199,20 @@ export default function Integrations() {
                     <input required value={form.config.webhook_url} onChange={(e) => setConfigField('webhook_url', e.target.value)}
                       placeholder={form.type === 'slack' ? 'https://hooks.slack.com/services/…' : 'https://outlook.office.com/webhook/…'} />
                   </div>
+                )}
+
+                {form.type === 'email' && (
+                  <>
+                    <div className="field"><label>To (comma-separated)</label>
+                      <input required value={form.config.to} onChange={(e) => setConfigField('to', e.target.value)} placeholder="oncall@example.com, backup@example.com" />
+                    </div>
+                    <div className="field"><label>Subject (optional)</label>
+                      <input value={form.config.subject} onChange={(e) => setConfigField('subject', e.target.value)} placeholder="Defaults to a generated subject" />
+                    </div>
+                    <p style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+                      Uses the SMTP server configured in Admin Configuration → Email.
+                    </p>
+                  </>
                 )}
 
                 {form.type === 'custom_api' && (

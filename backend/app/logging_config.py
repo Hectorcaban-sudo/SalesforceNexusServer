@@ -97,7 +97,15 @@ def setup_logging() -> logging.Logger:
     return logger
 
 
-def log_event(level: str, message: str, **context):
-    logger = logging.getLogger("nexus")
+def log_event(level: str, message: str, logger_name: str = "nexus", **context):
+    """
+    `logger_name` lets callers tag log entries with a more specific source
+    (e.g. "nexus.processor.<id>" for output from an uploaded custom
+    processor script) so they're distinguishable in the admin UI's Logs
+    page. Child loggers propagate up to the "nexus" logger's handlers
+    automatically, so no extra setup is needed for a new logger_name to
+    show up in the log file / console / SQLite log store.
+    """
+    logger = logging.getLogger(logger_name)
     extra = {"context": context} if context else {}
     getattr(logger, level.lower(), logger.info)(message, extra=extra)

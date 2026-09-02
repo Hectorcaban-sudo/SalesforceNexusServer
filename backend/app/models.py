@@ -127,6 +127,13 @@ class EventConfigBase(BaseModel):
     # means "use the global default".
     processing_mode: Optional[str] = None      # "local" | "dss_client" | "custom_script" | "langflow"
     processor_id: Optional[str] = None          # used when processing_mode == "custom_script"
+    # Only meaningful on direction="subscribe" entries. When False, receiving
+    # and processing an event on this channel does NOT automatically publish
+    # the result back to Salesforce - it's still processed, and any routed
+    # (or globally auto-matched) integrations/alerts still fire off the
+    # "processed" transaction, but nothing is queued onto the outbound
+    # publish path. Defaults to True (existing behavior).
+    auto_publish: bool = True
 
 
 class EventConfigCreate(EventConfigBase):
@@ -143,6 +150,7 @@ class EventConfigUpdate(BaseModel):
     route_alert_ids: Optional[List[str]] = None
     processing_mode: Optional[str] = None
     processor_id: Optional[str] = None
+    auto_publish: Optional[bool] = None
 
 
 class EventConfigOut(EventConfigBase):
@@ -232,6 +240,35 @@ class LangflowConfigOut(BaseModel):
     configured: bool = False
 
 
+# ---------- Email (SMTP) settings ----------
+class EmailSettings(BaseModel):
+    host: str = ""
+    port: int = 587
+    username: str = ""
+    password: str = ""
+    use_tls: bool = True           # STARTTLS
+    from_address: str = ""
+
+
+class EmailSettingsUpdate(BaseModel):
+    host: Optional[str] = None
+    port: Optional[int] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    use_tls: Optional[bool] = None
+    from_address: Optional[str] = None
+
+
+class EmailSettingsOut(BaseModel):
+    host: str = ""
+    port: int = 587
+    username: str = ""
+    password: str = ""          # masked when returned to the browser
+    use_tls: bool = True
+    from_address: str = ""
+    configured: bool = False
+
+
 # ---------- Custom payload processors (uploaded Python scripts) ----------
 class ProcessorOut(BaseModel):
     id: str
@@ -294,6 +331,7 @@ class IntegrationType(str, Enum):
     snowflake = "snowflake"
     bigquery = "bigquery"
     custom_api = "custom_api"
+    email = "email"
 
 
 class IntegrationTrigger(str, Enum):

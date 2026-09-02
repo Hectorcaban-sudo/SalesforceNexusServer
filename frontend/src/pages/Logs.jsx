@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Trash2, RefreshCw, Info } from 'lucide-react'
+import { Trash2, RefreshCw, X } from 'lucide-react'
 import api from '../lib/api'
-import { TruncatedWithPopup } from '../components/UI'
 
 export default function Logs() {
   const [logs, setLogs] = useState([])
   const [level, setLevel] = useState('')
   const [search, setSearch] = useState('')
   const [auto, setAuto] = useState(true)
+  const [selected, setSelected] = useState(null)
 
   async function load() {
     const { data } = await api.get('/logs', { params: { level: level || undefined, search: search || undefined, limit: 400 } })
@@ -37,7 +37,7 @@ export default function Logs() {
       <div className="page-title-row">
         <div>
           <h1>System Logs</h1>
-          <p>Structured application logs from the CometD listener, broker, worker, and publisher</p>
+          <p>Structured application logs from the CometD listener, broker, worker, publisher, and custom processors — click a row to see the full entry</p>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button className="btn btn-sm" onClick={load}><RefreshCw size={13} /> Refresh</button>
@@ -69,41 +69,42 @@ export default function Logs() {
         <div className="scrollbox" style={{ maxHeight: 560 }}>
           {logs.length === 0 && <div className="empty-state">No log entries match this filter</div>}
           {logs.map((l) => (
-            <div className="log-row" key={l.id}>
+            <div className="log-row log-row-clickable" key={l.id} onClick={() => setSelected(l)}>
               <div className="log-time">{new Date(l.timestamp * 1000).toLocaleTimeString()}</div>
               <div className={`log-level-${l.level}`}>{l.level}</div>
               <div className="log-logger">{l.logger}</div>
-              <div className="log-msg">
-                <TruncatedWithPopup text={l.message} maxLength={140} mono={false} />
-                {l.context && Object.keys(l.context).length > 0 && (
-                  <span style={{ position: 'relative', display: 'inline-block', marginLeft: 8 }}>
-                    <ContextPopup context={l.context} />
-                  </span>
-                )}
-              </div>
+              <div className="log-msg log-msg-clip">{l.message}</div>
             </div>
           ))}
         </div>
       </div>
-    </div>
-  )
-}
 
-function ContextPopup({ context }) {
-  const [hover, setHover] = useState(false)
-  return (
-    <span
-      style={{ cursor: 'help', color: 'var(--accent-cyan)' }}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      title=""
-    >
-      <Info size={13} style={{ verticalAlign: -2 }} />
-      {hover && (
-        <div className="hover-popup" style={{ left: 'auto', right: 0 }}>
-          <pre>{JSON.stringify(context, null, 2)}</pre>
+      {selected && (
+        <div className="modal-overlay" onClick={() => setSelected(null)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="panel-header">
+              <h3 className={`log-level-${selected.level}`}>{selected.level} — Log entry</h3>
+              <button className="btn btn-sm btn-icon" onClick={() => setSelected(null)}><X size={14} /></button>
+            </div>
+            <div className="panel-body">
+              <div className="form-row-2">
+                <div className="field"><label>Time</label><div className="mono">{new Date(selected.timestamp * 1000).toLocaleString()}</div></div>
+                <div className="field"><label>Logger</label><code className="pill">{selected.logger}</code></div>
+              </div>
+              <div className="field">
+                <label>Message</label>
+                <pre className="mono log-detail-block">{selected.message}</pre>
+              </div>
+              {selected.context && Object.keys(selected.context).length > 0 && (
+                <div className="field">
+                  <label>Context</label>
+                  <pre className="mono log-detail-block">{JSON.stringify(selected.context, null, 2)}</pre>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
-    </span>
+    </div>
   )
 }

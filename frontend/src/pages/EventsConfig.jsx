@@ -23,6 +23,7 @@ export default function EventsConfig() {
   const [routingAlerts, setRoutingAlerts] = useState([])
   const [routingProcessingMode, setRoutingProcessingMode] = useState('')
   const [routingProcessorId, setRoutingProcessorId] = useState('')
+  const [routingAutoPublish, setRoutingAutoPublish] = useState(true)
   const [processors, setProcessors] = useState([])
   const [savingRouting, setSavingRouting] = useState(false)
 
@@ -88,6 +89,7 @@ export default function EventsConfig() {
     setRoutingAlerts(cfg.route_alert_ids || [])
     setRoutingProcessingMode(cfg.processing_mode || '')
     setRoutingProcessorId(cfg.processor_id || '')
+    setRoutingAutoPublish(cfg.auto_publish !== false)
   }
 
   function toggleInList(list, setList, id) {
@@ -104,6 +106,7 @@ export default function EventsConfig() {
         route_alert_ids: routingAlerts,
         processing_mode: routingProcessingMode || '',
         processor_id: routingProcessingMode === 'custom_script' ? routingProcessorId : '',
+        auto_publish: routingAutoPublish,
       })
       setRoutingTarget(null)
       load()
@@ -143,6 +146,7 @@ export default function EventsConfig() {
                 const chCount = (c.route_publish_channel_ids || []).length
                 const intCount = (c.route_integration_ids || []).length
                 const hasProcessorOverride = !!c.processing_mode
+                const autoPublishOff = c.auto_publish === false
                 return (
                   <tr key={c.id}>
                     <td><code className="pill">{c.channel}</code></td>
@@ -150,9 +154,11 @@ export default function EventsConfig() {
                     <td>
                       <button className="btn btn-sm" onClick={() => openRouting(c)}>
                         <GitBranch size={12} />
-                        {chCount === 0 && intCount === 0 && !hasProcessorOverride
-                          ? 'Auto (default)'
-                          : `${chCount} channel${chCount === 1 ? '' : 's'} · ${intCount} hook${intCount === 1 ? '' : 's'}${hasProcessorOverride ? ' · custom processor' : ''}`}
+                        {autoPublishOff
+                          ? 'No auto-publish'
+                          : chCount === 0 && intCount === 0 && !hasProcessorOverride
+                            ? 'Auto (default)'
+                            : `${chCount} channel${chCount === 1 ? '' : 's'} · ${intCount} hook${intCount === 1 ? '' : 's'}${hasProcessorOverride ? ' · custom processor' : ''}`}
                       </button>
                     </td>
                     <td>
@@ -272,6 +278,19 @@ export default function EventsConfig() {
             </div>
             <form onSubmit={saveRouting}>
               <div className="panel-body">
+                <div style={{ background: 'var(--bg-panel-alt)', border: '1px solid var(--border-light)', borderRadius: 8, padding: '12px 14px', marginBottom: 18 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 9, margin: 0, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                    <input type="checkbox" style={{ width: 16 }} checked={routingAutoPublish} onChange={(e) => setRoutingAutoPublish(e.target.checked)} />
+                    <Send size={13} />
+                    Automatically publish the result back to Salesforce
+                  </label>
+                  <p style={{ margin: '6px 0 0 25px', color: 'var(--text-muted)', fontSize: 11.5 }}>
+                    {routingAutoPublish
+                      ? 'On: after processing, the result is published to the channels below (or the org\'s default publish channel).'
+                      : 'Off: the event is still received and processed, but nothing is published back to Salesforce. Routed integrations/alerts below still fire.'}
+                  </p>
+                </div>
+
                 <label style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8, display: 'block' }}>
                   <Cpu size={13} style={{ verticalAlign: -2, marginRight: 5 }} />
                   Payload processor
@@ -308,6 +327,7 @@ export default function EventsConfig() {
                   <ArrowUpFromLine size={13} style={{ verticalAlign: -2, marginRight: 5 }} />
                   Publish channels ({orgName(routingTarget.org_id)})
                 </label>
+                <div style={{ opacity: routingAutoPublish ? 1 : 0.4, pointerEvents: routingAutoPublish ? 'auto' : 'none' }}>
                 {orgPublishChannels.length === 0 ? (
                   <div className="empty-state" style={{ padding: '14px 0' }}>No publish channels configured for this org yet.</div>
                 ) : (
@@ -325,6 +345,7 @@ export default function EventsConfig() {
                     ))}
                   </div>
                 )}
+                </div>
 
                 <label style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8, display: 'block' }}>
                   <Share2 size={13} style={{ verticalAlign: -2, marginRight: 5 }} />

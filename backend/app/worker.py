@@ -245,6 +245,17 @@ def _resolve_processing(org_id: str, source_channel: str) -> Tuple[Optional[str]
     return source_cfg.get("processing_mode") or None, source_cfg.get("processor_id") or None
 
 
+def _resolve_auto_publish(org_id: str, source_channel: str) -> bool:
+    """Whether processing an event on this channel should automatically
+    publish its result back to Salesforce. Defaults to True (existing
+    behavior) when the channel has no explicit config, or the field is
+    simply absent on an older record."""
+    source_cfg = _source_event_config(org_id, source_channel)
+    if not source_cfg:
+        return True
+    return source_cfg.get("auto_publish", True)
+
+
 async def inbound_worker():
     """Consumes 'inbound' topic messages forever - the internal function."""
 
@@ -277,6 +288,22 @@ async def inbound_worker():
             tx.update_transaction(transaction_id, status="processed", result=result)
 
         routed_channels, routed_integration_ids, _ = _resolve_routes(org_id, source_channel)
+
+        if not _resolve_auto_publish(org_id, source_channel):
+            # This channel is configured to process events without
+            # automatically publishing the result back to Salesforce.
+            # "processed" is the terminal state here - still fan out to any
+            # routed (or globally auto-matched) integrations/alerts off of
+            # it, since those don't require a publish step to have meaning.
+            log_event(
+                "info",
+                "Worker: auto-publish is disabled for this channel; result will not be sent back to Salesforce",
+                transaction_id=transaction_id, org_id=org_id, channel=source_channel,
+            )
+            processed_tx = tx.get_transaction(transaction_id)
+            await asyncio.to_thread(dispatch_integrations, processed_tx, routed_integration_ids)
+            await asyncio.to_thread(fire_alert_for_transaction, processed_tx, routed_alert_ids)
+            return
 
         if routed_channels:
             # Explicit fan-out: publish the same result to every selected
