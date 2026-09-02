@@ -21,7 +21,9 @@ from . import transactions as tx
 from .salesforce_client import sf_client
 from .tracing import start_span
 from .integrations import dispatch_integrations
-
+import dataikuapi
+import urllib3
+import json
 
 def process_payload(payload: dict) -> dict:
     """
@@ -39,6 +41,7 @@ def process_payload(payload: dict) -> dict:
     result so the pipeline never breaks because of a downstream outage or a
     bug in an uploaded script.
     """
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     from .routers.admin_config import get_dss_client_config_raw, get_processing_mode_raw  # local import avoids a circular import at module load time
     from . import processors as proc_module
 
@@ -59,6 +62,9 @@ def process_payload(payload: dict) -> dict:
 
     if mode == "dss_client":
         config = get_dss_client_config_raw()
+
+        ConversationIdc = payload["Conversation_Id__c"]
+
         if not config.get("url"):
             return {
                 "status": "ok",
@@ -66,18 +72,32 @@ def process_payload(payload: dict) -> dict:
                 "echo": payload,
             }
         try:
-            response = requests.post(
-                config["url"],
-                json={
-                    "project": config.get("project_name", ""),
-                    "llm": config.get("llm", ""),
-                    "input": payload,
-                },
-                headers={"Authorization": f"Bearer {config.get('api_key', '')}"},
-                timeout=20,
-            )
-            response.raise_for_status()
-            return response.json()
+            end_user_client = dataikuapi.DSSClient(
+                        config.get("url"), config['api_key'],no_check_certificate=True
+                    )
+            
+            
+            agent = end_user_client.get_project(config['project_name']).get_llm(config['llm'])
+            completion = agent.new_completion()
+            completion.with_message(payload["User_Message__c"]) #payload['User_Message__c']
+            # completion.with_context({
+            #     "conversationId": str(uuid.uuid4()),
+            #     "dkuCallerTicket": end_user_client.get_ticket(),
+            #     "dkuOnBehalfOf": "hector.caban",
+            # })
+            response = completion.execute()
+        
+            data = {
+                "replyText": response.text            
+            }
+        
+            json_string = json.dumps(data)
+            return {
+                "Conversation_Id__c": ConversationIdc,
+                "Status__c": "Ok",
+                "Payload_Json__c" : json_string
+            # "echo": payload,
+            }
         except Exception as exc:  # noqa: BLE001
             log_event("error", f"DSSClient call failed, falling back to local processing: {exc}")
             return {
