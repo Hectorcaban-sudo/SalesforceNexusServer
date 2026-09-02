@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Send, Share2, Webhook, MessageSquare, Database, Cloud, Link2 } from 'lucide-react'
+import { Plus, Trash2, Send, Share2, Webhook, MessageSquare, Database, Cloud, Link2, BellOff } from 'lucide-react'
 import api from '../lib/api'
+import { TruncatedWithPopup } from '../components/UI'
 
 const TYPE_META = {
   webhook: { label: 'Webhook', icon: Webhook },
@@ -20,7 +21,7 @@ const DEFAULT_CONFIG = {
   custom_api: { url: '', method: 'POST', auth_header: '' },
 }
 
-const EMPTY = { name: '', type: 'webhook', enabled: true, trigger: 'always', org_id: '', config: DEFAULT_CONFIG.webhook }
+const EMPTY = { name: '', type: 'webhook', enabled: true, trigger: 'always', org_id: '', alert_only: false, config: DEFAULT_CONFIG.webhook }
 
 export default function Integrations() {
   const [orgs, setOrgs] = useState([])
@@ -129,10 +130,20 @@ export default function Integrations() {
                 <div>Trigger <b>{item.trigger}</b></div>
                 <div>Scope <b>{orgName(item.org_id)}</b></div>
               </div>
+              {item.alert_only && (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <BellOff size={12} /> Alert-only — excluded from normal transaction fan-out
+                </div>
+              )}
 
               {item.last_status && (
                 <div style={{ fontSize: 11.5, color: item.last_status === 'ok' ? 'var(--accent-green)' : 'var(--accent-red)' }}>
                   Last run: {item.last_status === 'ok' ? 'success' : `failed — ${item.last_error}`}
+                </div>
+              )}
+              {item.last_result && (
+                <div style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+                  Result: <TruncatedWithPopup text={item.last_result} maxLength={40} />
                 </div>
               )}
               {testResult?.id === item.id && (
@@ -251,6 +262,10 @@ export default function Integrations() {
                       {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
                     </select>
                   </div>
+                </div>
+                <div className="field" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input type="checkbox" style={{ width: 16 }} checked={form.alert_only} onChange={(e) => setForm({ ...form, alert_only: e.target.checked })} />
+                  <label style={{ margin: 0 }}>Alert-only (don't include in normal per-transaction fan-out — only usable from the Alerts page)</label>
                 </div>
               </div>
               <div className="modal-footer">

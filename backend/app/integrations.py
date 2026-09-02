@@ -38,14 +38,24 @@ from .tracing import start_span
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-def _record_result(integration_id: str, status: str, error: Optional[str] = None):
+def _record_result(integration_id: str, status: str, error: Optional[str] = None, result: Optional[dict] = None):
     integrations_table.update(
-        {"last_status": status, "last_run_at": time.time(), "last_error": error},
+        {"last_status": status, "last_run_at": time.time(), "last_error": error, "last_result": result},
         Q.id == integration_id,
     )
 
 
-def _send_webhook(cfg: dict, transaction: dict):
+def _response_summary(resp) -> dict:
+    """Best-effort JSON-or-text summary of an HTTP response, capped in size
+    so a huge response body doesn't bloat the stored log record."""
+    try:
+        body = resp.json()
+    except ValueError:
+        body = resp.text[:2000]
+    return {"status_code": resp.status_code, "body": body}
+
+
+def _send_webhook(cfg: dict, transaction: dict) -> dict:
     url = cfg["config"]["url"]
     secret = cfg["config"].get("secret", "")
     body = json.dumps(transaction, default=str)
@@ -56,9 +66,10 @@ def _send_webhook(cfg: dict, transaction: dict):
         headers["X-Nexus-Signature"] = f"sha256={signature}"
     resp = requests.post(url, data=body, headers=headers, timeout=15, verify=False)
     resp.raise_for_status()
+    return _response_summary(resp)
 
 
-def _send_custom_api(cfg: dict, transaction: dict):
+def _send_custom_api(cfg: dict, transaction: dict) -> dict:
     c = cfg["config"]
     method = c.get("method", "POST").upper()
     headers = dict(c.get("headers", {}))
@@ -66,9 +77,10 @@ def _send_custom_api(cfg: dict, transaction: dict):
         headers["Authorization"] = c["auth_header"]
     resp = requests.request(method, c["url"], json=transaction, headers=headers, timeout=15, verify=False)
     resp.raise_for_status()
+    return _response_summary(resp)
 
 
-def _send_slack(cfg: dict, transaction: dict):
+def _send_slack(cfg: dict, transaction: dict) -> dict:
     webhook_url = cfg["config"]["webhook_url"]
     status_emoji = {"published": "✅", "failed": "❌"}.get(transaction.get("status"), "ℹ️")
     text = (
@@ -80,9 +92,10 @@ def _send_slack(cfg: dict, transaction: dict):
         text += f"\nError: {transaction['error']}"
     resp = requests.post(webhook_url, json={"text": text}, timeout=15, verify=False)
     resp.raise_for_status()
+    return _response_summary(resp)
 
 
-def _send_teams(cfg: dict, transaction: dict):
+def _send_teams(cfg: dict, transaction: dict) -> dict:
     webhook_url = cfg["config"]["webhook_url"]
     status = transaction.get("status")
     color = {"published": "33D685", "failed": "FF5470"}.get(status, "3D8BFD")
@@ -106,9 +119,10 @@ def _send_teams(cfg: dict, transaction: dict):
     }
     resp = requests.post(webhook_url, json=card, timeout=15, verify=False)
     resp.raise_for_status()
+    return _response_summary(resp)
 
 
-def _load_snowflake(cfg: dict, transaction: dict):
+def _load_snowflake(cfg: dict, transaction: dict) -> dict:
     try:
         import snowflake.connector
     except ImportError as exc:
@@ -137,11 +151,12 @@ def _load_snowflake(cfg: dict, transaction: dict):
             ),
         )
         conn.commit()
+        return {"rows_inserted": cur.rowcount}
     finally:
         conn.close()
 
 
-def _load_bigquery(cfg: dict, transaction: dict):
+def _load_bigquery(cfg: dict, transaction: dict) -> dict:
     try:
         from google.cloud import bigquery
     except ImportError as exc:
@@ -168,6 +183,7 @@ def _load_bigquery(cfg: dict, transaction: dict):
     errors = client.insert_rows_json(table_ref, [row])
     if errors:
         raise RuntimeError(f"BigQuery insert errors: {errors}")
+    return {"rows_inserted": 1, "table": table_ref}
 
 
 _SENDERS = {
@@ -205,6 +221,7 @@ def dispatch_integrations(transaction: dict, only_ids: Optional[list] = None):
     status = transaction.get("status")
 
     candidates = integrations_table.search(Q.enabled == True)  # noqa: E712
+    candidates = [c for c in candidates if not c.get("alert_only")]
     if only_ids is not None:
         candidates = [c for c in candidates if c["id"] in only_ids]
 
@@ -220,9 +237,20 @@ def dispatch_integrations(transaction: dict, only_ids: Optional[list] = None):
 
         with start_span(f"integration.{cfg['type']}", integration_id=cfg["id"], transaction_id=transaction.get("id")):
             try:
-                sender(cfg, transaction)
-                _record_result(cfg["id"], "ok")
-                log_event("info", f"Integration '{cfg['name']}' ({cfg['type']}) dispatched", transaction_id=transaction.get("id"))
+                result = sender(cfg, transaction)
+                _record_result(cfg["id"], "ok", result=result)
+                log_event(
+                    "info", f"Integration '{cfg['name']}' ({cfg['type']}) dispatched",
+                    transaction_id=transaction.get("id"), integration_id=cfg["id"], result=result,
+                )
             except Exception as exc:  # noqa: BLE001
                 _record_result(cfg["id"], "error", str(exc))
-                log_event("error", f"Integration '{cfg['name']}' ({cfg['type']}) failed: {exc}", transaction_id=transaction.get("id"))
+                log_event(
+                    "error", f"Integration '{cfg['name']}' ({cfg['type']}) failed: {exc}",
+                    transaction_id=transaction.get("id"), integration_id=cfg["id"],
+                )
+                from . import alerts as alerts_module  # local import avoids a circular import at module load time
+                alerts_module.fire_alert("integration_failed", {
+                    "integration_id": cfg["id"], "integration_name": cfg["name"], "integration_type": cfg["type"],
+                    "transaction_id": transaction.get("id"), "error": str(exc),
+                }, org_id=cfg.get("org_id"))

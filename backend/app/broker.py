@@ -166,6 +166,11 @@ class BrokerProxy:
             except Exception as exc:  # noqa: BLE001
                 self.last_error = str(exc)
                 log_event("error", f"Failed to connect to RabbitMQ, falling back to internal broker: {exc}")
+                try:
+                    from .alerts import fire_alert  # local import avoids a circular import at module load time
+                    fire_alert("broker_degraded", {"error": str(exc)})
+                except Exception:  # noqa: BLE001
+                    pass  # alert delivery must never prevent broker startup fallback
 
         self._impl = InMemoryBroker(max_queue=settings.broker_max_queue)
         self.backend_name = "internal"

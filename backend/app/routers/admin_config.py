@@ -2,7 +2,10 @@ from fastapi import APIRouter, Depends
 
 from ..auth import require_role
 from ..database import admin_settings_table, Q
-from ..models import DSSClientConfigUpdate, DSSClientConfigOut, ProcessingModeConfig, BrokerConfig, BrokerConfigOut
+from ..models import (
+    DSSClientConfigUpdate, DSSClientConfigOut, ProcessingModeConfig, BrokerConfig, BrokerConfigOut,
+    LangflowConfigUpdate, LangflowConfigOut,
+)
 from ..logging_config import log_event
 from ..broker import broker, BROKER_CONFIG_ID
 
@@ -10,6 +13,7 @@ router = APIRouter(prefix="/api/admin-config", tags=["admin-config"], dependenci
 
 DSS_CLIENT_ID = "dss_client"
 PROCESSING_MODE_ID = "processing_mode"
+LANGFLOW_ID = "langflow"
 
 
 def _get_raw() -> dict:
@@ -85,6 +89,53 @@ def set_processing_mode(config: ProcessingModeConfig):
         admin_settings_table.insert(record)
     log_event("info", f"Processing mode set to '{config.mode.value}'", active_processor_id=config.active_processor_id)
     return ProcessingModeConfig(**record)
+
+
+# ---------- Langflow ----------
+def _get_langflow_raw() -> dict:
+    return admin_settings_table.get(Q.id == LANGFLOW_ID) or {
+        "id": LANGFLOW_ID, "base_url": "", "flow_id": "", "api_key": "", "input_field": "input_value", "output_path": "",
+    }
+
+
+def get_langflow_config_raw() -> dict:
+    """Internal accessor (unmasked) used by worker.process_payload() - not exposed as an API route."""
+    return _get_langflow_raw()
+
+
+def _mask_langflow(cfg: dict) -> LangflowConfigOut:
+    return LangflowConfigOut(
+        base_url=cfg.get("base_url", ""),
+        flow_id=cfg.get("flow_id", ""),
+        api_key="••••••••" if cfg.get("api_key") else "",
+        input_field=cfg.get("input_field") or "input_value",
+        output_path=cfg.get("output_path", ""),
+        configured=bool(cfg.get("base_url") and cfg.get("flow_id")),
+    )
+
+
+@router.get("/langflow", response_model=LangflowConfigOut)
+def get_langflow_config():
+    return _mask_langflow(_get_langflow_raw())
+
+
+@router.put("/langflow", response_model=LangflowConfigOut)
+def upsert_langflow_config(updates: LangflowConfigUpdate):
+    """Upsert, same pattern as DSSClient - api_key is never blanked out by leaving it empty."""
+    data = {k: v for k, v in updates.model_dump().items() if v is not None and v != ""}
+
+    existing = admin_settings_table.get(Q.id == LANGFLOW_ID)
+    if existing:
+        if data:
+            admin_settings_table.update(data, Q.id == LANGFLOW_ID)
+        log_event("info", "Langflow admin configuration updated", fields=list(data.keys()))
+    else:
+        record = {"id": LANGFLOW_ID, "base_url": "", "flow_id": "", "api_key": "", "input_field": "input_value", "output_path": ""}
+        record.update(data)
+        admin_settings_table.insert(record)
+        log_event("info", "Langflow admin configuration created")
+
+    return _mask_langflow(admin_settings_table.get(Q.id == LANGFLOW_ID))
 
 
 # ---------- Message broker (internal in-process vs RabbitMQ) ----------

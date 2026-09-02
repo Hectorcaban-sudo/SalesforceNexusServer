@@ -10,6 +10,7 @@ import Logs from './pages/Logs'
 import AdminConfig from './pages/AdminConfig'
 import Users from './pages/Users'
 import Integrations from './pages/Integrations'
+import Alerts from './pages/Alerts'
 import Layout from './components/Layout'
 import { isAuthed } from './lib/api'
 import { AuthProvider, useAuth, hasRole } from './lib/AuthContext'
@@ -60,6 +61,7 @@ export default function App() {
         <Route path="/admin-config" element={<RequireAuth><RequireRole role="admin"><AdminConfig /></RequireRole></RequireAuth>} />
         <Route path="/users" element={<RequireAuth><RequireRole role="admin"><Users /></RequireRole></RequireAuth>} />
         <Route path="/integrations" element={<RequireAuth><RequireRole role="admin"><Integrations /></RequireRole></RequireAuth>} />
+        <Route path="/alerts" element={<RequireAuth><RequireRole role="admin"><Alerts /></RequireRole></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

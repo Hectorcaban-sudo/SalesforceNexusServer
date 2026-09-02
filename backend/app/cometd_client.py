@@ -74,6 +74,7 @@ class OrgStreamManager:
         self._client: Optional[Client] = None
         self._running = False
         self._stopped = False
+        self._alert_fired_for_current_outage = False
 
     @property
     def status(self) -> str:
@@ -124,11 +125,24 @@ class OrgStreamManager:
             if self._stopped:
                 return
 
-            delay = (
-                settings.cometd_reconnect_min_delay_seconds
-                if connected_at_least_once
-                else min(delay * settings.cometd_reconnect_backoff_factor, settings.cometd_reconnect_max_delay_seconds)
-            )
+            if connected_at_least_once:
+                self._alert_fired_for_current_outage = False  # a fresh outage after this would alert again
+                delay = settings.cometd_reconnect_min_delay_seconds
+            else:
+                delay = min(delay * settings.cometd_reconnect_backoff_factor, settings.cometd_reconnect_max_delay_seconds)
+                if not self._alert_fired_for_current_outage:
+                    self._alert_fired_for_current_outage = True
+                    from .alerts import fire_alert  # local import avoids a circular import at module load time
+                    org_row = orgs_table.get(Q.id == self.org["id"]) or {}
+                    fire_alert(
+                        "connection_failed",
+                        {
+                            "org_id": self.org["id"], "org_name": self.org["name"],
+                            "error": org_row.get("last_error", "CometD connection failed"),
+                        },
+                        org_id=self.org["id"],
+                    )
+
             log_event(
                 "info",
                 f"CometD: will retry connecting to org '{self.org['name']}' in {delay:.0f}s",

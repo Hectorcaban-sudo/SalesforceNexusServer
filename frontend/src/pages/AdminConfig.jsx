@@ -2,19 +2,37 @@ import { useEffect, useRef, useState } from 'react'
 import {
   SlidersHorizontal, Save, CheckCircle2, CircleDashed, Upload, Trash2, Play,
   FileCode2, Download, Radio, Network, DatabaseZap, FileDown, FileUp, AlertTriangle,
+  Workflow,
 } from 'lucide-react'
 import api from '../lib/api'
 
 const EMPTY_DSS = { url: '', project_name: '', llm: '', api_key: '' }
+const EMPTY_LANGFLOW = { base_url: '', flow_id: '', api_key: '', input_field: 'input_value', output_path: '' }
 const EMPTY_RMQ = { host: 'localhost', port: 5672, username: 'guest', password: '', vhost: '/', use_tls: false }
 
+const TABS = [
+  { key: 'processing', label: 'Processing mode', icon: Radio },
+  { key: 'dss', label: 'DSSClient', icon: SlidersHorizontal },
+  { key: 'langflow', label: 'Langflow', icon: Workflow },
+  { key: 'processors', label: 'Payload processors', icon: FileCode2 },
+  { key: 'broker', label: 'Message broker', icon: Network },
+  { key: 'backup', label: 'Configuration backup', icon: FileDown },
+]
+
 export default function AdminConfig() {
-  // ---- DSSClient ----
-  const [form, setForm] = useState(EMPTY_DSS)
-  const [configured, setConfigured] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
+  const [tab, setTab] = useState('processing')
   const [toast, setToast] = useState('')
+  const [loading, setLoading] = useState(true)
+
+  // ---- DSSClient ----
+  const [dssForm, setDssForm] = useState(EMPTY_DSS)
+  const [dssConfigured, setDssConfigured] = useState(false)
+  const [savingDss, setSavingDss] = useState(false)
+
+  // ---- Langflow ----
+  const [lfForm, setLfForm] = useState(EMPTY_LANGFLOW)
+  const [lfConfigured, setLfConfigured] = useState(false)
+  const [savingLf, setSavingLf] = useState(false)
 
   // ---- Processing mode ----
   const [mode, setMode] = useState('local')
@@ -41,14 +59,17 @@ export default function AdminConfig() {
   const importInputRef = useRef(null)
 
   async function load() {
-    const [dss, pm, procs, brk] = await Promise.all([
+    const [dss, lf, pm, procs, brk] = await Promise.all([
       api.get('/admin-config/dss-client'),
+      api.get('/admin-config/langflow'),
       api.get('/admin-config/processing-mode'),
       api.get('/processors'),
       api.get('/admin-config/broker'),
     ])
-    setForm({ url: dss.data.url, project_name: dss.data.project_name, llm: dss.data.llm, api_key: '' })
-    setConfigured(dss.data.configured)
+    setDssForm({ url: dss.data.url, project_name: dss.data.project_name, llm: dss.data.llm, api_key: '' })
+    setDssConfigured(dss.data.configured)
+    setLfForm({ base_url: lf.data.base_url, flow_id: lf.data.flow_id, api_key: '', input_field: lf.data.input_field, output_path: lf.data.output_path })
+    setLfConfigured(lf.data.configured)
     setMode(pm.data.mode)
     setActiveProcessorId(pm.data.active_processor_id || '')
     setProcessors(procs.data)
@@ -68,16 +89,31 @@ export default function AdminConfig() {
 
   async function saveDss(e) {
     e.preventDefault()
-    setSaving(true)
+    setSavingDss(true)
     try {
-      const payload = { ...form }
+      const payload = { ...dssForm }
       if (!payload.api_key) delete payload.api_key
       const { data } = await api.put('/admin-config/dss-client', payload)
-      setConfigured(data.configured)
-      setForm({ url: data.url, project_name: data.project_name, llm: data.llm, api_key: '' })
+      setDssConfigured(data.configured)
+      setDssForm({ url: data.url, project_name: data.project_name, llm: data.llm, api_key: '' })
       flashToast('DSSClient configuration saved')
     } finally {
-      setSaving(false)
+      setSavingDss(false)
+    }
+  }
+
+  async function saveLangflow(e) {
+    e.preventDefault()
+    setSavingLf(true)
+    try {
+      const payload = { ...lfForm }
+      if (!payload.api_key) delete payload.api_key
+      const { data } = await api.put('/admin-config/langflow', payload)
+      setLfConfigured(data.configured)
+      setLfForm({ base_url: data.base_url, flow_id: data.flow_id, api_key: '', input_field: data.input_field, output_path: data.output_path })
+      flashToast('Langflow configuration saved')
+    } finally {
+      setSavingLf(false)
     }
   }
 
@@ -199,239 +235,294 @@ export default function AdminConfig() {
 
       {toast && <div className="login-hint" style={{ textAlign: 'left', marginBottom: 14, color: 'var(--accent-cyan)' }}>{toast}</div>}
 
-      {/* Processing mode selector */}
-      <div className="panel" style={{ maxWidth: 720, marginBottom: 16 }}>
-        <div className="panel-header"><h3><Radio size={15} /> Active processing mode</h3></div>
-        <div className="panel-body">
-          <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
-            Chooses what <code className="pill">process_payload()</code> does for every inbound event. Switch anytime — it takes effect on the next event.
-          </p>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            {['local', 'dss_client', 'custom_script'].map((m) => (
-              <div
-                key={m}
-                className={`tab-pill ${mode === m ? 'active' : ''}`}
-                style={{ border: '1px solid var(--border-light)', padding: '10px 16px' }}
-                onClick={() => saveMode(m)}
-              >
-                {m === 'local' && 'Local fallback'}
-                {m === 'dss_client' && 'DSSClient'}
-                {m === 'custom_script' && 'Custom uploaded script'}
-              </div>
-            ))}
+      <div className="tabs-row" style={{ padding: 0, marginBottom: 18, borderBottom: '1px solid var(--border)', paddingBottom: 14 }}>
+        {TABS.map((t) => (
+          <div key={t.key} className={`tab-pill ${tab === t.key ? 'active' : ''}`} onClick={() => setTab(t.key)}>
+            <t.icon size={13} style={{ verticalAlign: -2, marginRight: 6 }} />
+            {t.label}
           </div>
-          {mode === 'custom_script' && (
-            <div className="field" style={{ marginTop: 14 }}>
-              <label>Active processor</label>
-              <select value={activeProcessorId} onChange={(e) => saveMode('custom_script', e.target.value)}>
-                <option value="">Select an uploaded processor…</option>
-                {processors.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-            </div>
-          )}
-        </div>
+        ))}
       </div>
 
-      {/* DSSClient config */}
-      <div className="panel" style={{ maxWidth: 720, marginBottom: 16 }}>
-        <div className="panel-header">
-          <h3><SlidersHorizontal size={15} /> DSSClient</h3>
-          {configured ? (
-            <span className="badge badge-green"><CheckCircle2 size={12} /> Configured</span>
-          ) : (
-            <span className="badge badge-gray"><CircleDashed size={12} /> Not configured</span>
-          )}
-        </div>
-        <div className="panel-body">
-          {loading ? (
-            <div className="empty-state">Loading…</div>
-          ) : (
-            <form onSubmit={saveDss}>
-              <div className="field">
-                <label>URL</label>
-                <input
-                  placeholder="https://your-dss-service.example.com/api/process"
-                  value={form.url}
-                  onChange={(e) => setForm({ ...form, url: e.target.value })}
-                />
-              </div>
-              <div className="form-row-2">
-                <div className="field">
-                  <label>Project name</label>
-                  <input value={form.project_name} onChange={(e) => setForm({ ...form, project_name: e.target.value })} />
+      {loading ? <div className="empty-state">Loading…</div> : (
+        <>
+          {tab === 'processing' && (
+            <div className="panel" style={{ maxWidth: 720 }}>
+              <div className="panel-header"><h3><Radio size={15} /> Active processing mode</h3></div>
+              <div className="panel-body">
+                <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
+                  Chooses what <code className="pill">process_payload()</code> does for every inbound event, unless a
+                  specific subscribed event channel overrides it (Event Configuration → Route &amp; process).
+                </p>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  {['local', 'dss_client', 'langflow', 'custom_script'].map((m) => (
+                    <div
+                      key={m}
+                      className={`tab-pill ${mode === m ? 'active' : ''}`}
+                      style={{ border: '1px solid var(--border-light)', padding: '10px 16px' }}
+                      onClick={() => saveMode(m)}
+                    >
+                      {m === 'local' && 'Local fallback'}
+                      {m === 'dss_client' && 'DSSClient'}
+                      {m === 'langflow' && 'Langflow'}
+                      {m === 'custom_script' && 'Custom uploaded script'}
+                    </div>
+                  ))}
                 </div>
-                <div className="field">
-                  <label>LLM</label>
-                  <input placeholder="gpt-4, claude-sonnet-5…" value={form.llm} onChange={(e) => setForm({ ...form, llm: e.target.value })} />
-                </div>
-              </div>
-              <div className="field">
-                <label>API key</label>
-                <input
-                  type="password"
-                  value={form.api_key}
-                  onChange={(e) => setForm({ ...form, api_key: e.target.value })}
-                  placeholder={configured ? '(unchanged) enter a new key to replace it' : ''}
-                />
-              </div>
-              <button className="btn btn-primary" disabled={saving}>
-                <Save size={14} /> {saving ? 'Saving…' : 'Save configuration'}
-              </button>
-            </form>
-          )}
-        </div>
-      </div>
-
-      {/* Payload processors */}
-      <div className="panel" style={{ maxWidth: 720 }}>
-        <div className="panel-header">
-          <h3><FileCode2 size={15} /> Payload processors</h3>
-          <button className="btn btn-sm" onClick={downloadExample}><Download size={13} /> Download example</button>
-        </div>
-        <div className="panel-body">
-          <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
-            Upload a Python script to use as a custom processor. Contract: read one JSON object from stdin, print one
-            JSON object to stdout. It runs in an isolated subprocess with a 20s timeout — treat uploads like deploying
-            server code (admin-only, trusted sources only).
-          </p>
-
-          <form onSubmit={upload} style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 18, flexWrap: 'wrap' }}>
-            <div className="field" style={{ flex: 1, minWidth: 160, marginBottom: 0 }}>
-              <label>Name</label>
-              <input value={uploadName} onChange={(e) => setUploadName(e.target.value)} placeholder="My processor" />
-            </div>
-            <div className="field" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
-              <label>File (.py)</label>
-              <input ref={fileInputRef} type="file" accept=".py" onChange={(e) => setUploadFile(e.target.files[0])} />
-            </div>
-            <button className="btn btn-primary" disabled={uploading || !uploadFile}>
-              <Upload size={14} /> {uploading ? 'Uploading…' : 'Upload'}
-            </button>
-          </form>
-
-          {processors.length === 0 ? (
-            <div className="empty-state">No processors uploaded yet.</div>
-          ) : (
-            <table>
-              <thead><tr><th>Name</th><th>File</th><th>Last test</th><th></th></tr></thead>
-              <tbody>
-                {processors.map((p) => (
-                  <tr key={p.id}>
-                    <td>
-                      {p.name}
-                      {activeProcessorId === p.id && mode === 'custom_script' && (
-                        <span className="badge badge-blue" style={{ marginLeft: 8 }}><span className="badge-dot" />Active</span>
-                      )}
-                    </td>
-                    <td className="mono" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{p.filename}</td>
-                    <td>
-                      {p.last_status ? (
-                        <span className={`badge ${p.last_status === 'ok' ? 'badge-green' : 'badge-red'}`}>
-                          <span className="badge-dot" />{p.last_status}
-                        </span>
-                      ) : <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>never run</span>}
-                    </td>
-                    <td style={{ display: 'flex', gap: 6 }}>
-                      <button className="btn btn-sm btn-icon" title="Test run" onClick={() => testProcessor(p.id)}><Play size={13} /></button>
-                      <button className="btn btn-sm btn-icon btn-danger" onClick={() => removeProcessor(p)}><Trash2 size={13} /></button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-
-          {testResult && (
-            <div style={{ marginTop: 12, fontSize: 12, color: testResult.status === 'ok' ? 'var(--accent-green)' : testResult.status === 'fail' ? 'var(--accent-red)' : 'var(--text-muted)' }}>
-              {testResult.status === 'running' ? 'Running test…' : testResult.status === 'ok' ? `Result: ${testResult.detail}` : `Failed: ${testResult.detail}`}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Message broker */}
-      <div className="panel" style={{ maxWidth: 720, marginTop: 16 }}>
-        <div className="panel-header">
-          <h3><Network size={15} /> Message broker</h3>
-          <span className={`badge ${activeBackend === 'rabbitmq' ? 'badge-blue' : 'badge-gray'}`}>
-            <span className="badge-dot" />Currently running: {activeBackend}
-          </span>
-        </div>
-        <div className="panel-body">
-          <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
-            Choose between the built-in in-process broker (zero setup, single instance only) or a real RabbitMQ
-            server (durable, survives restarts). <strong>Changing this requires a server restart to take effect</strong> —
-            saving here stores the config, it doesn't hot-swap the running broker.
-          </p>
-
-          {brokerConnError && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', background: 'rgba(255,84,112,.08)', border: '1px solid rgba(255,84,112,.3)', borderRadius: 8, padding: '10px 12px', marginBottom: 14, fontSize: 12.5, color: 'var(--accent-red)' }}>
-              <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-              Last connection attempt failed, running on internal broker instead: {brokerConnError}
-            </div>
-          )}
-
-          <form onSubmit={saveBroker}>
-            <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-              {['internal', 'rabbitmq'].map((t) => (
-                <div key={t} className={`tab-pill ${brokerType === t ? 'active' : ''}`} style={{ border: '1px solid var(--border-light)', padding: '10px 16px' }} onClick={() => setBrokerType(t)}>
-                  {t === 'internal' ? 'Internal (in-process)' : 'RabbitMQ'}
-                </div>
-              ))}
-            </div>
-
-            {brokerType === 'rabbitmq' && (
-              <>
-                <div className="form-row-2">
-                  <div className="field"><label>Host</label><input required value={rmqForm.host} onChange={(e) => setRmqForm({ ...rmqForm, host: e.target.value })} /></div>
-                  <div className="field"><label>Port</label><input required type="number" value={rmqForm.port} onChange={(e) => setRmqForm({ ...rmqForm, port: Number(e.target.value) })} /></div>
-                </div>
-                <div className="form-row-2">
-                  <div className="field"><label>Username</label><input value={rmqForm.username} onChange={(e) => setRmqForm({ ...rmqForm, username: e.target.value })} /></div>
-                  <div className="field"><label>Password</label>
-                    <input type="password" value={rmqForm.password} onChange={(e) => setRmqForm({ ...rmqForm, password: e.target.value })} placeholder="(unchanged) enter a new password to replace it" />
+                {mode === 'custom_script' && (
+                  <div className="field" style={{ marginTop: 14 }}>
+                    <label>Active processor</label>
+                    <select value={activeProcessorId} onChange={(e) => saveMode('custom_script', e.target.value)}>
+                      <option value="">Select an uploaded processor…</option>
+                      {processors.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
                   </div>
-                </div>
-                <div className="form-row-2">
-                  <div className="field"><label>Virtual host</label><input value={rmqForm.vhost} onChange={(e) => setRmqForm({ ...rmqForm, vhost: e.target.value })} /></div>
-                  <div className="field" style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 22 }}>
-                    <input type="checkbox" style={{ width: 16 }} checked={rmqForm.use_tls} onChange={(e) => setRmqForm({ ...rmqForm, use_tls: e.target.checked })} />
-                    <label style={{ margin: 0 }}>Use TLS (amqps)</label>
-                  </div>
-                </div>
-              </>
-            )}
-
-            <button className="btn btn-primary" disabled={savingBroker}>
-              <DatabaseZap size={14} /> {savingBroker ? 'Saving…' : 'Save broker configuration'}
-            </button>
-          </form>
-        </div>
-      </div>
-
-      {/* Configuration backup */}
-      <div className="panel" style={{ maxWidth: 720, marginTop: 16 }}>
-        <div className="panel-header"><h3><FileDown size={15} /> Configuration backup</h3></div>
-        <div className="panel-body">
-          <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
-            Export every Salesforce org, event channel, and integration as a single JSON file, and import it back
-            (here or on another instance). <strong>The export file contains credentials in plaintext</strong> (org
-            secrets, integration API keys/webhook secrets) — handle it exactly like a credentials backup.
-          </p>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button className="btn" onClick={exportConfig}><Download size={14} /> Export configuration</button>
-            <button className="btn" onClick={() => importInputRef.current?.click()} disabled={importing}>
-              <FileUp size={14} /> {importing ? 'Importing…' : 'Import configuration'}
-            </button>
-            <input ref={importInputRef} type="file" accept=".json" style={{ display: 'none' }} onChange={importConfig} />
-          </div>
-          {importResult && (
-            <div style={{ marginTop: 12, fontSize: 12.5, color: importResult.ok ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-              {importResult.detail}
+                )}
+              </div>
             </div>
           )}
-        </div>
-      </div>
+
+          {tab === 'dss' && (
+            <div className="panel" style={{ maxWidth: 720 }}>
+              <div className="panel-header">
+                <h3><SlidersHorizontal size={15} /> DSSClient (Dataiku DSS)</h3>
+                {dssConfigured ? (
+                  <span className="badge badge-green"><CheckCircle2 size={12} /> Configured</span>
+                ) : (
+                  <span className="badge badge-gray"><CircleDashed size={12} /> Not configured</span>
+                )}
+              </div>
+              <div className="panel-body">
+                <form onSubmit={saveDss}>
+                  <div className="field">
+                    <label>URL</label>
+                    <input placeholder="https://your-dataiku-dss.example.com" value={dssForm.url} onChange={(e) => setDssForm({ ...dssForm, url: e.target.value })} />
+                  </div>
+                  <div className="form-row-2">
+                    <div className="field">
+                      <label>Project name</label>
+                      <input value={dssForm.project_name} onChange={(e) => setDssForm({ ...dssForm, project_name: e.target.value })} />
+                    </div>
+                    <div className="field">
+                      <label>LLM connection id</label>
+                      <input value={dssForm.llm} onChange={(e) => setDssForm({ ...dssForm, llm: e.target.value })} />
+                    </div>
+                  </div>
+                  <div className="field">
+                    <label>API key</label>
+                    <input type="password" value={dssForm.api_key} onChange={(e) => setDssForm({ ...dssForm, api_key: e.target.value })} placeholder={dssConfigured ? '(unchanged) enter a new key to replace it' : ''} />
+                  </div>
+                  <button className="btn btn-primary" disabled={savingDss}>
+                    <Save size={14} /> {savingDss ? 'Saving…' : 'Save configuration'}
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {tab === 'langflow' && (
+            <div className="panel" style={{ maxWidth: 720 }}>
+              <div className="panel-header">
+                <h3><Workflow size={15} /> Langflow</h3>
+                {lfConfigured ? (
+                  <span className="badge badge-green"><CheckCircle2 size={12} /> Configured</span>
+                ) : (
+                  <span className="badge badge-gray"><CircleDashed size={12} /> Not configured</span>
+                )}
+              </div>
+              <div className="panel-body">
+                <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
+                  Calls a Langflow flow's <code className="pill">/api/v1/run/&#123;flow_id&#125;</code> endpoint with the
+                  event payload and returns its response as the processing result.
+                </p>
+                <form onSubmit={saveLangflow}>
+                  <div className="field">
+                    <label>Base URL</label>
+                    <input required placeholder="http://localhost:7860" value={lfForm.base_url} onChange={(e) => setLfForm({ ...lfForm, base_url: e.target.value })} />
+                  </div>
+                  <div className="form-row-2">
+                    <div className="field">
+                      <label>Flow ID</label>
+                      <input required value={lfForm.flow_id} onChange={(e) => setLfForm({ ...lfForm, flow_id: e.target.value })} />
+                    </div>
+                    <div className="field">
+                      <label>API key (optional)</label>
+                      <input type="password" value={lfForm.api_key} onChange={(e) => setLfForm({ ...lfForm, api_key: e.target.value })} placeholder={lfConfigured ? '(unchanged)' : ''} />
+                    </div>
+                  </div>
+                  <div className="form-row-2">
+                    <div className="field">
+                      <label>Input field name</label>
+                      <input value={lfForm.input_field} onChange={(e) => setLfForm({ ...lfForm, input_field: e.target.value })} placeholder="input_value" />
+                    </div>
+                    <div className="field">
+                      <label>Output path (optional)</label>
+                      <input value={lfForm.output_path} onChange={(e) => setLfForm({ ...lfForm, output_path: e.target.value })} placeholder="Dotted path into the response, e.g. outputs.0.outputs.0.results.message.text" />
+                    </div>
+                  </div>
+                  <button className="btn btn-primary" disabled={savingLf}>
+                    <Save size={14} /> {savingLf ? 'Saving…' : 'Save configuration'}
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {tab === 'processors' && (
+            <div className="panel" style={{ maxWidth: 720 }}>
+              <div className="panel-header">
+                <h3><FileCode2 size={15} /> Payload processors</h3>
+                <button className="btn btn-sm" onClick={downloadExample}><Download size={13} /> Download example</button>
+              </div>
+              <div className="panel-body">
+                <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
+                  Upload a Python script to use as a custom processor. Contract: read one JSON object from stdin, print one
+                  JSON object to stdout. It runs in an isolated subprocess with a 20s timeout — treat uploads like deploying
+                  server code (admin-only, trusted sources only).
+                </p>
+
+                <form onSubmit={upload} style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 18, flexWrap: 'wrap' }}>
+                  <div className="field" style={{ flex: 1, minWidth: 160, marginBottom: 0 }}>
+                    <label>Name</label>
+                    <input value={uploadName} onChange={(e) => setUploadName(e.target.value)} placeholder="My processor" />
+                  </div>
+                  <div className="field" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
+                    <label>File (.py)</label>
+                    <input ref={fileInputRef} type="file" accept=".py" onChange={(e) => setUploadFile(e.target.files[0])} />
+                  </div>
+                  <button className="btn btn-primary" disabled={uploading || !uploadFile}>
+                    <Upload size={14} /> {uploading ? 'Uploading…' : 'Upload'}
+                  </button>
+                </form>
+
+                {processors.length === 0 ? (
+                  <div className="empty-state">No processors uploaded yet.</div>
+                ) : (
+                  <table>
+                    <thead><tr><th>Name</th><th>File</th><th>Last test</th><th></th></tr></thead>
+                    <tbody>
+                      {processors.map((p) => (
+                        <tr key={p.id}>
+                          <td>
+                            {p.name}
+                            {activeProcessorId === p.id && mode === 'custom_script' && (
+                              <span className="badge badge-blue" style={{ marginLeft: 8 }}><span className="badge-dot" />Active</span>
+                            )}
+                          </td>
+                          <td className="mono" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{p.filename}</td>
+                          <td>
+                            {p.last_status ? (
+                              <span className={`badge ${p.last_status === 'ok' ? 'badge-green' : 'badge-red'}`}>
+                                <span className="badge-dot" />{p.last_status}
+                              </span>
+                            ) : <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>never run</span>}
+                          </td>
+                          <td style={{ display: 'flex', gap: 6 }}>
+                            <button className="btn btn-sm btn-icon" title="Test run" onClick={() => testProcessor(p.id)}><Play size={13} /></button>
+                            <button className="btn btn-sm btn-icon btn-danger" onClick={() => removeProcessor(p)}><Trash2 size={13} /></button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+
+                {testResult && (
+                  <div style={{ marginTop: 12, fontSize: 12, color: testResult.status === 'ok' ? 'var(--accent-green)' : testResult.status === 'fail' ? 'var(--accent-red)' : 'var(--text-muted)' }}>
+                    {testResult.status === 'running' ? 'Running test…' : testResult.status === 'ok' ? `Result: ${testResult.detail}` : `Failed: ${testResult.detail}`}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {tab === 'broker' && (
+            <div className="panel" style={{ maxWidth: 720 }}>
+              <div className="panel-header">
+                <h3><Network size={15} /> Message broker</h3>
+                <span className={`badge ${activeBackend === 'rabbitmq' ? 'badge-blue' : 'badge-gray'}`}>
+                  <span className="badge-dot" />Currently running: {activeBackend}
+                </span>
+              </div>
+              <div className="panel-body">
+                <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
+                  Choose between the built-in in-process broker (zero setup, single instance only) or a real RabbitMQ
+                  server (durable, survives restarts). <strong>Changing this requires a server restart to take effect</strong> —
+                  saving here stores the config, it doesn't hot-swap the running broker.
+                </p>
+
+                {brokerConnError && (
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', background: 'rgba(255,84,112,.08)', border: '1px solid rgba(255,84,112,.3)', borderRadius: 8, padding: '10px 12px', marginBottom: 14, fontSize: 12.5, color: 'var(--accent-red)' }}>
+                    <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                    Last connection attempt failed, running on internal broker instead: {brokerConnError}
+                  </div>
+                )}
+
+                <form onSubmit={saveBroker}>
+                  <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+                    {['internal', 'rabbitmq'].map((t) => (
+                      <div key={t} className={`tab-pill ${brokerType === t ? 'active' : ''}`} style={{ border: '1px solid var(--border-light)', padding: '10px 16px' }} onClick={() => setBrokerType(t)}>
+                        {t === 'internal' ? 'Internal (in-process)' : 'RabbitMQ'}
+                      </div>
+                    ))}
+                  </div>
+
+                  {brokerType === 'rabbitmq' && (
+                    <>
+                      <div className="form-row-2">
+                        <div className="field"><label>Host</label><input required value={rmqForm.host} onChange={(e) => setRmqForm({ ...rmqForm, host: e.target.value })} /></div>
+                        <div className="field"><label>Port</label><input required type="number" value={rmqForm.port} onChange={(e) => setRmqForm({ ...rmqForm, port: Number(e.target.value) })} /></div>
+                      </div>
+                      <div className="form-row-2">
+                        <div className="field"><label>Username</label><input value={rmqForm.username} onChange={(e) => setRmqForm({ ...rmqForm, username: e.target.value })} /></div>
+                        <div className="field"><label>Password</label>
+                          <input type="password" value={rmqForm.password} onChange={(e) => setRmqForm({ ...rmqForm, password: e.target.value })} placeholder="(unchanged) enter a new password to replace it" />
+                        </div>
+                      </div>
+                      <div className="form-row-2">
+                        <div className="field"><label>Virtual host</label><input value={rmqForm.vhost} onChange={(e) => setRmqForm({ ...rmqForm, vhost: e.target.value })} /></div>
+                        <div className="field" style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 22 }}>
+                          <input type="checkbox" style={{ width: 16 }} checked={rmqForm.use_tls} onChange={(e) => setRmqForm({ ...rmqForm, use_tls: e.target.checked })} />
+                          <label style={{ margin: 0 }}>Use TLS (amqps)</label>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  <button className="btn btn-primary" disabled={savingBroker}>
+                    <DatabaseZap size={14} /> {savingBroker ? 'Saving…' : 'Save broker configuration'}
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {tab === 'backup' && (
+            <div className="panel" style={{ maxWidth: 720 }}>
+              <div className="panel-header"><h3><FileDown size={15} /> Configuration backup</h3></div>
+              <div className="panel-body">
+                <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
+                  Export every Salesforce org, event channel, and integration as a single JSON file, and import it back
+                  (here or on another instance). <strong>The export file contains credentials in plaintext</strong> (org
+                  secrets, integration API keys/webhook secrets) — handle it exactly like a credentials backup.
+                </p>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  <button className="btn" onClick={exportConfig}><Download size={14} /> Export configuration</button>
+                  <button className="btn" onClick={() => importInputRef.current?.click()} disabled={importing}>
+                    <FileUp size={14} /> {importing ? 'Importing…' : 'Import configuration'}
+                  </button>
+                  <input ref={importInputRef} type="file" accept=".json" style={{ display: 'none' }} onChange={importConfig} />
+                </div>
+                {importResult && (
+                  <div style={{ marginTop: 12, fontSize: 12.5, color: importResult.ok ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                    {importResult.detail}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }

@@ -27,7 +27,7 @@ def list_integrations():
 @router.post("", response_model=IntegrationOut, dependencies=[Depends(require_role("admin"))])
 def create_integration(integration: IntegrationCreate):
     record = integration.model_dump()
-    record.update({"id": new_id(), "last_status": None, "last_run_at": None, "last_error": None})
+    record.update({"id": new_id(), "last_status": None, "last_run_at": None, "last_error": None, "last_result": None})
     integrations_table.insert(record)
     log_event("info", f"Integration '{record['name']}' ({record['type']}) created")
     return _mask(record)
@@ -83,9 +83,9 @@ def test_integration(integration_id: str):
     if sender is None:
         raise HTTPException(400, f"Unknown integration type '{cfg['type']}'")
     try:
-        sender(cfg, test_transaction)
-        _record_result(integration_id, "ok")
-        return {"detail": "Test event sent successfully"}
+        result = sender(cfg, test_transaction)
+        _record_result(integration_id, "ok", result=result)
+        return {"detail": "Test event sent successfully", "result": result}
     except Exception as exc:  # noqa: BLE001
         _record_result(integration_id, "error", str(exc))
         raise HTTPException(400, f"Test failed: {exc}")

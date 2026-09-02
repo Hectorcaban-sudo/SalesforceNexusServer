@@ -25,25 +25,36 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   infra), or a real RabbitMQ server for durability, chosen from Admin Configuration. Both sit behind
   the same interface so nothing else in the app needs to know which one is active. See "Message
   broker" below.
-- **Pluggable worker/processor** — `app/worker.py:process_payload()` supports three interchangeable
+- **Pluggable worker/processor** — `app/worker.py:process_payload()` supports four interchangeable
   processing modes, switchable globally from Admin Configuration *or* per subscribed event channel:
-  a **local fallback**, a **Dataiku DSS LLM** call (via `dataikuapi`), or an **uploaded custom
+  a **local fallback**, a **Dataiku DSS LLM** call (via `dataikuapi`), a **Langflow** flow, or an
+  **uploaded custom
   Python script**. Upload a `.py` file that reads a JSON payload from stdin and prints a JSON result
   to stdout; it runs in an isolated subprocess with a timeout. See "Custom payload processors" and
   "Per-event processor override" below.
 - **Graphical event routing** — for any subscribed event channel, visually select (checkboxes) which
-  publish channels *and* which integration hooks the processed result should fan out to, instead of
-  one implicit default channel. See "Event routing" below.
+  publish channels, integration hooks, *and* alert rules the processed result should fan out to,
+  instead of one implicit default channel. See "Event routing" below.
+- **Direct execute API** — `POST /api/execute/dss-client` and `POST /api/execute/langflow` invoke
+  either processor directly with an arbitrary payload, outside the Salesforce pipeline entirely —
+  useful for testing a configuration or for another internal system to reuse the same AI processor.
+  Unlike the normal pipeline, these surface the real error instead of falling back silently.
 - **Salesforce publisher** — publishes the processed result back to Salesforce as a new Platform
   Event using the standard REST `sobjects` endpoint (OAuth password or client-credentials flow).
   A manual "publish test event" action is also available from the admin UI.
 - **Transaction reprocessing** — requeue any single transaction, or bulk-requeue every failed one,
-  back through the broker without re-sending anything from Salesforce.
+  back through the broker without re-sending anything from Salesforce. The Transactions page can
+  also **group** the list (by org, status, direction, channel, or fan-out group) instead of one
+  flat table.
 - **Outbound integrations** — fan any processed transaction out to a **webhook** (HMAC-signed),
   **Slack**, **Microsoft Teams**, **Snowflake**, **BigQuery**, or a generic **custom API**, each
-  independently scoped by org and trigger (always / on success / on failure). SSL/TLS certificate
-  verification is disabled on every outbound integration call by design, to support internally-
-  issued or self-signed certificates. See "Integrations" below.
+  independently scoped by org and trigger (always / on success / on failure). Every dispatch's real
+  result (HTTP response body, rows inserted, etc.) is captured and shown on hover wherever it's
+  logged. SSL/TLS certificate verification is disabled on every outbound integration call by
+  design, to support internally-issued or self-signed certificates. See "Integrations" below.
+- **Alerts** — get notified through any configured integration sink when a transaction, a
+  Salesforce org's connection, an integration dispatch, or the message broker fails. See "Alerts"
+  below.
 - **Configuration export/import** — back up every Salesforce org, event channel, and integration to
   a single JSON file, and restore it (here or on another instance). See "Configuration backup"
   below.
@@ -62,7 +73,9 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   print spans to stdout with `OTEL_CONSOLE_EXPORTER=true`.
 - **Admin console (React)** — dashboard, org management, per-org subscribe/publish channel
   configuration, full transaction history with payload/result inspection, a live log viewer, user
-  management, integrations, and a separate **Admin Configuration** section for global settings.
+  management, integrations, alerts, and a separate **Admin Configuration** section (organized into
+  submenus: Processing mode, DSSClient, Langflow, Payload processors, Message broker, Backup) for
+  global settings.
 - **Local storage only** — everything is stored in a local **SQLite** database
   (`backend/data/nexus.db`). No external database required to run this (RabbitMQ is optional, for
   the message broker only).
@@ -98,13 +111,15 @@ sfnexus/
 │   │   ├── salesforce_client.py  OAuth login + publish Platform Events via REST
 │   │   ├── integrations.py        Outbound fan-out: webhook/Slack/Teams/Snowflake/BigQuery/custom
 │   │   ├── processors.py          Uploaded Python processor storage + isolated subprocess execution
+│   │   ├── alerts.py               Alert rules - fires on failure, delivers via an integration sink
 │   │   ├── worker.py             The "internal function": processes inbound events
-│   │   │                         (via DSSClient/custom script if configured), fans results out to
-│   │   │                         selected publish channels + integrations, and handles reprocessing
+│   │   │                         (via DSSClient/Langflow/custom script if configured), fans results
+│   │   │                         out to selected publish channels + integrations + alerts, and
+│   │   │                         handles reprocessing
 │   │   ├── transactions.py       Transaction audit-trail helpers
 │   │   └── routers/              /api/auth, /api/orgs, /api/events, /api/transactions,
 │   │                             /api/logs, /api/dashboard, /api/admin-config, /api/users,
-│   │                             /api/integrations, /api/processors
+│   │                             /api/integrations, /api/processors, /api/alerts, /api/execute
 │   ├── dev_tools/
 │   │   └── fake_oidc_provider.py  Local fake IdP for testing SSO without a real provider
 │   ├── data/                     nexus.db (SQLite) lives here (gitignored)
@@ -114,7 +129,8 @@ sfnexus/
 └── frontend/
     ├── src/
     │   ├── pages/                Login, SsoCallback, Dashboard, Orgs, EventsConfig,
-    │   │                         Transactions, Logs, AdminConfig, Users, Integrations
+    │   │                         Transactions (with grouping), Logs (with hover popups),
+    │   │                         AdminConfig (submenu tabs), Users, Integrations, Alerts
     │   ├── components/           Layout (role-gated sidebar/topbar), shared UI bits
     │   └── lib/                  api.js (JWT client), AuthContext.jsx (role-aware auth state)
     └── dist/                     Production build output (served by FastAPI) — run `npm run build`
@@ -314,22 +330,43 @@ code: only from sources you trust.
 ## Event routing
 
 Each **subscribed** event channel (Event Configuration page) has a **Routing** button that opens a
-graphical multi-select: pick any number of that org's **publish channels** and any number of
-**integration hooks** to fan the processed result out to. This mirrors a typical event-broker
-architecture (one event in, many consumers out) — each selected publish channel is delivered to
-and tracked independently (so one Salesforce org accepting the event and another rejecting it don't
-affect each other), and integration dispatch is restricted to exactly the hooks you picked rather
-than every integration that happens to match by trigger/org.
+graphical multi-select: pick any number of that org's **publish channels**, any number of
+**integration hooks**, and any number of **alert rules** to fan the processed result out to. This
+mirrors a typical event-broker architecture (one event in, many consumers out) — each selected
+publish channel is delivered to and tracked independently (so one Salesforce org accepting the
+event and another rejecting it don't affect each other), and integration/alert dispatch is
+restricted to exactly what you picked rather than every integration/alert that happens to match by
+trigger/org.
 
-Leaving both selections empty preserves the original behavior: the first enabled publish channel
-for the org, and integrations auto-matched by their own trigger/org settings — so existing setups
-keep working unchanged until you opt into explicit routing.
+Leaving all three selections empty preserves the original behavior: the first enabled publish
+channel for the org, integrations auto-matched by their own trigger/org settings, and alerts
+auto-matched by their own scope/org settings — so existing setups keep working unchanged until you
+opt into explicit routing.
+
+## Alerts
+
+Admin Configuration → **Alerts** (its own page, alongside Integrations) notifies you through an
+existing integration sink when something fails:
+
+| Scope | Fires when |
+|---|---|
+| `transaction_failed` | Any transaction (or a specific event channel's, via routing) ends in `failed` |
+| `connection_failed` | A Salesforce org's CometD connection goes down — fires once per outage, not on every retry |
+| `integration_failed` | An integration dispatch raises an exception |
+| `broker_degraded` | The configured RabbitMQ broker fails to connect at startup |
+
+Alerts deliver through the same sender functions as normal integrations (webhook/Slack/Teams/custom
+API), so any integration you've already configured can double as an alert channel. If you want a
+channel used *only* for alerts — not also receiving normal per-transaction fan-out — mark it
+**alert-only** on the Integrations page; otherwise a channel with `trigger="always"` and no org
+scope would fire twice for the same failure (once from normal dispatch, once from the alert). Use
+the **Test** button on any alert to confirm delivery before relying on it.
 
 ## Per-event processor override
 
 The same **Route & process** dialog also lets an individual subscribed channel pin its own
-processing mode (Local / DSSClient / Custom uploaded script — and which script) instead of using
-the global Admin Configuration default. This is resolved per event at processing time
+processing mode (Local / DSSClient / Langflow / Custom uploaded script — and which script) instead
+of using the global Admin Configuration default. This is resolved per event at processing time
 (`worker.py:_resolve_processing()`); leaving it on "Use global default" preserves existing behavior.
 Useful when different event types need different handling — e.g. one channel always uses a specific
 custom script while everything else uses the global DSSClient setting.
@@ -405,6 +442,37 @@ DSS LLM connection id), and `api_key`.
 - Certificate verification is disabled for this call (`no_check_certificate=True`) to support
   internally-issued/self-signed DSS certificates. If the call fails, or no URL is configured, a
   local fallback result is used instead so the pipeline never breaks because of a downstream outage.
+
+## Admin Configuration: Langflow
+
+Also under Admin Configuration: **Langflow** — `base_url` (your Langflow instance), `flow_id`,
+`api_key` (optional), `input_field` (defaults to `input_value`, matching Langflow's standard chat
+input), and an optional `output_path` (dotted path into the response if your flow's output shape
+needs a specific field extracted, e.g. `outputs.0.outputs.0.results.message.text`).
+
+- Calls `POST {base_url}/api/v1/run/{flow_id}` with the event payload JSON-encoded into the
+  configured input field, `input_type`/`output_type` set to `chat`, and `x-api-key` set if an API
+  key is configured.
+- If no `output_path` is set, falls back to Langflow's common response shape
+  (`outputs[0].outputs[0].results.message.text`); if that path doesn't match your flow's output,
+  set `output_path` explicitly.
+- Same fallback-to-local-on-failure behavior as DSSClient and custom scripts.
+- TLS verification is disabled on this call too, for internally-hosted Langflow instances.
+
+## Direct execute API
+
+`POST /api/execute/dss-client` and `POST /api/execute/langflow` (operator role or higher) run
+either processor directly against a payload you send, without touching CometD, the broker, or
+Salesforce at all — handy for testing a configuration change or for another internal system that
+wants to reuse this server's configured AI processor. Unlike the normal pipeline, these do **not**
+fall back to a local result on failure — you get the real error back, since you explicitly asked
+for that specific processor:
+
+```bash
+curl -X POST http://localhost:8000/api/execute/langflow \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"payload": {"User_Message__c": "hello"}}'
+```
 
 ## Configuration durability
 

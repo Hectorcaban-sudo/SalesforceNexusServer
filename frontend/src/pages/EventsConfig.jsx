@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Radio, Trash2, Send, ArrowDownToLine, ArrowUpFromLine, Share2, GitBranch, Cpu } from 'lucide-react'
+import { Plus, Radio, Trash2, Send, ArrowDownToLine, ArrowUpFromLine, Share2, GitBranch, Cpu, BellRing } from 'lucide-react'
 import api from '../lib/api'
 
 const EMPTY = { org_id: '', channel: '', direction: 'subscribe', enabled: true, description: '', broker_topic: 'default' }
@@ -8,6 +8,7 @@ export default function EventsConfig() {
   const [orgs, setOrgs] = useState([])
   const [configs, setConfigs] = useState([])
   const [integrations, setIntegrations] = useState([])
+  const [alerts, setAlerts] = useState([])
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState(EMPTY)
   const [saving, setSaving] = useState(false)
@@ -19,17 +20,19 @@ export default function EventsConfig() {
   const [routingTarget, setRoutingTarget] = useState(null)
   const [routingChannels, setRoutingChannels] = useState([])
   const [routingIntegrations, setRoutingIntegrations] = useState([])
+  const [routingAlerts, setRoutingAlerts] = useState([])
   const [routingProcessingMode, setRoutingProcessingMode] = useState('')
   const [routingProcessorId, setRoutingProcessorId] = useState('')
   const [processors, setProcessors] = useState([])
   const [savingRouting, setSavingRouting] = useState(false)
 
   async function load() {
-    const [o, c, i, p] = await Promise.all([api.get('/orgs'), api.get('/events'), api.get('/integrations'), api.get('/processors')])
+    const [o, c, i, p, a] = await Promise.all([api.get('/orgs'), api.get('/events'), api.get('/integrations'), api.get('/processors'), api.get('/alerts')])
     setOrgs(o.data)
     setConfigs(c.data)
     setIntegrations(i.data)
     setProcessors(p.data)
+    setAlerts(a.data)
   }
 
   useEffect(() => { load() }, [])
@@ -82,6 +85,7 @@ export default function EventsConfig() {
     setRoutingTarget(cfg)
     setRoutingChannels(cfg.route_publish_channel_ids || [])
     setRoutingIntegrations(cfg.route_integration_ids || [])
+    setRoutingAlerts(cfg.route_alert_ids || [])
     setRoutingProcessingMode(cfg.processing_mode || '')
     setRoutingProcessorId(cfg.processor_id || '')
   }
@@ -97,6 +101,7 @@ export default function EventsConfig() {
       await api.put(`/events/${routingTarget.id}`, {
         route_publish_channel_ids: routingChannels,
         route_integration_ids: routingIntegrations,
+        route_alert_ids: routingAlerts,
         processing_mode: routingProcessingMode || '',
         processor_id: routingProcessingMode === 'custom_script' ? routingProcessorId : '',
       })
@@ -110,6 +115,7 @@ export default function EventsConfig() {
   const subs = configs.filter((c) => c.direction === 'subscribe')
   const pubs = configs.filter((c) => c.direction === 'publish')
   const orgPublishChannels = routingTarget ? pubs.filter((p) => p.org_id === routingTarget.org_id) : []
+  const routableIntegrations = integrations.filter((i) => !i.alert_only)
 
   return (
     <div>
@@ -282,6 +288,7 @@ export default function EventsConfig() {
                   <option value="">Use global default</option>
                   <option value="local">Local fallback</option>
                   <option value="dss_client">DSSClient</option>
+                  <option value="langflow">Langflow</option>
                   <option value="custom_script">Custom uploaded script</option>
                 </select>
                 {routingProcessingMode === 'custom_script' && (
@@ -323,11 +330,11 @@ export default function EventsConfig() {
                   <Share2 size={13} style={{ verticalAlign: -2, marginRight: 5 }} />
                   Integration hooks
                 </label>
-                {integrations.length === 0 ? (
+                {routableIntegrations.length === 0 ? (
                   <div className="empty-state" style={{ padding: '14px 0' }}>No integrations configured yet.</div>
                 ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {integrations.map((i) => (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
+                    {routableIntegrations.map((i) => (
                       <label key={i.id} style={{ display: 'flex', alignItems: 'center', gap: 9, margin: 0, cursor: 'pointer', fontSize: 13 }}>
                         <input
                           type="checkbox"
@@ -336,6 +343,28 @@ export default function EventsConfig() {
                           onChange={() => toggleInList(routingIntegrations, setRoutingIntegrations, i.id)}
                         />
                         {i.name} <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>({i.type})</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+
+                <label style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8, display: 'block' }}>
+                  <BellRing size={13} style={{ verticalAlign: -2, marginRight: 5 }} />
+                  Alerts (fire only on failure of this channel's events)
+                </label>
+                {alerts.length === 0 ? (
+                  <div className="empty-state" style={{ padding: '14px 0' }}>No alerts configured yet.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {alerts.filter((a) => a.scope === 'transaction_failed').map((a) => (
+                      <label key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 9, margin: 0, cursor: 'pointer', fontSize: 13 }}>
+                        <input
+                          type="checkbox"
+                          style={{ width: 16 }}
+                          checked={routingAlerts.includes(a.id)}
+                          onChange={() => toggleInList(routingAlerts, setRoutingAlerts, a.id)}
+                        />
+                        {a.name}
                       </label>
                     ))}
                   </div>

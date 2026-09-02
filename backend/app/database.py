@@ -191,6 +191,7 @@ logs_table = _db.table("logs")
 admin_settings_table = _db.table("admin_settings")
 integrations_table = _db.table("integrations")
 processors_table = _db.table("processors")
+alerts_table = _db.table("alerts")
 
 
 def db_lock():

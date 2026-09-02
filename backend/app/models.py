@@ -120,11 +120,12 @@ class EventConfigBase(BaseModel):
     # org, and integrations auto-matched by their own org/trigger rules).
     route_publish_channel_ids: List[str] = Field(default_factory=list)
     route_integration_ids: List[str] = Field(default_factory=list)
+    route_alert_ids: List[str] = Field(default_factory=list)
     # Per-event processor override (only meaningful on direction="subscribe"
     # entries): pins this channel to a specific processing mode/processor
     # instead of using the global Admin Configuration default. None/omitted
     # means "use the global default".
-    processing_mode: Optional[str] = None      # "local" | "dss_client" | "custom_script"
+    processing_mode: Optional[str] = None      # "local" | "dss_client" | "custom_script" | "langflow"
     processor_id: Optional[str] = None          # used when processing_mode == "custom_script"
 
 
@@ -139,6 +140,7 @@ class EventConfigUpdate(BaseModel):
     broker_topic: Optional[str] = None
     route_publish_channel_ids: Optional[List[str]] = None
     route_integration_ids: Optional[List[str]] = None
+    route_alert_ids: Optional[List[str]] = None
     processing_mode: Optional[str] = None
     processor_id: Optional[str] = None
 
@@ -204,6 +206,32 @@ class DSSClientConfigUpdate(BaseModel):
     api_key: Optional[str] = None
 
 
+# ---------- Langflow ----------
+class LangflowConfig(BaseModel):
+    base_url: str = ""       # e.g. http://localhost:7860
+    flow_id: str = ""
+    api_key: str = ""
+    input_field: str = "input_value"    # which field in the /run request body carries the payload
+    output_path: str = ""               # optional dotted path into the response to extract; blank = best-effort auto-extract
+
+
+class LangflowConfigUpdate(BaseModel):
+    base_url: Optional[str] = None
+    flow_id: Optional[str] = None
+    api_key: Optional[str] = None
+    input_field: Optional[str] = None
+    output_path: Optional[str] = None
+
+
+class LangflowConfigOut(BaseModel):
+    base_url: str = ""
+    flow_id: str = ""
+    api_key: str = ""          # masked when returned to the browser
+    input_field: str = "input_value"
+    output_path: str = ""
+    configured: bool = False
+
+
 # ---------- Custom payload processors (uploaded Python scripts) ----------
 class ProcessorOut(BaseModel):
     id: str
@@ -219,6 +247,7 @@ class ProcessingMode(str, Enum):
     local = "local"
     dss_client = "dss_client"
     custom_script = "custom_script"
+    langflow = "langflow"
 
 
 class ProcessingModeConfig(BaseModel):
@@ -280,6 +309,12 @@ class IntegrationBase(BaseModel):
     trigger: IntegrationTrigger = IntegrationTrigger.always
     org_id: Optional[str] = None   # None = applies to every org
     config: dict = Field(default_factory=dict)
+    # When true, this sink is excluded from normal per-transaction fan-out
+    # (dispatch_integrations) and can only be reached via an Alert rule that
+    # explicitly points at it. Prevents a dedicated alert-delivery channel
+    # from also firing on every ordinary transaction because its trigger/org
+    # happen to match (e.g. trigger="always", org=None matches everything).
+    alert_only: bool = False
 
 
 class IntegrationCreate(IntegrationBase):
@@ -292,12 +327,48 @@ class IntegrationUpdate(BaseModel):
     trigger: Optional[IntegrationTrigger] = None
     org_id: Optional[str] = None
     config: Optional[dict] = None
+    alert_only: Optional[bool] = None
 
 
 class IntegrationOut(IntegrationBase):
     id: str
     last_status: Optional[str] = None
     last_run_at: Optional[float] = None
+    last_error: Optional[str] = None
+    last_result: Optional[dict] = None
+
+
+# ---------- Alerts ----------
+class AlertScope(str, Enum):
+    transaction_failed = "transaction_failed"       # a transaction (any direction) ended in "failed"
+    connection_failed = "connection_failed"         # a Salesforce org's CometD connection went to "error"
+    integration_failed = "integration_failed"       # an integration sink dispatch raised an exception
+    broker_degraded = "broker_degraded"             # configured RabbitMQ broker failed to connect at startup
+
+
+class AlertBase(BaseModel):
+    name: str
+    scope: AlertScope
+    enabled: bool = True
+    org_id: Optional[str] = None       # None = applies to every org (ignored for broker_degraded)
+    integration_id: str                # which configured integration sink delivers this alert
+
+
+class AlertCreate(AlertBase):
+    pass
+
+
+class AlertUpdate(BaseModel):
+    name: Optional[str] = None
+    enabled: Optional[bool] = None
+    org_id: Optional[str] = None
+    integration_id: Optional[str] = None
+
+
+class AlertOut(AlertBase):
+    id: str
+    last_fired_at: Optional[float] = None
+    last_status: Optional[str] = None
     last_error: Optional[str] = None
 
 

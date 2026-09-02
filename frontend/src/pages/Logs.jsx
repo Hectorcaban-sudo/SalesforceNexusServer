@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Trash2, RefreshCw } from 'lucide-react'
+import { Trash2, RefreshCw, Info } from 'lucide-react'
 import api from '../lib/api'
+import { TruncatedWithPopup } from '../components/UI'
 
 export default function Logs() {
   const [logs, setLogs] = useState([])
@@ -72,11 +73,37 @@ export default function Logs() {
               <div className="log-time">{new Date(l.timestamp * 1000).toLocaleTimeString()}</div>
               <div className={`log-level-${l.level}`}>{l.level}</div>
               <div className="log-logger">{l.logger}</div>
-              <div className="log-msg">{l.message}</div>
+              <div className="log-msg">
+                <TruncatedWithPopup text={l.message} maxLength={140} mono={false} />
+                {l.context && Object.keys(l.context).length > 0 && (
+                  <span style={{ position: 'relative', display: 'inline-block', marginLeft: 8 }}>
+                    <ContextPopup context={l.context} />
+                  </span>
+                )}
+              </div>
             </div>
           ))}
         </div>
       </div>
     </div>
+  )
+}
+
+function ContextPopup({ context }) {
+  const [hover, setHover] = useState(false)
+  return (
+    <span
+      style={{ cursor: 'help', color: 'var(--accent-cyan)' }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title=""
+    >
+      <Info size={13} style={{ verticalAlign: -2 }} />
+      {hover && (
+        <div className="hover-popup" style={{ left: 'auto', right: 0 }}>
+          <pre>{JSON.stringify(context, null, 2)}</pre>
+        </div>
+      )}
+    </span>
   )
 }

@@ -34,12 +34,96 @@ from . import transactions as tx
 from .salesforce_client import sf_client
 from .tracing import start_span
 from .integrations import dispatch_integrations
+from .alerts import fire_alert_for_transaction
 
 # Several integrations/DSSClient deployments sit behind internally-issued or
 # self-signed certificates; disabling verification is a deliberate operator
 # choice (see integrations.py and the dss_client branch below) so we also
 # silence the resulting urllib3 warning spam globally.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+def run_dss_client(payload: dict) -> dict:
+    """Calls a Dataiku DSS LLM endpoint via `dataikuapi`. Raises on failure -
+    callers decide whether to fall back or propagate (process_payload falls
+    back to local; the direct /api/execute/dss-client endpoint propagates so
+    the caller sees the real error)."""
+    import dataikuapi  # imported lazily so the app still runs if this optional dependency isn't installed
+    from .routers.admin_config import get_dss_client_config_raw
+
+    config = get_dss_client_config_raw()
+    conversation_id = payload.get("Conversation_Id__c")
+
+    if not config.get("url"):
+        raise RuntimeError("DSSClient is not configured (no URL set in Admin Configuration)")
+
+    end_user_client = dataikuapi.DSSClient(
+        config.get("url"), config.get("api_key"), no_check_certificate=True,
+    )
+    agent = end_user_client.get_project(config["project_name"]).get_llm(config["llm"])
+    completion = agent.new_completion()
+    completion.with_message(payload.get("User_Message__c", ""))
+    response = completion.execute()
+
+    return {
+        "Conversation_Id__c": conversation_id,
+        "Status__c": "Ok",
+        "Payload_Json__c": json.dumps({"replyText": response.text}),
+    }
+
+
+def _extract_langflow_text(response_json: dict, output_path: str = "") -> str:
+    """Langflow's /run response is deeply nested and shape varies by flow.
+    If an explicit dotted `output_path` is configured, use that; otherwise
+    try the common `outputs[0].outputs[0].results.message.text` path, then
+    fall back to stringifying the whole response so nothing is silently lost."""
+    if output_path:
+        node = response_json
+        try:
+            for key in output_path.split("."):
+                node = node[int(key)] if key.isdigit() else node[key]
+            return node
+        except (KeyError, IndexError, TypeError):
+            pass  # fall through to best-effort extraction below
+
+    try:
+        return response_json["outputs"][0]["outputs"][0]["results"]["message"]["text"]
+    except (KeyError, IndexError, TypeError):
+        return json.dumps(response_json)
+
+
+def run_langflow(payload: dict) -> dict:
+    """Calls a Langflow flow's /api/v1/run/{flow_id} endpoint. Raises on
+    failure - see `run_dss_client` docstring for why."""
+    import requests as _requests
+    from .routers.admin_config import get_langflow_config_raw
+
+    config = get_langflow_config_raw()
+    if not config.get("base_url") or not config.get("flow_id"):
+        raise RuntimeError("Langflow is not configured (base URL and/or flow ID missing in Admin Configuration)")
+
+    input_field = config.get("input_field") or "input_value"
+    body = {
+        input_field: json.dumps(payload),
+        "input_type": "chat",
+        "output_type": "chat",
+    }
+    headers = {"Content-Type": "application/json"}
+    if config.get("api_key"):
+        headers["x-api-key"] = config["api_key"]
+
+    url = f"{config['base_url'].rstrip('/')}/api/v1/run/{config['flow_id']}"
+    resp = _requests.post(url, json=body, headers=headers, timeout=60, verify=False)
+    resp.raise_for_status()
+    response_json = resp.json()
+
+    text = _extract_langflow_text(response_json, config.get("output_path", ""))
+    return {
+        "status": "ok",
+        "summary": "Event processed by Langflow",
+        "reply": text,
+        "raw": response_json,
+    }
 
 
 def process_payload(payload: dict, mode_override: Optional[str] = None, processor_id_override: Optional[str] = None) -> dict:
@@ -54,12 +138,13 @@ def process_payload(payload: dict, mode_override: Optional[str] = None, processo
                             `dataikuapi.DSSClient(...).get_project(...).get_llm(...)`
       - "custom_script"  : runs the currently-active (or per-event-selected)
                             uploaded Python script in an isolated subprocess
+      - "langflow"        : calls a Langflow flow's /run endpoint
 
-    Any failure in dss_client/custom_script mode falls back to a local
-    result so the pipeline never breaks because of a downstream outage or a
-    bug in an uploaded script.
+    Any failure in dss_client/custom_script/langflow mode falls back to a
+    local result so the pipeline never breaks because of a downstream outage
+    or a bug in an uploaded script.
     """
-    from .routers.admin_config import get_dss_client_config_raw, get_processing_mode_raw  # local import avoids a circular import at module load time
+    from .routers.admin_config import get_processing_mode_raw  # local import avoids a circular import at module load time
     from . import processors as proc_module
 
     if mode_override:
@@ -83,31 +168,8 @@ def process_payload(payload: dict, mode_override: Optional[str] = None, processo
             }
 
     if mode == "dss_client":
-        import dataikuapi  # imported lazily so the app still runs if this optional dependency isn't installed
-
-        config = get_dss_client_config_raw()
-        conversation_id = payload.get("Conversation_Id__c")
-
-        if not config.get("url"):
-            return {
-                "status": "ok",
-                "summary": "Event processed by Salesforce Nexus AI Server (no DSSClient configured)",
-                "echo": payload,
-            }
         try:
-            end_user_client = dataikuapi.DSSClient(
-                config.get("url"), config.get("api_key"), no_check_certificate=True,
-            )
-            agent = end_user_client.get_project(config["project_name"]).get_llm(config["llm"])
-            completion = agent.new_completion()
-            completion.with_message(payload.get("User_Message__c", ""))
-            response = completion.execute()
-
-            return {
-                "Conversation_Id__c": conversation_id,
-                "Status__c": "Ok",
-                "Payload_Json__c": json.dumps({"replyText": response.text}),
-            }
+            return run_dss_client(payload)
         except Exception as exc:  # noqa: BLE001
             log_event("error", f"DSSClient call failed, falling back to local processing: {exc}")
             return {
@@ -115,7 +177,19 @@ def process_payload(payload: dict, mode_override: Optional[str] = None, processo
                 "summary": "DSSClient call failed; returning local fallback result",
                 "error": str(exc),
                 "echo": payload,
-                "Conversation_Id__c": conversation_id,
+                "Conversation_Id__c": payload.get("Conversation_Id__c"),
+            }
+
+    if mode == "langflow":
+        try:
+            return run_langflow(payload)
+        except Exception as exc:  # noqa: BLE001
+            log_event("error", f"Langflow call failed, falling back to local processing: {exc}")
+            return {
+                "status": "error",
+                "summary": "Langflow call failed; returning local fallback result",
+                "error": str(exc),
+                "echo": payload,
             }
 
     return {
@@ -140,15 +214,16 @@ def _source_event_config(org_id: str, source_channel: str) -> Optional[dict]:
 
 def _resolve_routes(org_id: str, source_channel: str):
     """Looks up the subscribe event config that triggered this event to find
-    its explicit routing selections (publish channels + integrations). Falls
-    back to ([], None) when no explicit routing is configured, so callers
-    know to use legacy single-channel/auto-match behavior instead."""
+    its explicit routing selections (publish channels + integrations +
+    alerts). Falls back to ([], None, None) when no explicit routing is
+    configured, so callers know to use legacy auto-match behavior instead."""
     source_cfg = _source_event_config(org_id, source_channel)
     if not source_cfg:
-        return [], None
+        return [], None, None
 
     publish_ids = source_cfg.get("route_publish_channel_ids") or []
     integration_ids = source_cfg.get("route_integration_ids") or None  # None = no explicit selection -> legacy auto-match
+    alert_ids = source_cfg.get("route_alert_ids") or None
 
     publish_channels = []
     for pid in publish_ids:
@@ -156,7 +231,7 @@ def _resolve_routes(org_id: str, source_channel: str):
         if cfg and cfg.get("enabled") and cfg.get("direction") == "publish":
             publish_channels.append(cfg["channel"])
 
-    return publish_channels, integration_ids
+    return publish_channels, integration_ids, alert_ids
 
 
 def _resolve_processing(org_id: str, source_channel: str) -> Tuple[Optional[str], Optional[str]]:
@@ -179,6 +254,8 @@ async def inbound_worker():
         source_channel = message["channel"]
         payload = message["payload"]
 
+        _, _, routed_alert_ids = _resolve_routes(org_id, source_channel)
+
         with start_span("worker.process_payload", transaction_id=transaction_id, org_id=org_id):
             tx.update_transaction(transaction_id, status="processing")
             log_event("info", "Worker: processing event", transaction_id=transaction_id, org_id=org_id)
@@ -192,12 +269,14 @@ async def inbound_worker():
             except Exception as exc:  # noqa: BLE001
                 tx.update_transaction(transaction_id, status="failed", error=str(exc))
                 log_event("error", f"Worker: processing failed: {exc}", transaction_id=transaction_id)
-                await asyncio.to_thread(dispatch_integrations, tx.get_transaction(transaction_id))
+                failed_tx = tx.get_transaction(transaction_id)
+                await asyncio.to_thread(dispatch_integrations, failed_tx)
+                await asyncio.to_thread(fire_alert_for_transaction, failed_tx, routed_alert_ids)
                 return
 
             tx.update_transaction(transaction_id, status="processed", result=result)
 
-        routed_channels, routed_integration_ids = _resolve_routes(org_id, source_channel)
+        routed_channels, routed_integration_ids, _ = _resolve_routes(org_id, source_channel)
 
         if routed_channels:
             # Explicit fan-out: publish the same result to every selected
@@ -216,6 +295,7 @@ async def inbound_worker():
                         "channel": channel,
                         "payload": result,
                         "routed_integration_ids": routed_integration_ids,
+                        "routed_alert_ids": routed_alert_ids,
                     },
                 )
             log_event("info", f"Worker: fanned out to {len(routed_channels)} publish channel(s)", transaction_id=transaction_id)
@@ -230,6 +310,7 @@ async def inbound_worker():
                         "channel": publish_channel,
                         "payload": result,
                         "routed_integration_ids": routed_integration_ids,
+                        "routed_alert_ids": routed_alert_ids,
                     },
                 )
             else:
@@ -252,12 +333,15 @@ async def outbound_publisher():
         channel = message["channel"]
         payload = message["payload"]
         routed_integration_ids = message.get("routed_integration_ids")
+        routed_alert_ids = message.get("routed_alert_ids")
 
         with start_span("worker.publish_to_salesforce", transaction_id=transaction_id, org_id=org_id, channel=channel):
             org = orgs_table.get(Q.id == org_id)
             if not org:
                 tx.update_transaction(transaction_id, status="failed", error="Org no longer exists")
-                await asyncio.to_thread(dispatch_integrations, tx.get_transaction(transaction_id), routed_integration_ids)
+                failed_tx = tx.get_transaction(transaction_id)
+                await asyncio.to_thread(dispatch_integrations, failed_tx, routed_integration_ids)
+                await asyncio.to_thread(fire_alert_for_transaction, failed_tx, routed_alert_ids)
                 return
 
             if not tx.get_transaction(transaction_id).get("org_name"):
@@ -273,7 +357,9 @@ async def outbound_publisher():
                 tx.update_transaction(transaction_id, status="failed", error=str(exc))
                 log_event("error", f"Publisher: failed to publish to Salesforce: {exc}", transaction_id=transaction_id)
 
-        await asyncio.to_thread(dispatch_integrations, tx.get_transaction(transaction_id), routed_integration_ids)
+        final_tx = tx.get_transaction(transaction_id)
+        await asyncio.to_thread(dispatch_integrations, final_tx, routed_integration_ids)
+        await asyncio.to_thread(fire_alert_for_transaction, final_tx, routed_alert_ids)
 
     await broker.consume_forever("outbound", handle)
 
@@ -349,7 +435,9 @@ async def publish_manual_event(org_id: str, channel: str, payload: dict) -> dict
             tx.update_transaction(record["id"], status="published", result=result)
         except Exception as exc:  # noqa: BLE001
             tx.update_transaction(record["id"], status="failed", error=str(exc))
-            await asyncio.to_thread(dispatch_integrations, tx.get_transaction(record["id"]))
+            failed_tx = tx.get_transaction(record["id"])
+            await asyncio.to_thread(dispatch_integrations, failed_tx)
+            await asyncio.to_thread(fire_alert_for_transaction, failed_tx)
             raise
     await asyncio.to_thread(dispatch_integrations, tx.get_transaction(record["id"]))
     return record
