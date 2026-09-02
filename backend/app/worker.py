@@ -11,9 +11,22 @@ publishes the result onto the "outbound" topic. A separate consumer
 (`outbound_publisher`) picks results off that topic and pushes them back to
 Salesforce as a new platform event, so the whole pipeline is decoupled at
 every stage via the broker and can be scaled independently later.
+
+THREADING: `process_payload`, the Salesforce publish call, and integration
+dispatch are all potentially slow, blocking I/O (HTTP calls, subprocess
+execution, DB client calls). Since this module runs inside the same asyncio
+event loop that also serves the FastAPI admin UI, calling any of that
+directly would freeze the entire web app for the duration of the call. Every
+such call is therefore routed through `asyncio.to_thread(...)` so event
+processing runs on a worker thread and the web app stays fully responsive
+(navigable, API-reachable) the whole time events are being processed.
 """
-from typing import Optional
-import requests
+import asyncio
+import json
+from typing import Optional, Tuple
+
+import urllib3
+
 from .broker import broker
 from .database import orgs_table, event_configs_table, Q
 from .logging_config import log_event
@@ -22,32 +35,44 @@ from .salesforce_client import sf_client
 from .tracing import start_span
 from .integrations import dispatch_integrations
 
+# Several integrations/DSSClient deployments sit behind internally-issued or
+# self-signed certificates; disabling verification is a deliberate operator
+# choice (see integrations.py and the dss_client branch below) so we also
+# silence the resulting urllib3 warning spam globally.
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-def process_payload(payload: dict) -> dict:
+
+def process_payload(payload: dict, mode_override: Optional[str] = None, processor_id_override: Optional[str] = None) -> dict:
     """
     Business / AI processing logic for every inbound event.
 
     Which processing mode runs is controlled by Admin Configuration ->
-    Payload Processors:
+    Payload Processors by default, but an individual subscribed event
+    channel can override it (see `_resolve_processing`):
       - "local"          : simple built-in echo/fallback (default)
-      - "dss_client"     : forwards the payload to the configured DSSClient
-                            HTTP endpoint and returns its JSON response
-      - "custom_script"  : runs the currently-active uploaded Python script
-                            in an isolated subprocess and returns its result
+      - "dss_client"     : calls into a Dataiku DSS LLM endpoint via
+                            `dataikuapi.DSSClient(...).get_project(...).get_llm(...)`
+      - "custom_script"  : runs the currently-active (or per-event-selected)
+                            uploaded Python script in an isolated subprocess
 
-    Any failure in dss_client/custom_script mode falls back to the local
+    Any failure in dss_client/custom_script mode falls back to a local
     result so the pipeline never breaks because of a downstream outage or a
     bug in an uploaded script.
     """
     from .routers.admin_config import get_dss_client_config_raw, get_processing_mode_raw  # local import avoids a circular import at module load time
     from . import processors as proc_module
 
-    mode_cfg = get_processing_mode_raw()
-    mode = mode_cfg.get("mode", "local")
+    if mode_override:
+        mode = mode_override
+        active_processor_id = processor_id_override
+    else:
+        mode_cfg = get_processing_mode_raw()
+        mode = mode_cfg.get("mode", "local")
+        active_processor_id = mode_cfg.get("active_processor_id")
 
-    if mode == "custom_script" and mode_cfg.get("active_processor_id"):
+    if mode == "custom_script" and active_processor_id:
         try:
-            return proc_module.run_processor(mode_cfg["active_processor_id"], payload)
+            return proc_module.run_processor(active_processor_id, payload)
         except Exception as exc:  # noqa: BLE001
             log_event("error", f"Custom processor failed, falling back to local processing: {exc}")
             return {
@@ -58,7 +83,11 @@ def process_payload(payload: dict) -> dict:
             }
 
     if mode == "dss_client":
+        import dataikuapi  # imported lazily so the app still runs if this optional dependency isn't installed
+
         config = get_dss_client_config_raw()
+        conversation_id = payload.get("Conversation_Id__c")
+
         if not config.get("url"):
             return {
                 "status": "ok",
@@ -66,18 +95,19 @@ def process_payload(payload: dict) -> dict:
                 "echo": payload,
             }
         try:
-            response = requests.post(
-                config["url"],
-                json={
-                    "project": config.get("project_name", ""),
-                    "llm": config.get("llm", ""),
-                    "input": payload,
-                },
-                headers={"Authorization": f"Bearer {config.get('api_key', '')}"},
-                timeout=20,
+            end_user_client = dataikuapi.DSSClient(
+                config.get("url"), config.get("api_key"), no_check_certificate=True,
             )
-            response.raise_for_status()
-            return response.json()
+            agent = end_user_client.get_project(config["project_name"]).get_llm(config["llm"])
+            completion = agent.new_completion()
+            completion.with_message(payload.get("User_Message__c", ""))
+            response = completion.execute()
+
+            return {
+                "Conversation_Id__c": conversation_id,
+                "Status__c": "Ok",
+                "Payload_Json__c": json.dumps({"replyText": response.text}),
+            }
         except Exception as exc:  # noqa: BLE001
             log_event("error", f"DSSClient call failed, falling back to local processing: {exc}")
             return {
@@ -85,6 +115,7 @@ def process_payload(payload: dict) -> dict:
                 "summary": "DSSClient call failed; returning local fallback result",
                 "error": str(exc),
                 "echo": payload,
+                "Conversation_Id__c": conversation_id,
             }
 
     return {
@@ -101,14 +132,18 @@ def _default_publish_channel(org_id: str) -> Optional[str]:
     return row["channel"] if row else None
 
 
+def _source_event_config(org_id: str, source_channel: str) -> Optional[dict]:
+    return event_configs_table.get(
+        (Q.org_id == org_id) & (Q.channel == source_channel) & (Q.direction == "subscribe")
+    )
+
+
 def _resolve_routes(org_id: str, source_channel: str):
     """Looks up the subscribe event config that triggered this event to find
     its explicit routing selections (publish channels + integrations). Falls
-    back to (None, None) when no explicit routing is configured, so callers
+    back to ([], None) when no explicit routing is configured, so callers
     know to use legacy single-channel/auto-match behavior instead."""
-    source_cfg = event_configs_table.get(
-        (Q.org_id == org_id) & (Q.channel == source_channel) & (Q.direction == "subscribe")
-    )
+    source_cfg = _source_event_config(org_id, source_channel)
     if not source_cfg:
         return [], None
 
@@ -124,6 +159,17 @@ def _resolve_routes(org_id: str, source_channel: str):
     return publish_channels, integration_ids
 
 
+def _resolve_processing(org_id: str, source_channel: str) -> Tuple[Optional[str], Optional[str]]:
+    """Per-subscribed-event processor override: a channel can pin itself to
+    "local" / "dss_client" / "custom_script" (+ which processor) instead of
+    using the global Admin Configuration default. Returns (mode, processor_id),
+    both None if this channel has no override configured."""
+    source_cfg = _source_event_config(org_id, source_channel)
+    if not source_cfg:
+        return None, None
+    return source_cfg.get("processing_mode") or None, source_cfg.get("processor_id") or None
+
+
 async def inbound_worker():
     """Consumes 'inbound' topic messages forever - the internal function."""
 
@@ -137,12 +183,16 @@ async def inbound_worker():
             tx.update_transaction(transaction_id, status="processing")
             log_event("info", "Worker: processing event", transaction_id=transaction_id, org_id=org_id)
 
+            mode_override, processor_override = _resolve_processing(org_id, source_channel)
+
             try:
-                result = process_payload(payload)
+                # Offloaded to a thread: process_payload may do blocking HTTP/
+                # subprocess work and must never stall the web app's event loop.
+                result = await asyncio.to_thread(process_payload, payload, mode_override, processor_override)
             except Exception as exc:  # noqa: BLE001
                 tx.update_transaction(transaction_id, status="failed", error=str(exc))
                 log_event("error", f"Worker: processing failed: {exc}", transaction_id=transaction_id)
-                dispatch_integrations(tx.get_transaction(transaction_id))
+                await asyncio.to_thread(dispatch_integrations, tx.get_transaction(transaction_id))
                 return
 
             tx.update_transaction(transaction_id, status="processed", result=result)
@@ -188,7 +238,7 @@ async def inbound_worker():
                     "Worker: no publish channel configured for org; result will not be sent back to Salesforce",
                     org_id=org_id,
                 )
-                dispatch_integrations(tx.get_transaction(transaction_id), only_ids=routed_integration_ids)
+                await asyncio.to_thread(dispatch_integrations, tx.get_transaction(transaction_id), routed_integration_ids)
 
     await broker.consume_forever("inbound", handle)
 
@@ -207,7 +257,7 @@ async def outbound_publisher():
             org = orgs_table.get(Q.id == org_id)
             if not org:
                 tx.update_transaction(transaction_id, status="failed", error="Org no longer exists")
-                dispatch_integrations(tx.get_transaction(transaction_id), only_ids=routed_integration_ids)
+                await asyncio.to_thread(dispatch_integrations, tx.get_transaction(transaction_id), routed_integration_ids)
                 return
 
             if not tx.get_transaction(transaction_id).get("org_name"):
@@ -215,14 +265,15 @@ async def outbound_publisher():
 
             tx.update_transaction(transaction_id, status="publishing")
             try:
-                sf_client.publish_platform_event(org, channel, payload)
+                # Offloaded to a thread: this is a blocking `requests` call.
+                await asyncio.to_thread(sf_client.publish_platform_event, org, channel, payload)
                 tx.update_transaction(transaction_id, status="published")
                 log_event("info", "Publisher: event published back to Salesforce", transaction_id=transaction_id, org_id=org_id, channel=channel)
             except Exception as exc:  # noqa: BLE001
                 tx.update_transaction(transaction_id, status="failed", error=str(exc))
                 log_event("error", f"Publisher: failed to publish to Salesforce: {exc}", transaction_id=transaction_id)
 
-        dispatch_integrations(tx.get_transaction(transaction_id), only_ids=routed_integration_ids)
+        await asyncio.to_thread(dispatch_integrations, tx.get_transaction(transaction_id), routed_integration_ids)
 
     await broker.consume_forever("outbound", handle)
 
@@ -294,11 +345,11 @@ async def publish_manual_event(org_id: str, channel: str, payload: dict) -> dict
     )
     with start_span("worker.publish_manual_event", transaction_id=record["id"], org_id=org_id, channel=channel):
         try:
-            result = sf_client.publish_platform_event(org, channel, payload)
+            result = await asyncio.to_thread(sf_client.publish_platform_event, org, channel, payload)
             tx.update_transaction(record["id"], status="published", result=result)
         except Exception as exc:  # noqa: BLE001
             tx.update_transaction(record["id"], status="failed", error=str(exc))
-            dispatch_integrations(tx.get_transaction(record["id"]))
+            await asyncio.to_thread(dispatch_integrations, tx.get_transaction(record["id"]))
             raise
-    dispatch_integrations(tx.get_transaction(record["id"]))
+    await asyncio.to_thread(dispatch_integrations, tx.get_transaction(record["id"]))
     return record

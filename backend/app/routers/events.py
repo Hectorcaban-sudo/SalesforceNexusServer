@@ -36,6 +36,13 @@ async def update_event_config(config_id: str, updates: EventConfigUpdate):
     if not existing:
         raise HTTPException(404, "Event config not found")
     data = {k: v for k, v in updates.model_dump().items() if v is not None}
+    # An empty string for processing_mode/processor_id means "clear the
+    # per-event override and fall back to the global default" - model_dump()
+    # filtering above only drops actual None values, so "" would otherwise
+    # get stored as a literal empty string instead of being cleared.
+    for field in ("processing_mode", "processor_id"):
+        if field in data and data[field] == "":
+            data[field] = None
     event_configs_table.update(data, Q.id == config_id)
     log_event("info", f"Event config '{config_id}' updated", fields=list(data.keys()))
     await cometd_manager.sync()

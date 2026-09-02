@@ -25,10 +25,17 @@ import time
 from typing import Optional
 
 import requests
+import urllib3
 
 from .database import integrations_table, Q
 from .logging_config import log_event
 from .tracing import start_span
+
+# Many internal/enterprise integration endpoints sit behind self-signed or
+# internally-issued certificates. SSL verification is disabled for every
+# outbound integration call by deliberate operator choice - suppress the
+# resulting urllib3 warning spam that would otherwise flood the logs.
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 def _record_result(integration_id: str, status: str, error: Optional[str] = None):
@@ -47,7 +54,7 @@ def _send_webhook(cfg: dict, transaction: dict):
     if secret:
         signature = hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()
         headers["X-Nexus-Signature"] = f"sha256={signature}"
-    resp = requests.post(url, data=body, headers=headers, timeout=15)
+    resp = requests.post(url, data=body, headers=headers, timeout=15, verify=False)
     resp.raise_for_status()
 
 
@@ -57,7 +64,7 @@ def _send_custom_api(cfg: dict, transaction: dict):
     headers = dict(c.get("headers", {}))
     if c.get("auth_header"):
         headers["Authorization"] = c["auth_header"]
-    resp = requests.request(method, c["url"], json=transaction, headers=headers, timeout=15)
+    resp = requests.request(method, c["url"], json=transaction, headers=headers, timeout=15, verify=False)
     resp.raise_for_status()
 
 
@@ -71,7 +78,7 @@ def _send_slack(cfg: dict, transaction: dict):
     )
     if transaction.get("error"):
         text += f"\nError: {transaction['error']}"
-    resp = requests.post(webhook_url, json={"text": text}, timeout=15)
+    resp = requests.post(webhook_url, json={"text": text}, timeout=15, verify=False)
     resp.raise_for_status()
 
 
@@ -97,7 +104,7 @@ def _send_teams(cfg: dict, transaction: dict):
             }
         ],
     }
-    resp = requests.post(webhook_url, json=card, timeout=15)
+    resp = requests.post(webhook_url, json=card, timeout=15, verify=False)
     resp.raise_for_status()
 
 
@@ -114,6 +121,7 @@ def _load_snowflake(cfg: dict, transaction: dict):
     conn = snowflake.connector.connect(
         account=c["account"], user=c["user"], password=c["password"],
         warehouse=c.get("warehouse"), database=c.get("database"), schema=c.get("schema"),
+        insecure_mode=True,  # disable OCSP/cert verification, consistent with other integration sinks
     )
     try:
         cur = conn.cursor()

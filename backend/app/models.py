@@ -120,6 +120,12 @@ class EventConfigBase(BaseModel):
     # org, and integrations auto-matched by their own org/trigger rules).
     route_publish_channel_ids: List[str] = Field(default_factory=list)
     route_integration_ids: List[str] = Field(default_factory=list)
+    # Per-event processor override (only meaningful on direction="subscribe"
+    # entries): pins this channel to a specific processing mode/processor
+    # instead of using the global Admin Configuration default. None/omitted
+    # means "use the global default".
+    processing_mode: Optional[str] = None      # "local" | "dss_client" | "custom_script"
+    processor_id: Optional[str] = None          # used when processing_mode == "custom_script"
 
 
 class EventConfigCreate(EventConfigBase):
@@ -133,6 +139,8 @@ class EventConfigUpdate(BaseModel):
     broker_topic: Optional[str] = None
     route_publish_channel_ids: Optional[List[str]] = None
     route_integration_ids: Optional[List[str]] = None
+    processing_mode: Optional[str] = None
+    processor_id: Optional[str] = None
 
 
 class EventConfigOut(EventConfigBase):
@@ -220,6 +228,33 @@ class ProcessingModeConfig(BaseModel):
 
 class ProcessorTestRequest(BaseModel):
     payload: dict = Field(default_factory=lambda: {"Message__c": "test payload"})
+
+
+# ---------- Message broker configuration ----------
+class BrokerType(str, Enum):
+    internal = "internal"
+    rabbitmq = "rabbitmq"
+
+
+class RabbitMQSettings(BaseModel):
+    host: str = "localhost"
+    port: int = 5672
+    username: str = "guest"
+    password: str = ""
+    vhost: str = "/"
+    use_tls: bool = False
+
+
+class BrokerConfig(BaseModel):
+    type: BrokerType = BrokerType.internal
+    rabbitmq: RabbitMQSettings = Field(default_factory=RabbitMQSettings)
+
+
+class BrokerConfigOut(BaseModel):
+    type: str = "internal"
+    rabbitmq: RabbitMQSettings = Field(default_factory=RabbitMQSettings)
+    active_backend: str = "internal"          # which backend is actually running right now
+    connection_error: Optional[str] = None     # set if the last RabbitMQ connect attempt failed
 
 
 # ---------- Outbound integrations (fan-out sinks) ----------

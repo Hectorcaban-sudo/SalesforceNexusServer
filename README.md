@@ -18,15 +18,19 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
 - **Multi-org support** — connect to as many Salesforce instances/orgs as you like, each with its
   own auth credentials, API version, and independent CometD connection.
 - **CometD platform event subscriber** (`aiocometd_ng`) — subscribes to any Platform Event / CDC /
-  custom streaming channel you configure, per org.
-- **Internal message broker** — an in-process async broker (`app/broker.py`) decouples the
-  Salesforce listener from the processing logic and the Salesforce publisher. It's written behind
-  a small interface so it can be swapped for Kafka/RabbitMQ/SQS later without touching callers.
+  custom streaming channel you configure, per org. Automatically reconnects with exponential
+  backoff on any connection loss, and never blocks the web app while doing so — see "Reliability &
+  threading" below.
+- **Message broker: internal or RabbitMQ** — an in-process async broker by default (zero external
+  infra), or a real RabbitMQ server for durability, chosen from Admin Configuration. Both sit behind
+  the same interface so nothing else in the app needs to know which one is active. See "Message
+  broker" below.
 - **Pluggable worker/processor** — `app/worker.py:process_payload()` supports three interchangeable
-  processing modes, switchable from Admin Configuration: a **local fallback**, a **DSSClient** HTTP
-  endpoint, or an **uploaded custom Python script**. Upload a `.py` file that reads a JSON payload
-  from stdin and prints a JSON result to stdout; it runs in an isolated subprocess with a timeout.
-  See "Custom payload processors" below.
+  processing modes, switchable globally from Admin Configuration *or* per subscribed event channel:
+  a **local fallback**, a **Dataiku DSS LLM** call (via `dataikuapi`), or an **uploaded custom
+  Python script**. Upload a `.py` file that reads a JSON payload from stdin and prints a JSON result
+  to stdout; it runs in an isolated subprocess with a timeout. See "Custom payload processors" and
+  "Per-event processor override" below.
 - **Graphical event routing** — for any subscribed event channel, visually select (checkboxes) which
   publish channels *and* which integration hooks the processed result should fan out to, instead of
   one implicit default channel. See "Event routing" below.
@@ -37,7 +41,11 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   back through the broker without re-sending anything from Salesforce.
 - **Outbound integrations** — fan any processed transaction out to a **webhook** (HMAC-signed),
   **Slack**, **Microsoft Teams**, **Snowflake**, **BigQuery**, or a generic **custom API**, each
-  independently scoped by org and trigger (always / on success / on failure). See "Integrations"
+  independently scoped by org and trigger (always / on success / on failure). SSL/TLS certificate
+  verification is disabled on every outbound integration call by design, to support internally-
+  issued or self-signed certificates. See "Integrations" below.
+- **Configuration export/import** — back up every Salesforce org, event channel, and integration to
+  a single JSON file, and restore it (here or on another instance). See "Configuration backup"
   below.
 - **Role-based access control** — three roles (**admin**, **operator**, **viewer**) enforced on
   every mutating API route. Viewers get read-only access to the dashboard/transactions/logs;
@@ -54,14 +62,15 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   print spans to stdout with `OTEL_CONSOLE_EXPORTER=true`.
 - **Admin console (React)** — dashboard, org management, per-org subscribe/publish channel
   configuration, full transaction history with payload/result inspection, a live log viewer, user
-  management, integrations, and a separate **Admin Configuration** section for global settings
-  (currently: DSSClient).
+  management, integrations, and a separate **Admin Configuration** section for global settings.
 - **Local storage only** — everything is stored in a local **SQLite** database
-  (`backend/data/nexus.db`). No external database or message broker required to run this.
+  (`backend/data/nexus.db`). No external database required to run this (RabbitMQ is optional, for
+  the message broker only).
 - **Username/password protected admin** — JWT-based auth, bcrypt-hashed passwords, default
   bootstrap account (`admin` / `admin123` — change this immediately, see below).
-- **Structured logging** — every component logs to a rotating file (`backend/logs/nexus.log`) *and*
-  into SQLite, so the admin UI's Logs page can filter/search without touching the filesystem.
+- **Structured, rolling logging** — every component logs to a **daily-rotating file**
+  (`backend/logs/nexus.log`, configurable — size-based rotation is also available) *and* into
+  SQLite, so the admin UI's Logs page can filter/search without touching the filesystem.
 
 ## Project layout
 
@@ -84,8 +93,8 @@ sfnexus/
 │   │   ├── sso.py                 Generic OIDC SSO (login/callback, auto-provisioning)
 │   │   ├── tracing.py             OpenTelemetry setup + span helper
 │   │   ├── logging_config.py     File + SQLite logging sink
-│   │   ├── broker.py             Internal async pub/sub broker (inbound/outbound topics)
-│   │   ├── cometd_client.py      Per-org CometD subscription manager
+│   │   ├── broker.py             Message broker: internal in-process queues or RabbitMQ (aio-pika)
+│   │   ├── cometd_client.py      Per-org CometD subscription manager with auto-reconnect/backoff
 │   │   ├── salesforce_client.py  OAuth login + publish Platform Events via REST
 │   │   ├── integrations.py        Outbound fan-out: webhook/Slack/Teams/Snowflake/BigQuery/custom
 │   │   ├── processors.py          Uploaded Python processor storage + isolated subprocess execution
@@ -267,6 +276,12 @@ synthetic transaction through it immediately and confirm it's wired up correctly
 integration never affects the Salesforce publish outcome or blocks other integrations — failures
 are logged and shown as the integration's last status.
 
+**TLS/SSL certificate verification is disabled on every outbound integration call** (webhook,
+Slack, Teams, custom API — `verify=False`; Snowflake — `insecure_mode=True`), to support internally
+issued or self-signed certificates common on internal endpoints. This is a deliberate default, not
+a bug; if you need strict verification for a particular sink, that's the one thing you'd need to
+re-enable in `integrations.py` for that specific sender function.
+
 ## Custom payload processors
 
 From **Admin Configuration** (admin role required), upload a Python script as an alternative to
@@ -310,29 +325,95 @@ Leaving both selections empty preserves the original behavior: the first enabled
 for the org, and integrations auto-matched by their own trigger/org settings — so existing setups
 keep working unchanged until you opt into explicit routing.
 
-## Admin Configuration: DSSClient
+## Per-event processor override
 
-The **Admin Configuration** section (separate from per-org Salesforce connections) currently holds
-one named configuration block, **DSSClient**: `url`, `project_name`, `llm`, and `api_key`.
+The same **Route & process** dialog also lets an individual subscribed channel pin its own
+processing mode (Local / DSSClient / Custom uploaded script — and which script) instead of using
+the global Admin Configuration default. This is resolved per event at processing time
+(`worker.py:_resolve_processing()`); leaving it on "Use global default" preserves existing behavior.
+Useful when different event types need different handling — e.g. one channel always uses a specific
+custom script while everything else uses the global DSSClient setting.
+
+## Reliability & threading
+
+Two things that matter for keeping the server itself healthy under real-world network conditions:
+
+- **CometD reconnects automatically.** Each org's CometD connection runs inside a persistent
+  supervisor loop (`cometd_client.py:OrgStreamManager._run_forever()`). Any failure — network blip,
+  Salesforce-side restart, an expired token — is caught, logged, and retried with exponential
+  backoff (`COMETD_RECONNECT_MIN_DELAY_SECONDS` up to `COMETD_RECONNECT_MAX_DELAY_SECONDS`,
+  doubling each attempt by default), resetting back to the minimum delay once a connection succeeds.
+  The org just shows as `error`/`connecting` in the admin UI until it recovers — nothing needs to be
+  restarted manually.
+- **The web app never hangs while events are processing.** `process_payload()`, the Salesforce
+  publish call, and every integration dispatch are all potentially slow, blocking I/O (HTTP calls,
+  subprocess execution, database client calls). Because the worker runs in the same asyncio event
+  loop that serves the admin UI, calling any of that directly would freeze the entire web app for
+  the duration of the call. Every such call is routed through `asyncio.to_thread(...)`, so event
+  processing runs on a worker thread and the admin UI stays fully responsive and navigable the whole
+  time — verified by measuring API response times (consistently single-digit milliseconds) while
+  CometD was actively retrying failed connections in the background.
+
+## Message broker
+
+Admin Configuration → **Message broker** lets you choose between:
+
+- **Internal (default)** — in-process asyncio queues. Zero setup, but a single running instance only,
+  and anything still queued is lost if the process restarts.
+- **RabbitMQ** — a real broker via `aio-pika`. Durable (messages survive a restart) and the natural
+  choice if you'll ever run more than one instance. Configure host/port/username/password/vhost/TLS
+  from the same panel.
+
+**Changing this requires a server restart** — saving the setting stores it in SQLite, it does not
+hot-swap the broker underneath in-flight messages. On startup, the app reads this setting once
+(`broker.py:BrokerProxy.configure_from_settings()`) and connects to RabbitMQ if configured; if that
+connection fails, it logs the error and falls back to the internal broker automatically rather than
+refusing to start. Both backends implement the same `publish()`/`consume_forever()`/`queue_depth()`
+interface, so nothing else in the app (the worker, CometD client, dashboard) needs to know or care
+which one is active.
+
+## Configuration backup
+
+Admin Configuration → **Configuration backup** exports every Salesforce org, event channel, and
+integration as a single JSON file (`GET /api/admin-config/export`), and imports it back
+(`POST /api/admin-config/import`) — here or on a different instance. Records are upserted by their
+original id, which preserves the links between an event's routing selections and the publish
+channels/integrations they point to.
+
+**The export file contains credentials in plaintext** — org client secrets/passwords/security
+tokens and integration API keys/webhook signing secrets — because a backup that couldn't restore
+working connections wouldn't be useful. Treat the downloaded file exactly like a credentials
+backup: store it securely, don't email it around, and delete it once it's no longer needed.
+
+## Admin Configuration: DSSClient (Dataiku DSS)
+
+The **Admin Configuration** section (separate from per-org Salesforce connections) holds one named
+configuration block, **DSSClient**: `url` (your Dataiku DSS instance), `project_name`, `llm` (the
+DSS LLM connection id), and `api_key`.
 
 - Saving it is an **upsert** — the first save creates the record, every save after that updates it
   in place; the API key field is never blanked out by leaving it empty on a later save (same
   pattern as Salesforce org secrets).
 - It's stored in the `admin_settings` SQLite table and is read fresh on every event by
-  `worker.py:process_payload()`.
-- When a URL is set, every inbound event is POSTed to that URL as
-  `{"project": project_name, "llm": llm, "input": payload}` with an `Authorization: Bearer <api_key>`
-  header, and the JSON response becomes the processing result published back to Salesforce. If the
-  call fails, or no URL is configured, a local fallback result is used instead so the pipeline
-  never breaks because of a downstream outage.
+  `worker.py:process_payload()` when processing mode is `dss_client`.
+- Under the hood this uses the official `dataikuapi` client
+  (`DSSClient(url, api_key, no_check_certificate=True).get_project(project_name).get_llm(llm)`),
+  sends `payload["User_Message__c"]` as the prompt, and returns
+  `{"Conversation_Id__c": ..., "Status__c": "Ok", "Payload_Json__c": '{"replyText": "..."}'}` shaped
+  to match a typical Salesforce conversation-event schema — adjust the field names in
+  `worker.py:process_payload()` if your org's platform event uses different ones.
+- Certificate verification is disabled for this call (`no_check_certificate=True`) to support
+  internally-issued/self-signed DSS certificates. If the call fails, or no URL is configured, a
+  local fallback result is used instead so the pipeline never breaks because of a downstream outage.
 
 ## Configuration durability
 
 Every configuration change made in the admin UI — Salesforce orgs, event channels, admin users,
-DSSClient settings — is written straight to the local SQLite database (`backend/data/nexus.db`) on
-every create/update/delete call. SQLite commits each write immediately, so a change is durable the
-moment the API call returns, even if the process is killed immediately afterward (verified by
-hard-killing the server mid-session and confirming all config survives a restart).
+DSSClient/broker/processor settings — is written straight to the local SQLite database
+(`backend/data/nexus.db`) on every create/update/delete call. SQLite commits each write immediately,
+so a change is durable the moment the API call returns, even if the process is killed immediately
+afterward (verified by hard-killing the server mid-session and confirming all config survives a
+restart).
 
 ## Reprocessing transactions
 

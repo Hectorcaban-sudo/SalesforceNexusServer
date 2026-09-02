@@ -44,6 +44,33 @@ class DBLogHandler(logging.Handler):
             pass
 
 
+def _build_file_handler() -> logging.Handler:
+    """Builds the rotating file handler per LOG_ROTATION_TYPE:
+      - "time": daily (or configurable interval) rotation via
+        TimedRotatingFileHandler - rotated files are suffixed with a date
+        (e.g. nexus.log.2026-09-01) so each day's log is its own file.
+      - "size": rotate once the file crosses LOG_ROTATION_MAX_BYTES, keeping
+        LOG_ROTATION_BACKUP_COUNT old files (nexus.log.1, nexus.log.2, ...).
+    Both keep at most `log_rotation_backup_count` old files - older ones are
+    deleted automatically.
+    """
+    if settings.log_rotation_type == "size":
+        return logging.handlers.RotatingFileHandler(
+            settings.log_file,
+            maxBytes=settings.log_rotation_max_bytes,
+            backupCount=settings.log_rotation_backup_count,
+        )
+
+    handler = logging.handlers.TimedRotatingFileHandler(
+        settings.log_file,
+        when=settings.log_rotation_when,
+        interval=settings.log_rotation_interval,
+        backupCount=settings.log_rotation_backup_count,
+    )
+    handler.suffix = "%Y-%m-%d"
+    return handler
+
+
 def setup_logging() -> logging.Logger:
     logger = logging.getLogger("nexus")
     if logger.handlers:
@@ -55,9 +82,7 @@ def setup_logging() -> logging.Logger:
         "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
     )
 
-    file_handler = logging.handlers.RotatingFileHandler(
-        settings.log_file, maxBytes=5_000_000, backupCount=5
-    )
+    file_handler = _build_file_handler()
     file_handler.setFormatter(fmt)
 
     console_handler = logging.StreamHandler()

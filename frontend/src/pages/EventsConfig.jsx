@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Radio, Trash2, Send, ArrowDownToLine, ArrowUpFromLine, Share2, GitBranch } from 'lucide-react'
+import { Plus, Radio, Trash2, Send, ArrowDownToLine, ArrowUpFromLine, Share2, GitBranch, Cpu } from 'lucide-react'
 import api from '../lib/api'
 
 const EMPTY = { org_id: '', channel: '', direction: 'subscribe', enabled: true, description: '', broker_topic: 'default' }
@@ -19,13 +19,17 @@ export default function EventsConfig() {
   const [routingTarget, setRoutingTarget] = useState(null)
   const [routingChannels, setRoutingChannels] = useState([])
   const [routingIntegrations, setRoutingIntegrations] = useState([])
+  const [routingProcessingMode, setRoutingProcessingMode] = useState('')
+  const [routingProcessorId, setRoutingProcessorId] = useState('')
+  const [processors, setProcessors] = useState([])
   const [savingRouting, setSavingRouting] = useState(false)
 
   async function load() {
-    const [o, c, i] = await Promise.all([api.get('/orgs'), api.get('/events'), api.get('/integrations')])
+    const [o, c, i, p] = await Promise.all([api.get('/orgs'), api.get('/events'), api.get('/integrations'), api.get('/processors')])
     setOrgs(o.data)
     setConfigs(c.data)
     setIntegrations(i.data)
+    setProcessors(p.data)
   }
 
   useEffect(() => { load() }, [])
@@ -78,6 +82,8 @@ export default function EventsConfig() {
     setRoutingTarget(cfg)
     setRoutingChannels(cfg.route_publish_channel_ids || [])
     setRoutingIntegrations(cfg.route_integration_ids || [])
+    setRoutingProcessingMode(cfg.processing_mode || '')
+    setRoutingProcessorId(cfg.processor_id || '')
   }
 
   function toggleInList(list, setList, id) {
@@ -91,6 +97,8 @@ export default function EventsConfig() {
       await api.put(`/events/${routingTarget.id}`, {
         route_publish_channel_ids: routingChannels,
         route_integration_ids: routingIntegrations,
+        processing_mode: routingProcessingMode || '',
+        processor_id: routingProcessingMode === 'custom_script' ? routingProcessorId : '',
       })
       setRoutingTarget(null)
       load()
@@ -128,6 +136,7 @@ export default function EventsConfig() {
               {subs.map((c) => {
                 const chCount = (c.route_publish_channel_ids || []).length
                 const intCount = (c.route_integration_ids || []).length
+                const hasProcessorOverride = !!c.processing_mode
                 return (
                   <tr key={c.id}>
                     <td><code className="pill">{c.channel}</code></td>
@@ -135,7 +144,9 @@ export default function EventsConfig() {
                     <td>
                       <button className="btn btn-sm" onClick={() => openRouting(c)}>
                         <GitBranch size={12} />
-                        {chCount === 0 && intCount === 0 ? 'Auto (default)' : `${chCount} channel${chCount === 1 ? '' : 's'} · ${intCount} hook${intCount === 1 ? '' : 's'}`}
+                        {chCount === 0 && intCount === 0 && !hasProcessorOverride
+                          ? 'Auto (default)'
+                          : `${chCount} channel${chCount === 1 ? '' : 's'} · ${intCount} hook${intCount === 1 ? '' : 's'}${hasProcessorOverride ? ' · custom processor' : ''}`}
                       </button>
                     </td>
                     <td>
@@ -251,10 +262,35 @@ export default function EventsConfig() {
         <div className="modal-overlay" onClick={() => setRoutingTarget(null)}>
           <div className="modal-box" onClick={(e) => e.stopPropagation()}>
             <div className="panel-header">
-              <h3><GitBranch size={15} /> Route <code className="pill">{routingTarget.channel}</code></h3>
+              <h3><GitBranch size={15} /> Route &amp; process <code className="pill">{routingTarget.channel}</code></h3>
             </div>
             <form onSubmit={saveRouting}>
               <div className="panel-body">
+                <label style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8, display: 'block' }}>
+                  <Cpu size={13} style={{ verticalAlign: -2, marginRight: 5 }} />
+                  Payload processor
+                </label>
+                <p style={{ marginTop: 0, marginBottom: 10, color: 'var(--text-secondary)', fontSize: 12.5 }}>
+                  Override which processor handles events on this channel, instead of the global Admin
+                  Configuration default.
+                </p>
+                <select
+                  value={routingProcessingMode}
+                  onChange={(e) => setRoutingProcessingMode(e.target.value)}
+                  style={{ marginBottom: routingProcessingMode === 'custom_script' ? 10 : 18 }}
+                >
+                  <option value="">Use global default</option>
+                  <option value="local">Local fallback</option>
+                  <option value="dss_client">DSSClient</option>
+                  <option value="custom_script">Custom uploaded script</option>
+                </select>
+                {routingProcessingMode === 'custom_script' && (
+                  <select value={routingProcessorId} onChange={(e) => setRoutingProcessorId(e.target.value)} style={{ marginBottom: 18 }}>
+                    <option value="">Select an uploaded processor…</option>
+                    {processors.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                )}
+
                 <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
                   Pick which publish channels and integration hooks should receive the processed result of events
                   received on this channel. Leave everything unchecked to use the default behavior (first enabled

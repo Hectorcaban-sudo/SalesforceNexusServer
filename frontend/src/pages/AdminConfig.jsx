@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   SlidersHorizontal, Save, CheckCircle2, CircleDashed, Upload, Trash2, Play,
-  FileCode2, Download, Radio,
+  FileCode2, Download, Radio, Network, DatabaseZap, FileDown, FileUp, AlertTriangle,
 } from 'lucide-react'
 import api from '../lib/api'
 
 const EMPTY_DSS = { url: '', project_name: '', llm: '', api_key: '' }
+const EMPTY_RMQ = { host: 'localhost', port: 5672, username: 'guest', password: '', vhost: '/', use_tls: false }
 
 export default function AdminConfig() {
   // ---- DSSClient ----
@@ -27,17 +28,34 @@ export default function AdminConfig() {
   const [testResult, setTestResult] = useState(null)
   const fileInputRef = useRef(null)
 
+  // ---- Message broker ----
+  const [brokerType, setBrokerType] = useState('internal')
+  const [rmqForm, setRmqForm] = useState(EMPTY_RMQ)
+  const [activeBackend, setActiveBackend] = useState('internal')
+  const [brokerConnError, setBrokerConnError] = useState(null)
+  const [savingBroker, setSavingBroker] = useState(false)
+
+  // ---- Export / Import ----
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState(null)
+  const importInputRef = useRef(null)
+
   async function load() {
-    const [dss, pm, procs] = await Promise.all([
+    const [dss, pm, procs, brk] = await Promise.all([
       api.get('/admin-config/dss-client'),
       api.get('/admin-config/processing-mode'),
       api.get('/processors'),
+      api.get('/admin-config/broker'),
     ])
     setForm({ url: dss.data.url, project_name: dss.data.project_name, llm: dss.data.llm, api_key: '' })
     setConfigured(dss.data.configured)
     setMode(pm.data.mode)
     setActiveProcessorId(pm.data.active_processor_id || '')
     setProcessors(procs.data)
+    setBrokerType(brk.data.type)
+    setRmqForm({ ...brk.data.rabbitmq, password: '' })
+    setActiveBackend(brk.data.active_backend)
+    setBrokerConnError(brk.data.connection_error)
     setLoading(false)
   }
 
@@ -123,6 +141,51 @@ export default function AdminConfig() {
     }
     await api.delete(`/processors/${p.id}`)
     load()
+  }
+
+  async function saveBroker(e) {
+    e.preventDefault()
+    setSavingBroker(true)
+    try {
+      const payload = { type: brokerType, rabbitmq: { ...rmqForm } }
+      if (!payload.rabbitmq.password) delete payload.rabbitmq.password
+      const { data } = await api.put('/admin-config/broker', payload)
+      setActiveBackend(data.active_backend)
+      setBrokerConnError(data.connection_error)
+      setRmqForm({ ...data.rabbitmq, password: '' })
+      flashToast('Broker configuration saved — restart the server for this to take effect')
+    } finally {
+      setSavingBroker(false)
+    }
+  }
+
+  async function exportConfig() {
+    const { data } = await api.get('/admin-config/export')
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `nexus-config-export-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function importConfig(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    setImporting(true)
+    setImportResult(null)
+    try {
+      const text = await file.text()
+      const bundle = JSON.parse(text)
+      const { data } = await api.post('/admin-config/import', bundle)
+      setImportResult({ ok: true, detail: `Imported ${data.counts.orgs} org(s), ${data.counts.event_configs} event config(s), ${data.counts.integrations} integration(s)` })
+    } catch (err) {
+      setImportResult({ ok: false, detail: err?.response?.data?.detail || err.message })
+    } finally {
+      setImporting(false)
+      if (importInputRef.current) importInputRef.current.value = ''
+    }
   }
 
   return (
@@ -281,6 +344,90 @@ export default function AdminConfig() {
           {testResult && (
             <div style={{ marginTop: 12, fontSize: 12, color: testResult.status === 'ok' ? 'var(--accent-green)' : testResult.status === 'fail' ? 'var(--accent-red)' : 'var(--text-muted)' }}>
               {testResult.status === 'running' ? 'Running test…' : testResult.status === 'ok' ? `Result: ${testResult.detail}` : `Failed: ${testResult.detail}`}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Message broker */}
+      <div className="panel" style={{ maxWidth: 720, marginTop: 16 }}>
+        <div className="panel-header">
+          <h3><Network size={15} /> Message broker</h3>
+          <span className={`badge ${activeBackend === 'rabbitmq' ? 'badge-blue' : 'badge-gray'}`}>
+            <span className="badge-dot" />Currently running: {activeBackend}
+          </span>
+        </div>
+        <div className="panel-body">
+          <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
+            Choose between the built-in in-process broker (zero setup, single instance only) or a real RabbitMQ
+            server (durable, survives restarts). <strong>Changing this requires a server restart to take effect</strong> —
+            saving here stores the config, it doesn't hot-swap the running broker.
+          </p>
+
+          {brokerConnError && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', background: 'rgba(255,84,112,.08)', border: '1px solid rgba(255,84,112,.3)', borderRadius: 8, padding: '10px 12px', marginBottom: 14, fontSize: 12.5, color: 'var(--accent-red)' }}>
+              <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+              Last connection attempt failed, running on internal broker instead: {brokerConnError}
+            </div>
+          )}
+
+          <form onSubmit={saveBroker}>
+            <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+              {['internal', 'rabbitmq'].map((t) => (
+                <div key={t} className={`tab-pill ${brokerType === t ? 'active' : ''}`} style={{ border: '1px solid var(--border-light)', padding: '10px 16px' }} onClick={() => setBrokerType(t)}>
+                  {t === 'internal' ? 'Internal (in-process)' : 'RabbitMQ'}
+                </div>
+              ))}
+            </div>
+
+            {brokerType === 'rabbitmq' && (
+              <>
+                <div className="form-row-2">
+                  <div className="field"><label>Host</label><input required value={rmqForm.host} onChange={(e) => setRmqForm({ ...rmqForm, host: e.target.value })} /></div>
+                  <div className="field"><label>Port</label><input required type="number" value={rmqForm.port} onChange={(e) => setRmqForm({ ...rmqForm, port: Number(e.target.value) })} /></div>
+                </div>
+                <div className="form-row-2">
+                  <div className="field"><label>Username</label><input value={rmqForm.username} onChange={(e) => setRmqForm({ ...rmqForm, username: e.target.value })} /></div>
+                  <div className="field"><label>Password</label>
+                    <input type="password" value={rmqForm.password} onChange={(e) => setRmqForm({ ...rmqForm, password: e.target.value })} placeholder="(unchanged) enter a new password to replace it" />
+                  </div>
+                </div>
+                <div className="form-row-2">
+                  <div className="field"><label>Virtual host</label><input value={rmqForm.vhost} onChange={(e) => setRmqForm({ ...rmqForm, vhost: e.target.value })} /></div>
+                  <div className="field" style={{ display: 'flex', alignItems: 'center', gap: 8, paddingTop: 22 }}>
+                    <input type="checkbox" style={{ width: 16 }} checked={rmqForm.use_tls} onChange={(e) => setRmqForm({ ...rmqForm, use_tls: e.target.checked })} />
+                    <label style={{ margin: 0 }}>Use TLS (amqps)</label>
+                  </div>
+                </div>
+              </>
+            )}
+
+            <button className="btn btn-primary" disabled={savingBroker}>
+              <DatabaseZap size={14} /> {savingBroker ? 'Saving…' : 'Save broker configuration'}
+            </button>
+          </form>
+        </div>
+      </div>
+
+      {/* Configuration backup */}
+      <div className="panel" style={{ maxWidth: 720, marginTop: 16 }}>
+        <div className="panel-header"><h3><FileDown size={15} /> Configuration backup</h3></div>
+        <div className="panel-body">
+          <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
+            Export every Salesforce org, event channel, and integration as a single JSON file, and import it back
+            (here or on another instance). <strong>The export file contains credentials in plaintext</strong> (org
+            secrets, integration API keys/webhook secrets) — handle it exactly like a credentials backup.
+          </p>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button className="btn" onClick={exportConfig}><Download size={14} /> Export configuration</button>
+            <button className="btn" onClick={() => importInputRef.current?.click()} disabled={importing}>
+              <FileUp size={14} /> {importing ? 'Importing…' : 'Import configuration'}
+            </button>
+            <input ref={importInputRef} type="file" accept=".json" style={{ display: 'none' }} onChange={importConfig} />
+          </div>
+          {importResult && (
+            <div style={{ marginTop: 12, fontSize: 12.5, color: importResult.ok ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+              {importResult.detail}
             </div>
           )}
         </div>

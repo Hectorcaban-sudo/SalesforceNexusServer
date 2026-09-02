@@ -26,12 +26,25 @@ class Settings(BaseSettings):
     # Logging
     log_file: str = str(LOG_DIR / "nexus.log")
     log_level: str = "INFO"
+    # "time" = daily (or interval-based) rotation, "size" = rotate once a
+    # size threshold is hit. Both are configurable via env vars so ops can
+    # tune retention without a code change.
+    log_rotation_type: str = "time"          # "time" | "size"
+    log_rotation_when: str = "midnight"      # TimedRotatingFileHandler `when` (midnight/H/D/etc.) - only used for "time"
+    log_rotation_interval: int = 1           # rotate every N `log_rotation_when` units - only used for "time"
+    log_rotation_backup_count: int = 14      # how many rotated files to keep
+    log_rotation_max_bytes: int = 5_000_000  # only used for "size"
 
     # Internal broker
     broker_max_queue: int = 10000
 
     # Worker
     worker_poll_interval_seconds: float = 0.25
+
+    # CometD reconnect backoff (issue: keep retrying instead of giving up)
+    cometd_reconnect_min_delay_seconds: float = 2.0
+    cometd_reconnect_max_delay_seconds: float = 60.0
+    cometd_reconnect_backoff_factor: float = 2.0
 
     # OpenTelemetry
     otel_service_name: str = "salesforce-nexus-ai-server"

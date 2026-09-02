@@ -10,6 +10,14 @@ pydantic==2.9.2
 pydantic-settings==2.5.2
 python-dotenv==1.0.1
 
+# Message broker (RabbitMQ is optional - see Admin Configuration -> Message Broker)
+aio-pika==10.0.1
+
+# Dataiku DSS client (used by the "dss_client" payload processing mode)
+# NOTE: pin this to match your Dataiku DSS server's version if you hit API
+# incompatibilities - Dataiku recommends the client version track the server.
+dataiku-api-client==15.0.0
+
 # OpenTelemetry (tracing is safe to leave unconfigured - see app/tracing.py)
 opentelemetry-api==1.27.0
 opentelemetry-sdk==1.27.0

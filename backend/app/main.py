@@ -38,6 +38,9 @@ async def lifespan(app: FastAPI):
     bootstrap_default_admin()
     log_event("info", f"{settings.app_name} starting up")
 
+    await broker.configure_from_settings()
+    log_event("info", f"Message broker backend: {broker.backend_name}")
+
     background_tasks.append(asyncio.create_task(inbound_worker()))
     background_tasks.append(asyncio.create_task(outbound_publisher()))
     await cometd_manager.sync()
@@ -49,6 +52,7 @@ async def lifespan(app: FastAPI):
     await cometd_manager.stop_all()
     for t in background_tasks:
         t.cancel()
+    await broker.close()
     flush()
 
 
