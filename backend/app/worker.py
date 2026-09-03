@@ -142,8 +142,10 @@ def process_payload(payload: dict, mode_override: Optional[str] = None, processo
                             when known) is made available to the script via
                             environment variables - see `processors.py:_build_processor_env`.
       - "langflow"        : calls a Langflow flow's /run endpoint
-      - "rule_engine"     : evaluates a stored GoRules JDM decision graph
-                            (Zen Engine) against the payload
+
+    (The rule engine is NOT a processing mode - it's a pre-processing gate
+    that decides whether an event gets processed at all. See
+    `_resolve_rule_gate` and its use in `inbound_worker`.)
 
     Any failure in dss_client/custom_script/langflow mode falls back to a
     local result so the pipeline never breaks because of a downstream outage
@@ -193,19 +195,6 @@ def process_payload(payload: dict, mode_override: Optional[str] = None, processo
             return {
                 "status": "error",
                 "summary": "Langflow call failed; returning local fallback result",
-                "error": str(exc),
-                "echo": payload,
-            }
-
-    if mode == "rule_engine" and active_processor_id:
-        from . import rules as rules_module
-        try:
-            return rules_module.evaluate_rule(active_processor_id, payload)
-        except Exception as exc:  # noqa: BLE001
-            log_event("error", f"Rule engine evaluation failed, falling back to local processing: {exc}")
-            return {
-                "status": "error",
-                "summary": "Rule evaluation failed; returning local fallback result",
                 "error": str(exc),
                 "echo": payload,
             }
@@ -274,6 +263,43 @@ def _resolve_auto_publish(org_id: str, source_channel: str) -> bool:
     return source_cfg.get("auto_publish", True)
 
 
+def _resolve_rule_gate(org_id: str, source_channel: str) -> Optional[str]:
+    """The rule (if any) assigned to gate whether events on this channel get
+    processed at all - returns the rule id, or None if no rule is assigned
+    (meaning: always process, the existing default behavior)."""
+    source_cfg = _source_event_config(org_id, source_channel)
+    if not source_cfg:
+        return None
+    return source_cfg.get("rule_id") or None
+
+
+class RuleGateResult:
+    """Outcome of evaluating a channel's assigned validation rule."""
+    def __init__(self, should_process: bool, rule_output: Optional[dict] = None, error: Optional[str] = None):
+        self.should_process = should_process
+        self.rule_output = rule_output
+        self.error = error
+
+
+def evaluate_rule_gate(rule_id: str, payload: dict) -> RuleGateResult:
+    """
+    Evaluates the assigned rule against `payload`. The rule's decision graph
+    output must contain a boolean `process` field: `true` (or the field
+    simply being absent) lets the event continue to normal processing;
+    `false` means skip it. Raising during evaluation (bad rule, missing
+    referenced field, etc.) is treated as a processing failure, not a quiet
+    skip - a broken gate should be visible, not silently swallow events.
+    """
+    from . import rules as rules_module
+    try:
+        output = rules_module.evaluate_rule(rule_id, payload)
+    except Exception as exc:  # noqa: BLE001
+        return RuleGateResult(should_process=False, error=str(exc))
+
+    should_process = bool(output.get("process", True)) if isinstance(output, dict) else True
+    return RuleGateResult(should_process=should_process, rule_output=output)
+
+
 async def inbound_worker():
     """Consumes 'inbound' topic messages forever - the internal function."""
 
@@ -284,6 +310,32 @@ async def inbound_worker():
         payload = message["payload"]
 
         _, _, routed_alert_ids = _resolve_routes(org_id, source_channel)
+
+        # Validation gate: if this channel has a rule assigned, it runs
+        # BEFORE any processing - a "false" result skips processing entirely
+        # (the event is still recorded, just never handed to
+        # process_payload or published). This is deliberately separate from
+        # the processing modes below.
+        rule_id = _resolve_rule_gate(org_id, source_channel)
+        if rule_id:
+            with start_span("worker.rule_gate", transaction_id=transaction_id, org_id=org_id, rule_id=rule_id):
+                gate = await asyncio.to_thread(evaluate_rule_gate, rule_id, payload)
+
+            if gate.error:
+                tx.update_transaction(transaction_id, status="failed", error=f"Rule gate evaluation failed: {gate.error}")
+                log_event("error", f"Worker: rule gate evaluation failed: {gate.error}", transaction_id=transaction_id, rule_id=rule_id)
+                failed_tx = tx.get_transaction(transaction_id)
+                await asyncio.to_thread(dispatch_integrations, failed_tx)
+                await asyncio.to_thread(fire_alert_for_transaction, failed_tx, routed_alert_ids)
+                return
+
+            if not gate.should_process:
+                tx.update_transaction(transaction_id, status="skipped", result=gate.rule_output)
+                log_event(
+                    "info", "Worker: rule gate decided this event should not be processed",
+                    transaction_id=transaction_id, org_id=org_id, rule_id=rule_id, rule_output=gate.rule_output,
+                )
+                return
 
         with start_span("worker.process_payload", transaction_id=transaction_id, org_id=org_id):
             tx.update_transaction(transaction_id, status="processing")

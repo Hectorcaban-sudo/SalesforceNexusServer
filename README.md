@@ -25,14 +25,17 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   infra), or a real RabbitMQ server for durability, chosen from Admin Configuration. Both sit behind
   the same interface so nothing else in the app needs to know which one is active. See "Message
   broker" below.
-- **Pluggable worker/processor** — `app/worker.py:process_payload()` supports five interchangeable
+- **Pluggable worker/processor** — `app/worker.py:process_payload()` supports four interchangeable
   processing modes, switchable globally from Admin Configuration *or* per subscribed event channel:
-  a **local fallback**, a **Dataiku DSS LLM** call (via `dataikuapi`), a **Langflow** flow, an
-  **uploaded custom Python script**, or a **GoRules JDM rule** (Zen Engine — no code, just a
-  decision graph). A processor script also gets the triggering org's Salesforce credentials and the
-  rest of admin configuration (DSSClient/Langflow/Email) via environment variables, so it can call
-  out to Salesforce or send its own email directly. See "Custom payload processors", "Rule engine",
-  and "Per-event processor override" below.
+  a **local fallback**, a **Dataiku DSS LLM** call (via `dataikuapi`), a **Langflow** flow, or an
+  **uploaded custom Python script**. A processor script also gets the triggering org's Salesforce
+  credentials and the rest of admin configuration (DSSClient/Langflow/Email) via environment
+  variables, so it can call out to Salesforce or send its own email directly (its subprocess
+  timeout is configurable via `PROCESSOR_TIMEOUT_SECONDS`, default 20s). See "Custom payload
+  processors" and "Per-event processor override" below.
+- **Validation rules (GoRules JDM / Zen Engine)** — a *gate*, not a processing mode: assign a
+  no-code decision graph to a subscribed event channel to decide whether an event gets processed at
+  all before any processing mode runs. See "Rule engine" below.
 - **Graphical event routing** — for any subscribed event channel, visually select (checkboxes) which
   publish channels, integration hooks, *and* alert rules the processed result should fan out to,
   instead of one implicit default channel. See "Event routing" below.
@@ -229,6 +232,18 @@ npm run build       # rebuilds frontend/dist, which FastAPI serves automatically
 > access to your Salesforce instance's host. If you're running this behind a restrictive egress
 > proxy/firewall, allow-list your Salesforce login/instance domains.
 
+## Server configuration (uvicorn)
+
+`run.py` reads its bind address/port/reload/log-level from environment variables (see
+`.env.example`): `UVICORN_HOST`, `UVICORN_PORT`, `UVICORN_RELOAD`, `UVICORN_LOG_LEVEL`. There's also
+`UVICORN_WORKERS`, but **leave it at the default of 1** — every background task this app runs
+(CometD listeners per org, broker consumers, the in-process message broker itself) lives in a
+single process's memory, so more than one uvicorn worker means every Salesforce org gets listened
+to multiple times over and every event gets processed and published multiple times. If you need to
+scale beyond one process, run multiple independent *instances* behind a load balancer, each pointed
+at the same RabbitMQ broker and database — not multiple workers inside one instance. Setting
+`UVICORN_WORKERS` above 1 logs a warning and is forced back to 1.
+
 ## Roles & access control (RBAC)
 
 Three roles, enforced server-side on every route (not just hidden in the UI):
@@ -371,25 +386,38 @@ This is consistent with the existing trust model (a processor upload is already 
 equivalent to deploying server code), but it raises the stakes: only upload processors you trust
 as much as your own server code.
 
-## Rule engine (GoRules JDM / Zen Engine)
+## Rule engine (GoRules JDM / Zen Engine) — a validation gate, not a processing mode
 
-A fifth processing mode alongside local/DSSClient/Langflow/custom script: **Rules**, evaluated by
-GoRules' open-source [Zen Engine](https://gorules.io) against the JSON Decision Model (JDM)
-standard. A rule is a *declarative decision graph* (decision tables, expressions, switch nodes),
-not executable code — build one visually at the free [editor.gorules.io](https://editor.gorules.io),
-export the JSON, and paste/upload it from Admin Configuration → **Rules**. The graph's input is the
-event payload; its output becomes the processing result.
+**Rules** are evaluated by GoRules' open-source [Zen Engine](https://gorules.io) against the JSON
+Decision Model (JDM) standard, and decide **whether an event gets processed at all** — they're a
+gate that runs *before* whichever processing mode (local/DSSClient/Langflow/custom script) is
+configured for that channel, not an alternative to them. A rule is a *declarative decision graph*
+(decision tables, expressions, switch nodes), not executable code — build one visually at the free
+[editor.gorules.io](https://editor.gorules.io), export the JSON, and paste/upload it from Admin
+Configuration → **Rules**.
+
+Assign a rule to a subscribed event channel from Event Configuration → **Route & process** →
+**Validation rule**. When an event arrives on that channel:
+
+1. The rule is evaluated against the event payload first, before any processing.
+2. Its output must include a boolean **`process`** field (see the built-in example) —
+   `true` (or the field simply being absent) lets the event continue to normal processing;
+   `false` skips it. The transaction is recorded with status **`skipped`** — it's still visible on
+   the Transactions page (with the rule's full output attached), it just never reaches
+   `process_payload()` or gets published to Salesforce.
+3. If the rule itself fails to evaluate (bad reference, rule deleted, etc.), that's treated as a
+   genuine processing **failure** (alerts fire), not a silent skip — a broken gate should be loud,
+   not swallow events quietly.
 
 Because a rule is data rather than code, it runs directly in-process (no subprocess isolation
 needed the way uploaded scripts require) and can't execute arbitrary code or make network calls —
 it only evaluates the decision logic you defined.
 
-- Use the **Test** button to evaluate a rule against a sample payload before activating it.
-- Only one rule is "active" globally at a time (Admin Configuration → Processing mode → Rule
-  engine), or pin a specific rule to an individual event channel the same way as custom scripts
-  (see "Per-event processor override" below).
-- An invalid decision graph is rejected at save time with a descriptive error, and any evaluation
-  failure falls back to local processing so the pipeline never breaks.
+- Use the **Test** button (from the Rules tab, or per-rule) to evaluate a rule against a sample
+  payload before assigning it to a live channel.
+- An invalid decision graph is rejected at save time with a descriptive error.
+- Leaving a channel's validation rule unset preserves the original behavior: every event is
+  processed, exactly as before this feature existed.
 
 ## Event routing
 
@@ -443,11 +471,12 @@ the **Test** button on any alert to confirm delivery before relying on it.
 ## Per-event processor override
 
 The same **Route & process** dialog also lets an individual subscribed channel pin its own
-processing mode (Local / DSSClient / Langflow / Custom uploaded script / Rule engine — and which
-script or rule) instead of using the global Admin Configuration default. This is resolved per event
-at processing time (`worker.py:_resolve_processing()`); leaving it on "Use global default" preserves
-existing behavior. Useful when different event types need different handling — e.g. one channel
-always runs through a specific rule while everything else uses the global DSSClient setting.
+processing mode (Local / DSSClient / Langflow / Custom uploaded script — and which script) instead
+of using the global Admin Configuration default. This is resolved per event at processing time
+(`worker.py:_resolve_processing()`); leaving it on "Use global default" preserves existing behavior.
+Useful when different event types need different handling — e.g. one channel always uses a specific
+custom script while everything else uses the global DSSClient setting. (This is separate from the
+channel's **validation rule**, which decides *whether* to process at all — see "Rule engine" above.)
 
 ## Reliability & threading
 

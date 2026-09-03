@@ -23,6 +23,7 @@ const STATUS_MAP = {
   connecting: 'orange',
   publishing: 'orange',
   received: 'blue',
+  skipped: 'gray',
   disconnected: 'gray',
   failed: 'red',
   error: 'red',

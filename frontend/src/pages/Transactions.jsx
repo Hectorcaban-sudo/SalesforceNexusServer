@@ -120,7 +120,7 @@ export default function Transactions() {
           </select>
           <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
             <option value="">All statuses</option>
-            {['received', 'queued', 'processing', 'processed', 'publishing', 'published', 'failed'].map((s) => (
+            {['received', 'queued', 'processing', 'processed', 'skipped', 'publishing', 'published', 'failed'].map((s) => (
               <option key={s} value={s}>{s}</option>
             ))}
           </select>

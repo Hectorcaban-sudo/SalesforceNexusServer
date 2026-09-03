@@ -46,6 +46,31 @@ class Settings(BaseSettings):
     cometd_reconnect_max_delay_seconds: float = 60.0
     cometd_reconnect_backoff_factor: float = 2.0
 
+    # Custom payload processor subprocess timeout
+    processor_timeout_seconds: int = 20
+
+    # Uvicorn server settings (used by run.py) - configurable so the same
+    # image/checkout can be pointed at a different bind address/port purely
+    # via environment, without touching run.py.
+    #
+    # IMPORTANT: leave uvicorn_workers at 1. Every background task this app
+    # runs (CometD listeners per org, the broker consumers, the internal
+    # message broker itself when using the default in-process backend) lives
+    # in a single process's memory. Running more than one uvicorn worker
+    # would start a completely separate, independent copy of all of that in
+    # each worker process - meaning every Salesforce org would be listened
+    # to multiple times over, and every event would be processed and
+    # published multiple times. If you need to scale beyond one process,
+    # put a real broker in front of it (RabbitMQ, see Admin Configuration ->
+    # Message broker) and run multiple independent *instances* of this app
+    # behind a load balancer instead, each pointed at the same broker and
+    # SQLite/database - not multiple uvicorn workers inside one instance.
+    uvicorn_host: str = "0.0.0.0"
+    uvicorn_port: int = 8000
+    uvicorn_reload: bool = False
+    uvicorn_workers: int = 1
+    uvicorn_log_level: str = "info"
+
     # OpenTelemetry
     otel_service_name: str = "salesforce-nexus-ai-server"
     otel_exporter_otlp_endpoint: str = ""     # e.g. http://otel-collector:4318 - leave blank to disable OTLP export

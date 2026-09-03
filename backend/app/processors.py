@@ -34,14 +34,14 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from .config import DATA_DIR
+from .config import DATA_DIR, settings
 from .database import processors_table, Q
 from .logging_config import log_event
 
 PROCESSORS_DIR = DATA_DIR / "processors"
 PROCESSORS_DIR.mkdir(exist_ok=True)
 
-PROCESSOR_TIMEOUT_SECONDS = 20
+PROCESSOR_TIMEOUT_SECONDS = settings.processor_timeout_seconds  # configurable via PROCESSOR_TIMEOUT_SECONDS env var
 
 EXAMPLE_TEMPLATE = '''"""
 Example Salesforce Nexus AI Server payload processor.

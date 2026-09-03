@@ -269,10 +269,7 @@ export default function AdminConfig() {
   }
 
   async function removeRule(rule) {
-    if (!confirm(`Delete rule "${rule.name}"?`)) return
-    if (activeProcessorId === rule.id) {
-      await saveMode('local', null)
-    }
+    if (!confirm(`Delete rule "${rule.name}"? Any event channel gating on it will fall back to always processing.`)) return
     await api.delete(`/rules/${rule.id}`)
     load()
   }
@@ -368,7 +365,7 @@ export default function AdminConfig() {
                   specific subscribed event channel overrides it (Event Configuration → Route &amp; process).
                 </p>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                  {['local', 'dss_client', 'langflow', 'custom_script', 'rule_engine'].map((m) => (
+                  {['local', 'dss_client', 'langflow', 'custom_script'].map((m) => (
                     <div
                       key={m}
                       className={`tab-pill ${mode === m ? 'active' : ''}`}
@@ -379,7 +376,6 @@ export default function AdminConfig() {
                       {m === 'dss_client' && 'DSSClient'}
                       {m === 'langflow' && 'Langflow'}
                       {m === 'custom_script' && 'Custom uploaded script'}
-                      {m === 'rule_engine' && 'Rule engine'}
                     </div>
                   ))}
                 </div>
@@ -392,15 +388,10 @@ export default function AdminConfig() {
                     </select>
                   </div>
                 )}
-                {mode === 'rule_engine' && (
-                  <div className="field" style={{ marginTop: 14 }}>
-                    <label>Active rule</label>
-                    <select value={activeProcessorId} onChange={(e) => saveMode('rule_engine', e.target.value)}>
-                      <option value="">Select a rule…</option>
-                      {rules.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-                    </select>
-                  </div>
-                )}
+                <p style={{ marginTop: 16, color: 'var(--text-muted)', fontSize: 11.5 }}>
+                  Looking for the rule engine? It's not a processing mode — it's a per-event validation gate.
+                  Configure it from Event Configuration → Route &amp; process → Validation rule.
+                </p>
               </div>
             </div>
           )}
@@ -570,8 +561,12 @@ export default function AdminConfig() {
                 <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
                   A rule is a JSON Decision Model (JDM) decision graph — build one visually at{' '}
                   <a href="https://editor.gorules.io" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-cyan)' }}>editor.gorules.io</a>{' '}
-                  and paste/upload the exported JSON, or start from the built-in example. Unlike uploaded scripts, a
-                  rule is declarative data (no code execution), evaluated directly against the event payload.
+                  and paste/upload the exported JSON, or start from the built-in example. A rule is
+                  a <strong>validation gate</strong>, not a processing mode — assign it to a subscribed event channel
+                  from Event Configuration → Route &amp; process. Its output must include a boolean
+                  <code className="pill" style={{ marginLeft: 4 }}>process</code> field: <code className="pill">false</code> skips
+                  the event before it's ever processed. Unlike uploaded scripts, a rule is declarative data (no code
+                  execution), evaluated directly against the event payload.
                 </p>
 
                 {rules.length === 0 ? (
@@ -582,12 +577,7 @@ export default function AdminConfig() {
                     <tbody>
                       {rules.map((r) => (
                         <tr key={r.id}>
-                          <td>
-                            {r.name}
-                            {activeProcessorId === r.id && mode === 'rule_engine' && (
-                              <span className="badge badge-blue" style={{ marginLeft: 8 }}><span className="badge-dot" />Active</span>
-                            )}
-                          </td>
+                          <td>{r.name}</td>
                           <td style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{r.description || '—'}</td>
                           <td>
                             {r.last_status ? (

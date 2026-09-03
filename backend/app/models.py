@@ -125,8 +125,17 @@ class EventConfigBase(BaseModel):
     # entries): pins this channel to a specific processing mode/processor
     # instead of using the global Admin Configuration default. None/omitted
     # means "use the global default".
-    processing_mode: Optional[str] = None      # "local" | "dss_client" | "custom_script" | "langflow" | "rule_engine"
-    processor_id: Optional[str] = None          # the uploaded processor's id (custom_script) or rule's id (rule_engine)
+    processing_mode: Optional[str] = None      # "local" | "dss_client" | "custom_script" | "langflow"
+    processor_id: Optional[str] = None          # the uploaded processor's id, used when processing_mode == "custom_script"
+    # Only meaningful on direction="subscribe" entries. When set, this rule
+    # is evaluated against every event received on this channel BEFORE any
+    # processing happens - the rule's decision graph must produce a boolean
+    # `process` field in its output (true = continue processing normally,
+    # false = skip - the event is received and recorded but never processed
+    # or published). This is a gate, not a processing mode: it decides
+    # *whether* an event gets processed, using the same rule engine that
+    # used to (incorrectly) double as a processing mode itself.
+    rule_id: Optional[str] = None
     # Only meaningful on direction="subscribe" entries. When False, receiving
     # and processing an event on this channel does NOT automatically publish
     # the result back to Salesforce - it's still processed, and any routed
@@ -150,6 +159,7 @@ class EventConfigUpdate(BaseModel):
     route_alert_ids: Optional[List[str]] = None
     processing_mode: Optional[str] = None
     processor_id: Optional[str] = None
+    rule_id: Optional[str] = None
     auto_publish: Optional[bool] = None
 
 
@@ -163,6 +173,7 @@ class TransactionStatus(str, Enum):
     queued = "queued"
     processing = "processing"
     processed = "processed"
+    skipped = "skipped"          # a validation rule decided this event should not be processed
     publishing = "publishing"
     published = "published"
     failed = "failed"
@@ -285,7 +296,6 @@ class ProcessingMode(str, Enum):
     dss_client = "dss_client"
     custom_script = "custom_script"
     langflow = "langflow"
-    rule_engine = "rule_engine"
 
 
 class ProcessingModeConfig(BaseModel):

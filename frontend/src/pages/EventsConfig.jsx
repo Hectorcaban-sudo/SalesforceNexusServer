@@ -23,6 +23,7 @@ export default function EventsConfig() {
   const [routingAlerts, setRoutingAlerts] = useState([])
   const [routingProcessingMode, setRoutingProcessingMode] = useState('')
   const [routingProcessorId, setRoutingProcessorId] = useState('')
+  const [routingRuleId, setRoutingRuleId] = useState('')
   const [routingAutoPublish, setRoutingAutoPublish] = useState(true)
   const [processors, setProcessors] = useState([])
   const [rules, setRules] = useState([])
@@ -91,6 +92,7 @@ export default function EventsConfig() {
     setRoutingAlerts(cfg.route_alert_ids || [])
     setRoutingProcessingMode(cfg.processing_mode || '')
     setRoutingProcessorId(cfg.processor_id || '')
+    setRoutingRuleId(cfg.rule_id || '')
     setRoutingAutoPublish(cfg.auto_publish !== false)
   }
 
@@ -107,7 +109,8 @@ export default function EventsConfig() {
         route_integration_ids: routingIntegrations,
         route_alert_ids: routingAlerts,
         processing_mode: routingProcessingMode || '',
-        processor_id: (routingProcessingMode === 'custom_script' || routingProcessingMode === 'rule_engine') ? routingProcessorId : '',
+        processor_id: routingProcessingMode === 'custom_script' ? routingProcessorId : '',
+        rule_id: routingRuleId || '',
         auto_publish: routingAutoPublish,
       })
       setRoutingTarget(null)
@@ -148,6 +151,7 @@ export default function EventsConfig() {
                 const chCount = (c.route_publish_channel_ids || []).length
                 const intCount = (c.route_integration_ids || []).length
                 const hasProcessorOverride = !!c.processing_mode
+                const hasRule = !!c.rule_id
                 const autoPublishOff = c.auto_publish === false
                 return (
                   <tr key={c.id}>
@@ -156,6 +160,7 @@ export default function EventsConfig() {
                     <td>
                       <button className="btn btn-sm" onClick={() => openRouting(c)}>
                         <GitBranch size={12} />
+                        {hasRule && 'gated · '}
                         {autoPublishOff
                           ? 'No auto-publish'
                           : chCount === 0 && intCount === 0 && !hasProcessorOverride
@@ -294,6 +299,20 @@ export default function EventsConfig() {
                 </div>
 
                 <label style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8, display: 'block' }}>
+                  <GitBranch size={13} style={{ verticalAlign: -2, marginRight: 5 }} />
+                  Validation rule (optional)
+                </label>
+                <p style={{ marginTop: 0, marginBottom: 10, color: 'var(--text-secondary)', fontSize: 12.5 }}>
+                  Runs before any processing. The rule's decision graph must output a boolean{' '}
+                  <code className="pill">process</code> field — <code className="pill">false</code> skips this event
+                  entirely (it's still received and recorded, just never processed or published).
+                </p>
+                <select value={routingRuleId} onChange={(e) => setRoutingRuleId(e.target.value)} style={{ marginBottom: 18 }}>
+                  <option value="">No rule — always process</option>
+                  {rules.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                </select>
+
+                <label style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8, display: 'block' }}>
                   <Cpu size={13} style={{ verticalAlign: -2, marginRight: 5 }} />
                   Payload processor
                 </label>
@@ -304,25 +323,18 @@ export default function EventsConfig() {
                 <select
                   value={routingProcessingMode}
                   onChange={(e) => setRoutingProcessingMode(e.target.value)}
-                  style={{ marginBottom: (routingProcessingMode === 'custom_script' || routingProcessingMode === 'rule_engine') ? 10 : 18 }}
+                  style={{ marginBottom: routingProcessingMode === 'custom_script' ? 10 : 18 }}
                 >
                   <option value="">Use global default</option>
                   <option value="local">Local fallback</option>
                   <option value="dss_client">DSSClient</option>
                   <option value="langflow">Langflow</option>
                   <option value="custom_script">Custom uploaded script</option>
-                  <option value="rule_engine">Rule engine</option>
                 </select>
                 {routingProcessingMode === 'custom_script' && (
                   <select value={routingProcessorId} onChange={(e) => setRoutingProcessorId(e.target.value)} style={{ marginBottom: 18 }}>
                     <option value="">Select an uploaded processor…</option>
                     {processors.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-                )}
-                {routingProcessingMode === 'rule_engine' && (
-                  <select value={routingProcessorId} onChange={(e) => setRoutingProcessorId(e.target.value)} style={{ marginBottom: 18 }}>
-                    <option value="">Select a rule…</option>
-                    {rules.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                   </select>
                 )}
 

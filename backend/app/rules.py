@@ -1,18 +1,24 @@
 """
-Rule engine: an alternative to a custom Python script for processing events,
-using GoRules' open-source "Zen Engine" (JSON Decision Model / JDM) instead
-of code. A JDM decision graph is plain JSON data (nodes + edges - decision
-tables, expressions, switch nodes, etc.) rather than executable code, so
-unlike uploaded processor scripts, evaluating a rule is NOT run in a
-subprocess - the Zen Engine's evaluator only interprets declarative decision
-logic, it cannot execute arbitrary code or make network/filesystem calls, so
-there's no meaningful sandboxing concern here the way there is for uploaded
-Python scripts.
+Rule engine: a validation gate for deciding *whether* an event should be
+processed at all, using GoRules' open-source "Zen Engine" (JSON Decision
+Model / JDM) instead of code. A JDM decision graph is plain JSON data
+(nodes + edges - decision tables, expressions, switch nodes, etc.) rather
+than executable code, so unlike uploaded processor scripts, evaluating a
+rule is NOT run in a subprocess - the Zen Engine's evaluator only
+interprets declarative decision logic, it cannot execute arbitrary code or
+make network/filesystem calls, so there's no meaningful sandboxing concern
+here the way there is for uploaded Python scripts.
+
+This is deliberately NOT a processing mode (it doesn't replace DSSClient/
+Langflow/custom scripts/local) - it's a gate that runs before whichever of
+those actually processes the event. See worker.py:evaluate_rule_gate() and
+its use in inbound_worker().
 
 Rules are authored as JDM JSON - the easiest way is GoRules' free online
 visual editor (https://editor.gorules.io): build a decision table/graph
 there, export the JSON, and paste/upload it here. The graph's input is the
-Salesforce event payload; its output becomes the processing result.
+Salesforce event payload; its output must include a boolean `process` field
+(true/omitted = continue processing, false = skip this event).
 """
 import time
 from typing import Optional
@@ -82,18 +88,21 @@ EXAMPLE_JDM = {
         {"id": "input1", "name": "Request", "type": "inputNode", "position": {"x": 0, "y": 0}},
         {"id": "output1", "name": "Response", "type": "outputNode", "position": {"x": 500, "y": 0}},
         {
-            "id": "table1", "name": "Approval rules", "type": "decisionTableNode",
+            "id": "table1", "name": "Processing gate", "type": "decisionTableNode",
             "position": {"x": 250, "y": 0},
             "content": {
                 "hitPolicy": "first",
                 "inputs": [{"id": "in1", "name": "Amount", "field": "amount"}],
                 "outputs": [
-                    {"id": "out1", "name": "approved", "field": "approved"},
+                    # The "process" field is the gate convention this engine looks for:
+                    # true/omitted = let the event continue to normal processing,
+                    # false = skip it entirely (never processed or published).
+                    {"id": "out1", "name": "process", "field": "process"},
                     {"id": "out2", "name": "reason", "field": "reason"},
                 ],
                 "rules": [
-                    {"in1": ">1000", "out1": "false", "out2": "\"Amount exceeds auto-approval limit\""},
-                    {"in1": "", "out1": "true", "out2": "\"Auto-approved\""},
+                    {"in1": ">1000", "out1": "false", "out2": "\"Amount exceeds the threshold for automatic processing\""},
+                    {"in1": "", "out1": "true", "out2": "\"Within threshold\""},
                 ],
             },
         },

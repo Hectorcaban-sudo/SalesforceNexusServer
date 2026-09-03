@@ -40,7 +40,7 @@ async def update_event_config(config_id: str, updates: EventConfigUpdate):
     # per-event override and fall back to the global default" - model_dump()
     # filtering above only drops actual None values, so "" would otherwise
     # get stored as a literal empty string instead of being cleared.
-    for field in ("processing_mode", "processor_id"):
+    for field in ("processing_mode", "processor_id", "rule_id"):
         if field in data and data[field] == "":
             data[field] = None
     event_configs_table.update(data, Q.id == config_id)
