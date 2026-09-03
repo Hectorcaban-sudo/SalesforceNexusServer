@@ -79,7 +79,7 @@ def test_processor(processor_id: str, req: ProcessorTestRequest):
     if not existing:
         raise HTTPException(404, "Processor not found")
     try:
-        result = proc_module.run_processor(processor_id, req.payload)
+        result = proc_module.run_processor(processor_id, req.payload, req.org_id)
         processors_table.update({"last_status": "ok", "last_run_at": now_ts(), "last_error": None}, Q.id == processor_id)
         return {"detail": "Processor ran successfully", "result": result}
     except Exception as exc:  # noqa: BLE001

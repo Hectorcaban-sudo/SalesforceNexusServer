@@ -25,13 +25,14 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   infra), or a real RabbitMQ server for durability, chosen from Admin Configuration. Both sit behind
   the same interface so nothing else in the app needs to know which one is active. See "Message
   broker" below.
-- **Pluggable worker/processor** — `app/worker.py:process_payload()` supports four interchangeable
+- **Pluggable worker/processor** — `app/worker.py:process_payload()` supports five interchangeable
   processing modes, switchable globally from Admin Configuration *or* per subscribed event channel:
-  a **local fallback**, a **Dataiku DSS LLM** call (via `dataikuapi`), a **Langflow** flow, or an
-  **uploaded custom
-  Python script**. Upload a `.py` file that reads a JSON payload from stdin and prints a JSON result
-  to stdout; it runs in an isolated subprocess with a timeout. See "Custom payload processors" and
-  "Per-event processor override" below.
+  a **local fallback**, a **Dataiku DSS LLM** call (via `dataikuapi`), a **Langflow** flow, an
+  **uploaded custom Python script**, or a **GoRules JDM rule** (Zen Engine — no code, just a
+  decision graph). A processor script also gets the triggering org's Salesforce credentials and the
+  rest of admin configuration (DSSClient/Langflow/Email) via environment variables, so it can call
+  out to Salesforce or send its own email directly. See "Custom payload processors", "Rule engine",
+  and "Per-event processor override" below.
 - **Graphical event routing** — for any subscribed event channel, visually select (checkboxes) which
   publish channels, integration hooks, *and* alert rules the processed result should fan out to,
   instead of one implicit default channel. See "Event routing" below.
@@ -114,17 +115,20 @@ sfnexus/
 │   │   ├── broker.py             Message broker: internal in-process queues or RabbitMQ (aio-pika)
 │   │   ├── cometd_client.py      Per-org CometD subscription manager with auto-reconnect/backoff
 │   │   ├── salesforce_client.py  OAuth login + publish Platform Events via REST
-│   │   ├── integrations.py        Outbound fan-out: webhook/Slack/Teams/Snowflake/BigQuery/custom
+│   │   ├── integrations.py        Outbound fan-out: webhook/Slack/Teams/Email/Snowflake/BigQuery/custom
 │   │   ├── processors.py          Uploaded Python processor storage + isolated subprocess execution
-│   │   ├── alerts.py               Alert rules - fires on failure, delivers via an integration sink
+│   │   │                         (with org/admin-config context passed via env vars)
+│   │   ├── rules.py                GoRules JDM decision graph storage + evaluation (Zen Engine)
+│   │   ├── alerts.py               Alert rules - fire on success/failure, deliver via an integration sink
 │   │   ├── worker.py             The "internal function": processes inbound events
-│   │   │                         (via DSSClient/Langflow/custom script if configured), fans results
-│   │   │                         out to selected publish channels + integrations + alerts, and
-│   │   │                         handles reprocessing
+│   │   │                         (via DSSClient/Langflow/custom script/rule engine if configured),
+│   │   │                         fans results out to selected publish channels + integrations +
+│   │   │                         alerts, and handles reprocessing
 │   │   ├── transactions.py       Transaction audit-trail helpers
 │   │   └── routers/              /api/auth, /api/orgs, /api/events, /api/transactions,
 │   │                             /api/logs, /api/dashboard, /api/admin-config, /api/users,
-│   │                             /api/integrations, /api/processors, /api/alerts, /api/execute
+│   │                             /api/integrations, /api/processors, /api/alerts, /api/execute,
+│   │                             /api/rules
 │   ├── dev_tools/
 │   │   └── fake_oidc_provider.py  Local fake IdP for testing SSO without a real provider
 │   ├── data/                     nexus.db (SQLite) lives here (gitignored)
@@ -278,8 +282,10 @@ can be traced end-to-end by its `transaction_id` span attribute.
 
 ## Integrations (outbound fan-out)
 
-From **Integrations** in the admin console (admin role required), configure any number of sinks
-that every processed transaction is fanned out to, independent of the Salesforce publish step:
+From **Integrations** in the admin console (admin role required — viewing the list only needs any
+authenticated role), **add, edit, or delete** any number of sinks that every processed transaction
+is fanned out to, independent of the Salesforce publish step (the sink's type is fixed once
+created; everything else — name, config, trigger, org scope, alert-only flag — can be edited later):
 
 - **Webhook** — POSTs the full transaction JSON to a URL you provide; optionally HMAC-signs the
   body (`X-Nexus-Signature: sha256=...`) if you set a signing secret.
@@ -340,6 +346,51 @@ with the same OS-level filesystem/network permissions as the server process. Thi
 sandbox. Uploading a processor script is admin-only and should be treated like deploying new server
 code: only from sources you trust.
 
+### Context available to a processor: org settings, admin config, email
+
+A processor can read two environment variables to interact with the rest of the system without any
+imports:
+
+- `NEXUS_ORG` — the Salesforce org that triggered this event: `login_url`, `auth_type`,
+  `client_id`/`client_secret`, `username`/`password`/`security_token`, `api_version`. `"{}"` if
+  there's no org context (e.g. a manual test run with no org selected).
+- `NEXUS_ADMIN_CONFIG` — `{"dss_client": {...}, "langflow": {...}, "email": {...},
+  "processing_mode": {...}}`, the same (unmasked) configuration the built-in processing modes use.
+
+```python
+import os, json
+org = json.loads(os.environ.get("NEXUS_ORG", "{}"))
+admin_config = json.loads(os.environ.get("NEXUS_ADMIN_CONFIG", "{}"))
+# e.g. call Salesforce directly using org's credentials, or send your own
+# email via smtplib using admin_config["email"]
+```
+
+**This meaningfully expands what an uploaded script can do** — it now has every Salesforce org
+credential and every configured API key/SMTP password available to it, not just the payload.
+This is consistent with the existing trust model (a processor upload is already treated as
+equivalent to deploying server code), but it raises the stakes: only upload processors you trust
+as much as your own server code.
+
+## Rule engine (GoRules JDM / Zen Engine)
+
+A fifth processing mode alongside local/DSSClient/Langflow/custom script: **Rules**, evaluated by
+GoRules' open-source [Zen Engine](https://gorules.io) against the JSON Decision Model (JDM)
+standard. A rule is a *declarative decision graph* (decision tables, expressions, switch nodes),
+not executable code — build one visually at the free [editor.gorules.io](https://editor.gorules.io),
+export the JSON, and paste/upload it from Admin Configuration → **Rules**. The graph's input is the
+event payload; its output becomes the processing result.
+
+Because a rule is data rather than code, it runs directly in-process (no subprocess isolation
+needed the way uploaded scripts require) and can't execute arbitrary code or make network calls —
+it only evaluates the decision logic you defined.
+
+- Use the **Test** button to evaluate a rule against a sample payload before activating it.
+- Only one rule is "active" globally at a time (Admin Configuration → Processing mode → Rule
+  engine), or pin a specific rule to an individual event channel the same way as custom scripts
+  (see "Per-event processor override" below).
+- An invalid decision graph is rejected at save time with a descriptive error, and any evaluation
+  failure falls back to local processing so the pipeline never breaks.
+
 ## Event routing
 
 Each **subscribed** event channel (Event Configuration page) has a **Routing** button that opens a
@@ -367,31 +418,36 @@ fire off of it.
 ## Alerts
 
 Admin Configuration → **Alerts** (its own page, alongside Integrations) notifies you through an
-existing integration sink when something fails:
+existing integration sink when something happens:
 
 | Scope | Fires when |
 |---|---|
-| `transaction_failed` | Any transaction (or a specific event channel's, via routing) ends in `failed` |
+| `transaction` | Any transaction (or a specific event channel's, via routing) reaches a terminal state — controlled by its own **trigger**: `always`, `on_success`, or `on_failure` (default) |
 | `connection_failed` | A Salesforce org's CometD connection goes down — fires once per outage, not on every retry |
 | `integration_failed` | An integration dispatch raises an exception |
 | `broker_degraded` | The configured RabbitMQ broker fails to connect at startup |
+
+The `transaction` scope can be used for both success and failure notifications (e.g. "notify me
+whenever a high-value transaction publishes successfully" as well as "page me when anything
+fails") — set its `trigger` when creating or editing the alert. The other three scopes are
+inherently single-outcome events with no natural success counterpart.
 
 Alerts deliver through the same sender functions as normal integrations (webhook/Slack/Teams/**email**/custom
 API), so any integration you've already configured can double as an alert channel — including a
 dedicated email integration for on-call notifications (see "Email" below). If you want a
 channel used *only* for alerts — not also receiving normal per-transaction fan-out — mark it
 **alert-only** on the Integrations page; otherwise a channel with `trigger="always"` and no org
-scope would fire twice for the same failure (once from normal dispatch, once from the alert). Use
+scope would fire twice for the same outcome (once from normal dispatch, once from the alert). Use
 the **Test** button on any alert to confirm delivery before relying on it.
 
 ## Per-event processor override
 
 The same **Route & process** dialog also lets an individual subscribed channel pin its own
-processing mode (Local / DSSClient / Langflow / Custom uploaded script — and which script) instead
-of using the global Admin Configuration default. This is resolved per event at processing time
-(`worker.py:_resolve_processing()`); leaving it on "Use global default" preserves existing behavior.
-Useful when different event types need different handling — e.g. one channel always uses a specific
-custom script while everything else uses the global DSSClient setting.
+processing mode (Local / DSSClient / Langflow / Custom uploaded script / Rule engine — and which
+script or rule) instead of using the global Admin Configuration default. This is resolved per event
+at processing time (`worker.py:_resolve_processing()`); leaving it on "Use global default" preserves
+existing behavior. Useful when different event types need different handling — e.g. one channel
+always runs through a specific rule while everything else uses the global DSSClient setting.
 
 ## Reliability & threading
 

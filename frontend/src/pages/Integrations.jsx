@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Send, Share2, Webhook, MessageSquare, Database, Cloud, Link2, BellOff, Mail } from 'lucide-react'
+import { Plus, Trash2, Send, Share2, Webhook, MessageSquare, Database, Cloud, Link2, BellOff, Mail, Pencil } from 'lucide-react'
 import api from '../lib/api'
 import { TruncatedWithPopup } from '../components/UI'
 
@@ -29,6 +29,7 @@ export default function Integrations() {
   const [orgs, setOrgs] = useState([])
   const [items, setItems] = useState([])
   const [modalOpen, setModalOpen] = useState(false)
+  const [editingId, setEditingId] = useState(null)
   const [form, setForm] = useState(EMPTY)
   const [saving, setSaving] = useState(false)
   const [testResult, setTestResult] = useState(null)
@@ -42,7 +43,23 @@ export default function Integrations() {
   useEffect(() => { load() }, [])
 
   function openCreate() {
+    setEditingId(null)
     setForm(EMPTY)
+    setTestResult(null)
+    setModalOpen(true)
+  }
+
+  function openEdit(item) {
+    setEditingId(item.id)
+    setForm({
+      name: item.name,
+      type: item.type,
+      enabled: item.enabled,
+      trigger: item.trigger,
+      org_id: item.org_id || '',
+      alert_only: item.alert_only || false,
+      config: { ...DEFAULT_CONFIG[item.type], ...item.config },
+    })
     setTestResult(null)
     setModalOpen(true)
   }
@@ -60,7 +77,13 @@ export default function Integrations() {
     setSaving(true)
     try {
       const payload = { ...form, org_id: form.org_id || null }
-      await api.post('/integrations', payload)
+      if (editingId) {
+        // type is immutable once created - editing only touches the fields below
+        const { type, ...updatable } = payload
+        await api.put(`/integrations/${editingId}`, updatable)
+      } else {
+        await api.post('/integrations', payload)
+      }
       setModalOpen(false)
       load()
     } finally {
@@ -156,6 +179,7 @@ export default function Integrations() {
 
               <div className="org-card-actions">
                 <button className="btn btn-sm" onClick={() => toggle(item)}>{item.enabled ? 'Disable' : 'Enable'}</button>
+                <button className="btn btn-sm" onClick={() => openEdit(item)}><Pencil size={13} /> Edit</button>
                 <button className="btn btn-sm" onClick={() => sendTest(item)}><Send size={13} /> Test</button>
                 <button className="btn btn-sm btn-icon btn-danger" onClick={() => remove(item)}><Trash2 size={13} /></button>
               </div>
@@ -167,7 +191,7 @@ export default function Integrations() {
       {modalOpen && (
         <div className="modal-overlay" onClick={() => setModalOpen(false)}>
           <div className="modal-box" onClick={(e) => e.stopPropagation()}>
-            <div className="panel-header"><h3><Share2 size={15} /> Add integration</h3></div>
+            <div className="panel-header"><h3><Share2 size={15} /> {editingId ? 'Edit integration' : 'Add integration'}</h3></div>
             <form onSubmit={save}>
               <div className="panel-body">
                 <div className="field">
@@ -175,8 +199,8 @@ export default function Integrations() {
                   <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Ops Slack channel, Snowflake events table…" />
                 </div>
                 <div className="field">
-                  <label>Type</label>
-                  <select value={form.type} onChange={(e) => setType(e.target.value)}>
+                  <label>Type{editingId && ' (cannot be changed after creation)'}</label>
+                  <select value={form.type} onChange={(e) => setType(e.target.value)} disabled={!!editingId}>
                     {Object.entries(TYPE_META).map(([key, meta]) => (
                       <option key={key} value={key}>{meta.label}</option>
                     ))}
@@ -286,7 +310,7 @@ export default function Integrations() {
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn" onClick={() => setModalOpen(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : 'Save integration'}</button>
+                <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : editingId ? 'Save changes' : 'Save integration'}</button>
               </div>
             </form>
           </div>

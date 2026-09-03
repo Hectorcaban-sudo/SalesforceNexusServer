@@ -27,6 +27,7 @@ from .routers import integrations as integrations_router
 from .routers import processors as processors_router
 from .routers import alerts as alerts_router
 from .routers import execute as execute_router
+from .routers import rules as rules_router
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIST = BACKEND_DIR.parent / "frontend" / "dist"
@@ -87,6 +88,7 @@ app.include_router(integrations_router.router)
 app.include_router(processors_router.router)
 app.include_router(alerts_router.router)
 app.include_router(execute_router.router)
+app.include_router(rules_router.router)
 
 
 @app.get("/api/health")

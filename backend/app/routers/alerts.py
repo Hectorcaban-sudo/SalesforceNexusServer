@@ -55,12 +55,14 @@ def test_alert(alert_id: str):
     from ..alerts import _deliver  # noqa: PLC0415
 
     try:
+        test_status = "failed" if rule.get("trigger", "on_failure") != "on_success" else "published"
         _deliver(rule, {
             "transaction_id": "test-" + new_id(),
             "org_id": rule.get("org_id"),
             "org_name": "Test Org",
             "channel": rule["scope"],
-            "error": "This is a test alert from Salesforce Nexus AI Server",
+            "status": test_status,
+            "error": "This is a test alert from Salesforce Nexus AI Server" if test_status == "failed" else None,
         })
         updated = alerts_table.get(Q.id == alert_id)
         if updated.get("last_status") == "error":

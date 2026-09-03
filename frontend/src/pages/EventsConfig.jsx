@@ -25,15 +25,17 @@ export default function EventsConfig() {
   const [routingProcessorId, setRoutingProcessorId] = useState('')
   const [routingAutoPublish, setRoutingAutoPublish] = useState(true)
   const [processors, setProcessors] = useState([])
+  const [rules, setRules] = useState([])
   const [savingRouting, setSavingRouting] = useState(false)
 
   async function load() {
-    const [o, c, i, p, a] = await Promise.all([api.get('/orgs'), api.get('/events'), api.get('/integrations'), api.get('/processors'), api.get('/alerts')])
+    const [o, c, i, p, a, r] = await Promise.all([api.get('/orgs'), api.get('/events'), api.get('/integrations'), api.get('/processors'), api.get('/alerts'), api.get('/rules')])
     setOrgs(o.data)
     setConfigs(c.data)
     setIntegrations(i.data)
     setProcessors(p.data)
     setAlerts(a.data)
+    setRules(r.data)
   }
 
   useEffect(() => { load() }, [])
@@ -105,7 +107,7 @@ export default function EventsConfig() {
         route_integration_ids: routingIntegrations,
         route_alert_ids: routingAlerts,
         processing_mode: routingProcessingMode || '',
-        processor_id: routingProcessingMode === 'custom_script' ? routingProcessorId : '',
+        processor_id: (routingProcessingMode === 'custom_script' || routingProcessingMode === 'rule_engine') ? routingProcessorId : '',
         auto_publish: routingAutoPublish,
       })
       setRoutingTarget(null)
@@ -302,18 +304,25 @@ export default function EventsConfig() {
                 <select
                   value={routingProcessingMode}
                   onChange={(e) => setRoutingProcessingMode(e.target.value)}
-                  style={{ marginBottom: routingProcessingMode === 'custom_script' ? 10 : 18 }}
+                  style={{ marginBottom: (routingProcessingMode === 'custom_script' || routingProcessingMode === 'rule_engine') ? 10 : 18 }}
                 >
                   <option value="">Use global default</option>
                   <option value="local">Local fallback</option>
                   <option value="dss_client">DSSClient</option>
                   <option value="langflow">Langflow</option>
                   <option value="custom_script">Custom uploaded script</option>
+                  <option value="rule_engine">Rule engine</option>
                 </select>
                 {routingProcessingMode === 'custom_script' && (
                   <select value={routingProcessorId} onChange={(e) => setRoutingProcessorId(e.target.value)} style={{ marginBottom: 18 }}>
                     <option value="">Select an uploaded processor…</option>
                     {processors.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                )}
+                {routingProcessingMode === 'rule_engine' && (
+                  <select value={routingProcessorId} onChange={(e) => setRoutingProcessorId(e.target.value)} style={{ marginBottom: 18 }}>
+                    <option value="">Select a rule…</option>
+                    {rules.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                   </select>
                 )}
 
@@ -377,7 +386,7 @@ export default function EventsConfig() {
                   <div className="empty-state" style={{ padding: '14px 0' }}>No alerts configured yet.</div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {alerts.filter((a) => a.scope === 'transaction_failed').map((a) => (
+                    {alerts.filter((a) => a.scope === 'transaction').map((a) => (
                       <label key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 9, margin: 0, cursor: 'pointer', fontSize: 13 }}>
                         <input
                           type="checkbox"

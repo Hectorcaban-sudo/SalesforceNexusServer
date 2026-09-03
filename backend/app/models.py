@@ -125,8 +125,8 @@ class EventConfigBase(BaseModel):
     # entries): pins this channel to a specific processing mode/processor
     # instead of using the global Admin Configuration default. None/omitted
     # means "use the global default".
-    processing_mode: Optional[str] = None      # "local" | "dss_client" | "custom_script" | "langflow"
-    processor_id: Optional[str] = None          # used when processing_mode == "custom_script"
+    processing_mode: Optional[str] = None      # "local" | "dss_client" | "custom_script" | "langflow" | "rule_engine"
+    processor_id: Optional[str] = None          # the uploaded processor's id (custom_script) or rule's id (rule_engine)
     # Only meaningful on direction="subscribe" entries. When False, receiving
     # and processing an event on this channel does NOT automatically publish
     # the result back to Salesforce - it's still processed, and any routed
@@ -285,6 +285,7 @@ class ProcessingMode(str, Enum):
     dss_client = "dss_client"
     custom_script = "custom_script"
     langflow = "langflow"
+    rule_engine = "rule_engine"
 
 
 class ProcessingModeConfig(BaseModel):
@@ -293,6 +294,36 @@ class ProcessingModeConfig(BaseModel):
 
 
 class ProcessorTestRequest(BaseModel):
+    payload: dict = Field(default_factory=lambda: {"Message__c": "test payload"})
+    org_id: Optional[str] = None   # optional: test with a real org's settings available via NEXUS_ORG
+
+
+# ---------- Rule engine (GoRules JSON Decision Model / "Zen Engine") ----------
+class RuleCreate(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    jdm: dict     # the JSON Decision Model decision graph (nodes/edges), e.g. exported from https://editor.gorules.io
+
+
+class RuleUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    jdm: Optional[dict] = None
+
+
+class RuleOut(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = ""
+    uploaded_at: float
+    last_status: Optional[str] = None
+    last_run_at: Optional[float] = None
+    last_error: Optional[str] = None
+    # jdm is intentionally omitted from the list/summary response (can be
+    # large); fetch it via GET /api/rules/{id}/jdm when needed (e.g. to edit).
+
+
+class RuleTestRequest(BaseModel):
     payload: dict = Field(default_factory=lambda: {"Message__c": "test payload"})
 
 
@@ -378,10 +409,16 @@ class IntegrationOut(IntegrationBase):
 
 # ---------- Alerts ----------
 class AlertScope(str, Enum):
-    transaction_failed = "transaction_failed"       # a transaction (any direction) ended in "failed"
+    transaction = "transaction"                      # a transaction (any direction) reached a terminal state - see `trigger`
     connection_failed = "connection_failed"         # a Salesforce org's CometD connection went to "error"
     integration_failed = "integration_failed"       # an integration sink dispatch raised an exception
     broker_degraded = "broker_degraded"             # configured RabbitMQ broker failed to connect at startup
+
+
+class AlertTrigger(str, Enum):
+    always = "always"            # fire on every terminal transaction (published/processed/failed)
+    on_success = "on_success"    # fire only when the transaction succeeded (published or processed with no error)
+    on_failure = "on_failure"    # fire only when the transaction failed (default - matches prior behavior)
 
 
 class AlertBase(BaseModel):
@@ -390,6 +427,10 @@ class AlertBase(BaseModel):
     enabled: bool = True
     org_id: Optional[str] = None       # None = applies to every org (ignored for broker_degraded)
     integration_id: str                # which configured integration sink delivers this alert
+    # Only meaningful when scope == "transaction". Other scopes are inherently
+    # single-outcome events (a connection/integration/broker failure) with no
+    # natural "success" counterpart, so trigger is ignored for those.
+    trigger: AlertTrigger = AlertTrigger.on_failure
 
 
 class AlertCreate(AlertBase):
@@ -401,6 +442,7 @@ class AlertUpdate(BaseModel):
     enabled: Optional[bool] = None
     org_id: Optional[str] = None
     integration_id: Optional[str] = None
+    trigger: Optional[AlertTrigger] = None
 
 
 class AlertOut(AlertBase):

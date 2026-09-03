@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   SlidersHorizontal, Save, CheckCircle2, CircleDashed, Upload, Trash2, Play,
   FileCode2, Download, Radio, Network, DatabaseZap, FileDown, FileUp, AlertTriangle,
-  Workflow, Mail,
+  Workflow, Mail, GitFork, Plus, Pencil,
 } from 'lucide-react'
 import api from '../lib/api'
 
@@ -16,6 +16,7 @@ const TABS = [
   { key: 'dss', label: 'DSSClient', icon: SlidersHorizontal },
   { key: 'langflow', label: 'Langflow', icon: Workflow },
   { key: 'processors', label: 'Payload processors', icon: FileCode2 },
+  { key: 'rules', label: 'Rules', icon: GitFork },
   { key: 'broker', label: 'Message broker', icon: Network },
   { key: 'email', label: 'Email', icon: Mail },
   { key: 'backup', label: 'Configuration backup', icon: FileDown },
@@ -48,6 +49,15 @@ export default function AdminConfig() {
   const [testResult, setTestResult] = useState(null)
   const fileInputRef = useRef(null)
 
+  // ---- Rules ----
+  const [rules, setRules] = useState([])
+  const [ruleModalOpen, setRuleModalOpen] = useState(false)
+  const [editingRuleId, setEditingRuleId] = useState(null)
+  const [ruleForm, setRuleForm] = useState({ name: '', description: '', jdmText: '' })
+  const [ruleSaving, setRuleSaving] = useState(false)
+  const [ruleError, setRuleError] = useState('')
+  const [ruleTestResult, setRuleTestResult] = useState(null)
+
   // ---- Message broker ----
   const [brokerType, setBrokerType] = useState('internal')
   const [rmqForm, setRmqForm] = useState(EMPTY_RMQ)
@@ -66,13 +76,14 @@ export default function AdminConfig() {
   const importInputRef = useRef(null)
 
   async function load() {
-    const [dss, lf, pm, procs, brk, email] = await Promise.all([
+    const [dss, lf, pm, procs, brk, email, rls] = await Promise.all([
       api.get('/admin-config/dss-client'),
       api.get('/admin-config/langflow'),
       api.get('/admin-config/processing-mode'),
       api.get('/processors'),
       api.get('/admin-config/broker'),
       api.get('/admin-config/email'),
+      api.get('/rules'),
     ])
     setDssForm({ url: dss.data.url, project_name: dss.data.project_name, llm: dss.data.llm, api_key: '' })
     setDssConfigured(dss.data.configured)
@@ -81,6 +92,7 @@ export default function AdminConfig() {
     setMode(pm.data.mode)
     setActiveProcessorId(pm.data.active_processor_id || '')
     setProcessors(procs.data)
+    setRules(rls.data)
     setBrokerType(brk.data.type)
     setRmqForm({ ...brk.data.rabbitmq, password: '' })
     setActiveBackend(brk.data.active_backend)
@@ -130,9 +142,10 @@ export default function AdminConfig() {
   async function saveMode(newMode, newActiveId) {
     setMode(newMode)
     if (newActiveId !== undefined) setActiveProcessorId(newActiveId)
+    const usesId = newMode === 'custom_script' || newMode === 'rule_engine'
     await api.put('/admin-config/processing-mode', {
       mode: newMode,
-      active_processor_id: newMode === 'custom_script' ? (newActiveId ?? activeProcessorId) || null : activeProcessorId || null,
+      active_processor_id: usesId ? (newActiveId ?? activeProcessorId) || null : null,
     })
     flashToast('Processing mode updated')
   }
@@ -186,6 +199,81 @@ export default function AdminConfig() {
       await saveMode('local', null)
     }
     await api.delete(`/processors/${p.id}`)
+    load()
+  }
+
+  function openCreateRule() {
+    setEditingRuleId(null)
+    setRuleForm({ name: '', description: '', jdmText: '' })
+    setRuleError('')
+    setRuleTestResult(null)
+    setRuleModalOpen(true)
+  }
+
+  async function openEditRule(rule) {
+    const { data } = await api.get(`/rules/${rule.id}/jdm`)
+    setEditingRuleId(rule.id)
+    setRuleForm({ name: rule.name, description: rule.description || '', jdmText: JSON.stringify(data.jdm, null, 2) })
+    setRuleError('')
+    setRuleTestResult(null)
+    setRuleModalOpen(true)
+  }
+
+  async function loadExampleJdm() {
+    const { data } = await api.get('/rules/example')
+    setRuleForm({ ...ruleForm, jdmText: JSON.stringify(data.jdm, null, 2) })
+  }
+
+  async function importJdmFile(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    const text = await file.text()
+    setRuleForm({ ...ruleForm, jdmText: text })
+  }
+
+  async function saveRule(e) {
+    e.preventDefault()
+    setRuleError('')
+    let jdm
+    try {
+      jdm = JSON.parse(ruleForm.jdmText)
+    } catch {
+      setRuleError('The decision graph is not valid JSON')
+      return
+    }
+    setRuleSaving(true)
+    try {
+      if (editingRuleId) {
+        await api.put(`/rules/${editingRuleId}`, { name: ruleForm.name, description: ruleForm.description, jdm })
+      } else {
+        await api.post('/rules', { name: ruleForm.name, description: ruleForm.description, jdm })
+      }
+      setRuleModalOpen(false)
+      load()
+    } catch (err) {
+      setRuleError(err?.response?.data?.detail || 'Failed to save rule')
+    } finally {
+      setRuleSaving(false)
+    }
+  }
+
+  async function testRuleInline(ruleId) {
+    setRuleTestResult({ id: ruleId, status: 'running' })
+    try {
+      const { data } = await api.post(`/rules/${ruleId}/test`, { payload: { Message__c: 'test payload' } })
+      setRuleTestResult({ id: ruleId, status: 'ok', detail: JSON.stringify(data.result) })
+    } catch (err) {
+      setRuleTestResult({ id: ruleId, status: 'fail', detail: err?.response?.data?.detail })
+    }
+    load()
+  }
+
+  async function removeRule(rule) {
+    if (!confirm(`Delete rule "${rule.name}"?`)) return
+    if (activeProcessorId === rule.id) {
+      await saveMode('local', null)
+    }
+    await api.delete(`/rules/${rule.id}`)
     load()
   }
 
@@ -280,7 +368,7 @@ export default function AdminConfig() {
                   specific subscribed event channel overrides it (Event Configuration → Route &amp; process).
                 </p>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                  {['local', 'dss_client', 'langflow', 'custom_script'].map((m) => (
+                  {['local', 'dss_client', 'langflow', 'custom_script', 'rule_engine'].map((m) => (
                     <div
                       key={m}
                       className={`tab-pill ${mode === m ? 'active' : ''}`}
@@ -291,6 +379,7 @@ export default function AdminConfig() {
                       {m === 'dss_client' && 'DSSClient'}
                       {m === 'langflow' && 'Langflow'}
                       {m === 'custom_script' && 'Custom uploaded script'}
+                      {m === 'rule_engine' && 'Rule engine'}
                     </div>
                   ))}
                 </div>
@@ -300,6 +389,15 @@ export default function AdminConfig() {
                     <select value={activeProcessorId} onChange={(e) => saveMode('custom_script', e.target.value)}>
                       <option value="">Select an uploaded processor…</option>
                       {processors.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  </div>
+                )}
+                {mode === 'rule_engine' && (
+                  <div className="field" style={{ marginTop: 14 }}>
+                    <label>Active rule</label>
+                    <select value={activeProcessorId} onChange={(e) => saveMode('rule_engine', e.target.value)}>
+                      <option value="">Select a rule…</option>
+                      {rules.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                     </select>
                   </div>
                 )}
@@ -462,6 +560,62 @@ export default function AdminConfig() {
             </div>
           )}
 
+          {tab === 'rules' && (
+            <div className="panel" style={{ maxWidth: 720 }}>
+              <div className="panel-header">
+                <h3><GitFork size={15} /> Rules (GoRules JDM / Zen Engine)</h3>
+                <button className="btn btn-sm" onClick={openCreateRule}><Plus size={13} /> Add rule</button>
+              </div>
+              <div className="panel-body">
+                <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
+                  A rule is a JSON Decision Model (JDM) decision graph — build one visually at{' '}
+                  <a href="https://editor.gorules.io" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-cyan)' }}>editor.gorules.io</a>{' '}
+                  and paste/upload the exported JSON, or start from the built-in example. Unlike uploaded scripts, a
+                  rule is declarative data (no code execution), evaluated directly against the event payload.
+                </p>
+
+                {rules.length === 0 ? (
+                  <div className="empty-state">No rules created yet.</div>
+                ) : (
+                  <table>
+                    <thead><tr><th>Name</th><th>Description</th><th>Last test</th><th></th></tr></thead>
+                    <tbody>
+                      {rules.map((r) => (
+                        <tr key={r.id}>
+                          <td>
+                            {r.name}
+                            {activeProcessorId === r.id && mode === 'rule_engine' && (
+                              <span className="badge badge-blue" style={{ marginLeft: 8 }}><span className="badge-dot" />Active</span>
+                            )}
+                          </td>
+                          <td style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{r.description || '—'}</td>
+                          <td>
+                            {r.last_status ? (
+                              <span className={`badge ${r.last_status === 'ok' ? 'badge-green' : 'badge-red'}`}>
+                                <span className="badge-dot" />{r.last_status}
+                              </span>
+                            ) : <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>never run</span>}
+                          </td>
+                          <td style={{ display: 'flex', gap: 6 }}>
+                            <button className="btn btn-sm btn-icon" title="Edit" onClick={() => openEditRule(r)}><Pencil size={13} /></button>
+                            <button className="btn btn-sm btn-icon" title="Test run" onClick={() => testRuleInline(r.id)}><Play size={13} /></button>
+                            <button className="btn btn-sm btn-icon btn-danger" onClick={() => removeRule(r)}><Trash2 size={13} /></button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+
+                {ruleTestResult && (
+                  <div style={{ marginTop: 12, fontSize: 12, color: ruleTestResult.status === 'ok' ? 'var(--accent-green)' : ruleTestResult.status === 'fail' ? 'var(--accent-red)' : 'var(--text-muted)' }}>
+                    {ruleTestResult.status === 'running' ? 'Running test…' : ruleTestResult.status === 'ok' ? `Result: ${ruleTestResult.detail}` : `Failed: ${ruleTestResult.detail}`}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {tab === 'broker' && (
             <div className="panel" style={{ maxWidth: 720 }}>
               <div className="panel-header">
@@ -602,6 +756,52 @@ export default function AdminConfig() {
             </div>
           )}
         </>
+      )}
+
+      {ruleModalOpen && (
+        <div className="modal-overlay" onClick={() => setRuleModalOpen(false)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ width: 640 }}>
+            <div className="panel-header"><h3><GitFork size={15} /> {editingRuleId ? 'Edit rule' : 'Add rule'}</h3></div>
+            <form onSubmit={saveRule}>
+              <div className="panel-body">
+                <div className="field">
+                  <label>Name</label>
+                  <input required value={ruleForm.name} onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })} placeholder="Amount approval rule" />
+                </div>
+                <div className="field">
+                  <label>Description (optional)</label>
+                  <input value={ruleForm.description} onChange={(e) => setRuleForm({ ...ruleForm, description: e.target.value })} />
+                </div>
+                <div className="field">
+                  <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    Decision graph (JDM JSON)
+                    <span style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" className="btn btn-sm" onClick={loadExampleJdm}>Load example</button>
+                      <label className="btn btn-sm" style={{ margin: 0, cursor: 'pointer' }}>
+                        Upload .json
+                        <input type="file" accept=".json" style={{ display: 'none' }} onChange={importJdmFile} />
+                      </label>
+                    </span>
+                  </label>
+                  <textarea
+                    required
+                    rows={12}
+                    className="mono"
+                    style={{ fontSize: 11.5 }}
+                    value={ruleForm.jdmText}
+                    onChange={(e) => setRuleForm({ ...ruleForm, jdmText: e.target.value })}
+                    placeholder="Paste JDM JSON exported from editor.gorules.io, or click Load example"
+                  />
+                </div>
+                {ruleError && <div style={{ color: 'var(--accent-red)', fontSize: 12.5 }}>{ruleError}</div>}
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn" onClick={() => setRuleModalOpen(false)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={ruleSaving}>{ruleSaving ? 'Saving…' : editingRuleId ? 'Save changes' : 'Save rule'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   )

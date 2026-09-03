@@ -18,6 +18,11 @@ aio-pika==10.0.1
 # incompatibilities - Dataiku recommends the client version track the server.
 dataiku-api-client==15.0.0
 
+# Rule engine (used by the "rule_engine" payload processing mode) - executes
+# GoRules JSON Decision Model (JDM) decision graphs, e.g. exported from the
+# free online editor at https://editor.gorules.io
+zen-engine==2.0.2
+
 # OpenTelemetry (tracing is safe to leave unconfigured - see app/tracing.py)
 opentelemetry-api==1.27.0
 opentelemetry-sdk==1.27.0

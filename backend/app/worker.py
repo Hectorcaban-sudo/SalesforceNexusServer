@@ -126,7 +126,7 @@ def run_langflow(payload: dict) -> dict:
     }
 
 
-def process_payload(payload: dict, mode_override: Optional[str] = None, processor_id_override: Optional[str] = None) -> dict:
+def process_payload(payload: dict, mode_override: Optional[str] = None, processor_id_override: Optional[str] = None, org_id: Optional[str] = None) -> dict:
     """
     Business / AI processing logic for every inbound event.
 
@@ -137,8 +137,13 @@ def process_payload(payload: dict, mode_override: Optional[str] = None, processo
       - "dss_client"     : calls into a Dataiku DSS LLM endpoint via
                             `dataikuapi.DSSClient(...).get_project(...).get_llm(...)`
       - "custom_script"  : runs the currently-active (or per-event-selected)
-                            uploaded Python script in an isolated subprocess
+                            uploaded Python script in an isolated subprocess.
+                            `org_id` (the triggering event's Salesforce org,
+                            when known) is made available to the script via
+                            environment variables - see `processors.py:_build_processor_env`.
       - "langflow"        : calls a Langflow flow's /run endpoint
+      - "rule_engine"     : evaluates a stored GoRules JDM decision graph
+                            (Zen Engine) against the payload
 
     Any failure in dss_client/custom_script/langflow mode falls back to a
     local result so the pipeline never breaks because of a downstream outage
@@ -157,7 +162,7 @@ def process_payload(payload: dict, mode_override: Optional[str] = None, processo
 
     if mode == "custom_script" and active_processor_id:
         try:
-            return proc_module.run_processor(active_processor_id, payload)
+            return proc_module.run_processor(active_processor_id, payload, org_id)
         except Exception as exc:  # noqa: BLE001
             log_event("error", f"Custom processor failed, falling back to local processing: {exc}")
             return {
@@ -188,6 +193,19 @@ def process_payload(payload: dict, mode_override: Optional[str] = None, processo
             return {
                 "status": "error",
                 "summary": "Langflow call failed; returning local fallback result",
+                "error": str(exc),
+                "echo": payload,
+            }
+
+    if mode == "rule_engine" and active_processor_id:
+        from . import rules as rules_module
+        try:
+            return rules_module.evaluate_rule(active_processor_id, payload)
+        except Exception as exc:  # noqa: BLE001
+            log_event("error", f"Rule engine evaluation failed, falling back to local processing: {exc}")
+            return {
+                "status": "error",
+                "summary": "Rule evaluation failed; returning local fallback result",
                 "error": str(exc),
                 "echo": payload,
             }
@@ -276,7 +294,7 @@ async def inbound_worker():
             try:
                 # Offloaded to a thread: process_payload may do blocking HTTP/
                 # subprocess work and must never stall the web app's event loop.
-                result = await asyncio.to_thread(process_payload, payload, mode_override, processor_override)
+                result = await asyncio.to_thread(process_payload, payload, mode_override, processor_override, org_id)
             except Exception as exc:  # noqa: BLE001
                 tx.update_transaction(transaction_id, status="failed", error=str(exc))
                 log_event("error", f"Worker: processing failed: {exc}", transaction_id=transaction_id)
@@ -346,7 +364,9 @@ async def inbound_worker():
                     "Worker: no publish channel configured for org; result will not be sent back to Salesforce",
                     org_id=org_id,
                 )
-                await asyncio.to_thread(dispatch_integrations, tx.get_transaction(transaction_id), routed_integration_ids)
+                no_channel_tx = tx.get_transaction(transaction_id)
+                await asyncio.to_thread(dispatch_integrations, no_channel_tx, routed_integration_ids)
+                await asyncio.to_thread(fire_alert_for_transaction, no_channel_tx, routed_alert_ids)
 
     await broker.consume_forever("inbound", handle)
 
@@ -466,5 +486,7 @@ async def publish_manual_event(org_id: str, channel: str, payload: dict) -> dict
             await asyncio.to_thread(dispatch_integrations, failed_tx)
             await asyncio.to_thread(fire_alert_for_transaction, failed_tx)
             raise
-    await asyncio.to_thread(dispatch_integrations, tx.get_transaction(record["id"]))
+    final_tx = tx.get_transaction(record["id"])
+    await asyncio.to_thread(dispatch_integrations, final_tx)
+    await asyncio.to_thread(fire_alert_for_transaction, final_tx)
     return record
