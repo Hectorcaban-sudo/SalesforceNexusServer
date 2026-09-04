@@ -9,6 +9,7 @@ import Transactions from './pages/Transactions'
 import Logs from './pages/Logs'
 import AdminConfig from './pages/AdminConfig'
 import Users from './pages/Users'
+import Security from './pages/Security'
 import Integrations from './pages/Integrations'
 import Alerts from './pages/Alerts'
 import Layout from './components/Layout'
@@ -60,6 +61,7 @@ export default function App() {
         <Route path="/logs" element={<RequireAuth><Logs /></RequireAuth>} />
         <Route path="/admin-config" element={<RequireAuth><RequireRole role="admin"><AdminConfig /></RequireRole></RequireAuth>} />
         <Route path="/users" element={<RequireAuth><RequireRole role="admin"><Users /></RequireRole></RequireAuth>} />
+        <Route path="/security" element={<RequireAuth><RequireRole role="admin"><Security /></RequireRole></RequireAuth>} />
         <Route path="/integrations" element={<RequireAuth><RequireRole role="admin"><Integrations /></RequireRole></RequireAuth>} />
         <Route path="/alerts" element={<RequireAuth><RequireRole role="admin"><Alerts /></RequireRole></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />

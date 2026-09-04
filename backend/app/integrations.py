@@ -252,7 +252,7 @@ def _matches_trigger(trigger: str, status: str) -> bool:
     return False
 
 
-def dispatch_integrations(transaction: dict, only_ids: Optional[list] = None):
+def dispatch_integrations(transaction: dict, only_ids: Optional[list] = None, trace_carrier: Optional[dict] = None):
     """Fan a completed transaction out to every enabled, matching integration
     sink. Best-effort: exceptions are caught and logged per-sink so one
     broken integration never blocks another or affects the pipeline.
@@ -262,6 +262,10 @@ def dispatch_integrations(transaction: dict, only_ids: Optional[list] = None):
     integration ids - each still respects its own `trigger` setting. When
     `only_ids` is None, falls back to the legacy behavior of matching every
     enabled integration by org scope + trigger.
+
+    `trace_carrier` (see tracing.py:inject_trace_context) links each
+    integration's span back into the same trace as the event that triggered
+    it, rather than starting a disconnected trace of its own.
     """
     org_id = transaction.get("org_id")
     status = transaction.get("status")
@@ -281,7 +285,7 @@ def dispatch_integrations(transaction: dict, only_ids: Optional[list] = None):
         if sender is None:
             continue
 
-        with start_span(f"integration.{cfg['type']}", integration_id=cfg["id"], transaction_id=transaction.get("id")):
+        with start_span(f"integration.{cfg['type']}", carrier=trace_carrier, integration_id=cfg["id"], transaction_id=transaction.get("id")):
             try:
                 result = sender(cfg, transaction)
                 _record_result(cfg["id"], "ok", result=result)

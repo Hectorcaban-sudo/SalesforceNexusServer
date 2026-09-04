@@ -46,8 +46,10 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
 - **Salesforce publisher** — publishes the processed result back to Salesforce as a new Platform
   Event using the standard REST `sobjects` endpoint (OAuth password or client-credentials flow).
   A manual "publish test event" action is also available from the admin UI.
-- **Transaction reprocessing** — requeue any single transaction, or bulk-requeue every failed one,
-  back through the broker without re-sending anything from Salesforce. The Transactions page can
+- **Transaction reprocessing and cancellation** — requeue any single transaction, or bulk-requeue
+  every failed one, back through the broker without re-sending anything from Salesforce; or cancel
+  any transaction that hasn't finished yet (immediate hard-kill for a running custom script,
+  best-effort for everything else — see "Cancelling transactions"). The Transactions page can
   also **group** the list (by org, status, direction, channel, or fan-out group) instead of one
   flat table.
 - **Outbound integrations** — fan any processed transaction out to a **webhook** (HMAC-signed),
@@ -258,6 +260,35 @@ Manage users from **Users** in the admin console (admin role required), or via t
 (`GET/POST/PUT/DELETE /api/users`). You can't delete or demote your own account — have another
 admin do it if needed.
 
+## Database backends
+
+SQLite (the default, zero-setup, a single local file) is what you get out of the box, but the
+storage layer also supports **PostgreSQL**, **SQL Server**, and **Oracle** — the same document-style
+interface every part of the app uses (`table.get(...)`, `.search()`, `.update()`, etc.) runs
+identically against all four via SQLAlchemy Core underneath, storing each logical table as an
+auto-incrementing id plus a JSON-blob column. This trades a little raw query performance (filtering
+happens in Python, not via each database's native JSON query features) for something more valuable
+here: one code path that behaves identically everywhere.
+
+**This can't be switched live** — the database is where every other setting (including which
+database to use!) would normally live, so which one to connect to has to be knowable *before* any
+connection is made, which means it can only come from the environment. Admin Configuration →
+**Database** is a config-builder and connection-tester, not a live-apply control: pick a backend,
+fill in connection details, hit **Test connection** to verify it works, then **Save** writes
+`DATABASE_TYPE`/`DATABASE_HOST`/etc. to the backend's `.env` file for you (if it's writable —
+otherwise it tells you the exact environment variables to set by hand) and always requires a
+restart to take effect.
+
+| `DATABASE_TYPE` | Driver needed | Notes |
+|---|---|---|
+| `sqlite` (default) | none (stdlib) | Local file at `DB_PATH` |
+| `postgres` | `psycopg2-binary` | Verified against a real PostgreSQL 16 server — full CRUD, restart persistence, and direct inspection of the underlying tables all confirmed working |
+| `sqlserver` | `pyodbc` + the OS-level "ODBC Driver 18 for SQL Server" package | Implemented via the same SQLAlchemy dialect approach as Postgres, but **not verified against a real SQL Server instance** — no such server was available to test against |
+| `oracle` | `oracledb` (pure Python "thin" mode, no separate Instant Client) | Same caveat as SQL Server — implemented, not verified against a real Oracle instance |
+
+Uncomment the driver you need in `requirements.txt` before switching (they're commented out by
+default so a plain SQLite install doesn't pull in three database drivers it'll never use).
+
 ## Single sign-on (SSO)
 
 SSO is optional and off by default. To enable it, set these (in `.env` or your environment) to
@@ -280,6 +311,29 @@ A minimal fake OIDC provider for local testing (no real IdP needed) lives at
 `backend/dev_tools/fake_oidc_provider.py` — run it, point `SSO_ISSUER` at
 `http://127.0.0.1:9999`, and the whole login flow works end-to-end against it.
 
+## Security: audit logging and authentication monitoring
+
+The **Security** page (admin role required) has two views, both aimed at supporting technical
+audit/access-control practices relevant to frameworks like CMMC Level 2 / NIST 800-171 — **this is
+software capability, not a compliance certification**; actual compliance requires a full assessment
+across policies, documentation, and controls well beyond what any single tool provides.
+
+**Admin action audit log** — every state-changing (create/update/delete) call to the admin API is
+recorded automatically: who made it, from where, what it was, and what the server responded.
+Captured by `AuditMiddleware` at the HTTP layer, so no individual router has to remember to log
+anything — new admin endpoints get audited for free.
+
+**Authentication monitoring** — every login attempt (success, failure, blocked-while-locked),
+account lockout/unlock, password change, and SSO login is recorded to a separate `auth_events` log.
+This is also the basis for **account lockout**: after `MAX_FAILED_LOGIN_ATTEMPTS` (default 5)
+consecutive failed attempts, an account is locked for `LOCKOUT_DURATION_SECONDS` (default 900s/15
+minutes) — the correct password is rejected (`423 Locked`) even during the lockout window, closing
+the brute-force gap that would otherwise exist. An admin can unlock an account early from the
+Security page or the Users page, which also resets the failed-attempt counter. Verified end-to-end:
+repeated failed logins correctly trigger a lockout, the correct password is correctly rejected while
+locked, and it's correctly accepted once the window expires (or immediately after an admin unlocks
+it) — with a complete, accurate trail of every step in `auth_events`.
+
 ## Tracing (OpenTelemetry)
 
 Tracing is always initialized but exports nowhere by default (near-zero overhead, no collector
@@ -289,11 +343,24 @@ required to run the app). To see traces:
 - **A real collector** (Jaeger, Grafana Tempo, Honeycomb, Datadog agent, etc.):
   `OTEL_EXPORTER_OTLP_ENDPOINT=http://your-collector:4318`
 
-Every inbound event gets one connected trace across `cometd.receive_event` →
+Every inbound event gets **one connected trace** — a single trace ID — across
+`cometd.receive_event` → (`worker.rule_gate` if a validation rule is assigned) →
 `worker.process_payload` → `worker.publish_to_salesforce` → `integration.<type>` (per sink), plus
 automatic spans for every HTTP request the API serves and every outbound `requests` call (Salesforce
-OAuth/publish, DSSClient calls, webhook/Slack/Teams calls) — so a single slow or failed transaction
-can be traced end-to-end by its `transaction_id` span attribute.
+OAuth/publish, DSSClient calls, webhook/Slack/Teams calls). Open that trace in your collector and
+you see the whole journey of one event from the moment CometD received it through to every place it
+ended up, instead of separate unrelated traces per stage.
+
+This required explicit trace-context propagation across every broker hop (`tracing.py:
+inject_trace_context()`/`extract_trace_context()`, using the standard W3C traceparent format) —
+OpenTelemetry's automatic context propagation only works within a single async call chain, and this
+pipeline deliberately crosses the broker (in-process queue or RabbitMQ) between CometD receipt,
+processing, and publishing, each potentially running in a different asyncio task at a different
+point in time. Without that propagation, each stage would start its own disconnected trace instead
+of continuing the same one - this is exactly what `inject_trace_context`/`start_span(..., carrier=)`
+exist to fix, and it's verified (see the test suite notes in the repo history) by capturing real
+spans and confirming they share one `trace_id` all the way from CometD receipt through integration
+fan-out.
 
 ## Integrations (outbound fan-out)
 
@@ -354,6 +421,11 @@ if __name__ == "__main__":
 - Only one processor is "active" at a time globally, selected from Admin Configuration's mode
   selector — or pin a specific processor to an individual event channel (see "Per-event processor
   override" below).
+- **Download / override** — download any processor's current .py file (e.g. to edit locally or put
+  under version control), and upload a new version back to the *same* processor id to replace its
+  code in place — anything already pointing at it (the global mode, or a per-event override) picks
+  up the new code immediately with no reconfiguration needed. Uploading resets its test history
+  since the old pass/fail no longer describes what's running now.
 
 **Security note:** uploaded scripts run in an isolated subprocess (not `exec()`'d in-process), so
 they can't directly touch the running server's memory or already-loaded secrets — but they do run
@@ -497,6 +569,33 @@ Two things that matter for keeping the server itself healthy under real-world ne
   processing runs on a worker thread and the admin UI stays fully responsive and navigable the whole
   time — verified by measuring API response times (consistently single-digit milliseconds) while
   CometD was actively retrying failed connections in the background.
+- **Events process concurrently, not one at a time.** The broker hands each message to its own task
+  instead of waiting for the previous one to finish before dequeuing the next, bounded by
+  `WORKER_MAX_CONCURRENCY` (default 10, applied independently to the inbound and outbound topics) so
+  a burst of events can't spawn unlimited threads. Verified by processing a slow event (a 2-second
+  custom script) and a fast one back to back: the fast one reached `processed` while the slow one
+  was still actively `processing`, instead of waiting for it to finish first.
+
+## Cancelling transactions
+
+Any transaction that hasn't reached a terminal state yet can be cancelled from the Transactions
+page (or `POST /api/transactions/{id}/cancel`, operator role or higher). What happens depends on
+how far along it is:
+
+- **Not started yet** (`received`/`queued`): cancelled immediately — the worker checks for this the
+  moment it would otherwise start work and skips it entirely.
+- **A custom-script processor actively running**: killed immediately. This is the one processing
+  mode that can be hard-cancelled, because it's the only one running as a real, independently
+  killable OS subprocess rather than a plain blocking library call — verified by cancelling a
+  script mid-way through a deliberate 10-second sleep and confirming it was killed in ~1 second, not
+  10.
+- **Any other in-flight step** (local/DSSClient/Langflow processing, or the Salesforce publish call
+  itself): there's no way to abort a blocking network call already in progress, so it's flagged
+  (`cancel_requested`) and the cancellation takes effect right after that specific call returns —
+  the event won't proceed to the next step (publishing, or being marked `published`), and no
+  integrations/alerts fire for it either way.
+- Already-terminal transactions (`published`/`failed`/`skipped`/already `cancelled`) return a 400 —
+  there's nothing left to cancel.
 
 ## Message broker
 
@@ -518,16 +617,28 @@ which one is active.
 
 ## Configuration backup
 
-Admin Configuration → **Configuration backup** exports every Salesforce org, event channel, and
-integration as a single JSON file (`GET /api/admin-config/export`), and imports it back
-(`POST /api/admin-config/import`) — here or on a different instance. Records are upserted by their
-original id, which preserves the links between an event's routing selections and the publish
-channels/integrations they point to.
+Admin Configuration → **Configuration backup** exports the *entire* application configuration as a
+single JSON file (`GET /api/admin-config/export`), and imports it back (`POST /api/admin-config/import`)
+— here or on a different instance:
+
+- Salesforce orgs, event channels/routing, integrations, alerts, rules (including their JDM), and
+  every Admin Configuration setting (DSSClient, Langflow, Email/SMTP, message broker, processing
+  mode).
+- **Uploaded processor scripts, including their actual code** — not just metadata, so a restored
+  instance can run them immediately.
+- Records are upserted by their original id, which preserves the links between an event's routing
+  selections and the publish channels/integrations/alerts they point to.
+
+**Deliberately excluded: local user accounts.** User management is treated as a separate identity
+concern from application configuration — re-importing accounts (especially password hashes) across
+environments is a different kind of risk than restoring integration settings, so it's left out on
+purpose.
 
 **The export file contains credentials in plaintext** — org client secrets/passwords/security
-tokens and integration API keys/webhook signing secrets — because a backup that couldn't restore
-working connections wouldn't be useful. Treat the downloaded file exactly like a credentials
-backup: store it securely, don't email it around, and delete it once it's no longer needed.
+tokens, integration API keys/webhook signing secrets, DSSClient/Langflow API keys, the SMTP
+password, and the RabbitMQ password — because a backup that couldn't restore working connections
+wouldn't be useful. Treat the downloaded file exactly like a credentials backup: store it securely,
+don't email it around, and delete it once it's no longer needed.
 
 ## Admin Configuration: DSSClient (Dataiku DSS)
 

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from typing import List
 
-from ..auth import require_role, get_current_user, hash_password
+from ..auth import require_role, get_current_user, hash_password, unlock_user
 from ..database import users_table, Q
 from ..models import UserOut, UserCreate, UserUpdate
 from ..logging_config import log_event
@@ -15,6 +15,8 @@ def _out(u: dict) -> UserOut:
         role=u.get("role", "viewer"),
         auth_provider=u.get("auth_provider", "local"),
         created_at=u.get("created_at"),
+        failed_login_count=u.get("failed_login_count", 0),
+        locked_until=u.get("locked_until"),
     )
 
 
@@ -34,6 +36,8 @@ def create_user(user: UserCreate):
         "auth_provider": "local",
         "created_at": __import__("time").time(),
         "must_change_password": True,
+        "failed_login_count": 0,
+        "locked_until": None,
     }
     users_table.insert(record)
     log_event("info", f"User '{user.username}' created with role '{user.role.value}'")
@@ -73,3 +77,15 @@ def delete_user(username: str, current_user: dict = Depends(get_current_user)):
     users_table.remove(Q.username == username)
     log_event("warning", f"User '{username}' deleted")
     return {"detail": "deleted"}
+
+
+@router.post("/{username}/unlock", response_model=UserOut, dependencies=[Depends(require_role("admin"))])
+def unlock(username: str):
+    """Clears an account lockout (and resets the failed-attempt counter)
+    before the lockout window would otherwise expire on its own."""
+    existing = users_table.get(Q.username == username)
+    if not existing:
+        raise HTTPException(404, "User not found")
+    unlock_user(username)
+    log_event("info", f"User '{username}' unlocked by admin")
+    return _out(users_table.get(Q.username == username))

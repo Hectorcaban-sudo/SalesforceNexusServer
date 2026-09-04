@@ -14,6 +14,7 @@ OTEL_CONSOLE_EXPORTER is set, so this never requires a collector to run the
 app locally.
 """
 from contextlib import contextmanager
+from typing import Optional
 
 from .config import settings
 from .logging_config import log_event
@@ -85,14 +86,66 @@ def get_tracer():
 
 
 @contextmanager
-def start_span(name: str, **attributes):
-    """Convenience context manager: no-ops cleanly if OTel isn't installed."""
+def start_span(name: str, carrier: Optional[dict] = None, **attributes):
+    """
+    Convenience context manager: no-ops cleanly if OTel isn't installed.
+
+    `carrier` is an extracted trace context (see `inject_trace_context`) -
+    passing it makes this span a *child* of whatever span produced that
+    carrier, even if that happened in a completely different asyncio task at
+    an earlier point in time (which is exactly what happens every time an
+    event crosses the broker: OpenTelemetry's automatic context propagation
+    only works within a single task's call chain, so without this, every
+    stage of the pipeline - CometD receive, processing, publish, integration
+    fan-out - would show up as its own disconnected trace instead of one
+    unified trace per event).
+    """
     tracer = get_tracer()
     if tracer is None:
         yield None
         return
-    with tracer.start_as_current_span(name) as span:
+
+    ctx = extract_trace_context(carrier) if carrier else None
+    with tracer.start_as_current_span(name, context=ctx) as span:
         for key, value in attributes.items():
             if value is not None:
                 span.set_attribute(key, value)
         yield span
+
+
+def inject_trace_context(span=None) -> dict:
+    """
+    Captures the current (or given) span's trace context as a plain dict
+    (W3C traceparent format) that's JSON-serializable - safe to embed
+    directly in a broker message so the next stage of the pipeline can pick
+    up the same trace. Returns {} if tracing isn't configured.
+    """
+    tracer = get_tracer()
+    if tracer is None:
+        return {}
+    try:
+        from opentelemetry import context as otel_context, trace
+        from opentelemetry.propagate import inject
+
+        carrier: dict = {}
+        if span is not None:
+            ctx = trace.set_span_in_context(span)
+            inject(carrier, context=ctx)
+        else:
+            inject(carrier)
+        return carrier
+    except ImportError:
+        return {}
+
+
+def extract_trace_context(carrier: dict):
+    """The inverse of `inject_trace_context` - turns a carrier dict back into
+    a Context object usable as `context=` for `tracer.start_as_current_span`
+    or passed straight to `start_span(..., carrier=carrier)`."""
+    if not carrier:
+        return None
+    try:
+        from opentelemetry.propagate import extract
+        return extract(carrier)
+    except ImportError:
+        return None

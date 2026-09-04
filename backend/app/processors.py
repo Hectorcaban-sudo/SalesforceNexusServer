@@ -181,17 +181,33 @@ def _build_processor_env(org_id: Optional[str]) -> dict:
     return env
 
 
-def run_processor(processor_id: str, payload: dict, org_id: Optional[str] = None) -> dict:
+class ProcessorCancelled(RuntimeError):
+    """Raised by run_processor() when a cancellation request killed the
+    subprocess mid-execution - callers should treat this differently from a
+    genuine processing failure (the transaction becomes "cancelled", not
+    "failed")."""
+
+
+def run_processor(processor_id: str, payload: dict, org_id: Optional[str] = None, cancel_check=None) -> dict:
     """Executes an uploaded processor script in an isolated subprocess and
     returns its JSON result. Raises RuntimeError with a descriptive message
-    on any failure (non-zero exit, bad JSON output, or timeout). Anything
-    the script prints to stderr is captured and mirrored into the system
-    Logs page regardless of success or failure - see `_log_processor_stderr`.
+    on any failure (non-zero exit, bad JSON output, or timeout), or
+    ProcessorCancelled if `cancel_check` returned True while it was running.
+    Anything the script prints to stderr is captured and mirrored into the
+    system Logs page regardless of outcome - see `_log_processor_stderr`.
 
     `org_id`, when given, is the Salesforce org that triggered this event -
     its full settings (and other admin configuration: DSSClient, Langflow,
     Email) are made available to the script via environment variables
-    (NEXUS_ORG, NEXUS_ADMIN_CONFIG) - see `_build_processor_env`."""
+    (NEXUS_ORG, NEXUS_ADMIN_CONFIG) - see `_build_processor_env`.
+
+    `cancel_check`, when given, is a zero-argument callable polled roughly
+    every 100ms while the subprocess runs; if it returns True the subprocess
+    is killed immediately (SIGKILL) rather than waiting for it to finish or
+    time out - this is the one processing mode that can be hard-cancelled,
+    since it's the only one running as a real, independently-killable OS
+    process rather than a plain blocking library call.
+    """
     path = _script_path(processor_id)
     if not path.exists():
         raise RuntimeError(f"Processor script file not found for id '{processor_id}'")
@@ -200,29 +216,45 @@ def run_processor(processor_id: str, payload: dict, org_id: Optional[str] = None
     name = record["name"] if record else processor_id
 
     start = time.time()
-    try:
-        proc = subprocess.run(
-            [sys.executable, str(path)],
-            input=json.dumps(payload),
-            capture_output=True,
-            text=True,
-            timeout=PROCESSOR_TIMEOUT_SECONDS,
-            env=_build_processor_env(org_id),
-        )
-    except subprocess.TimeoutExpired as exc:
-        _log_processor_stderr(processor_id, name, exc.stderr or "")
-        raise RuntimeError(f"Processor timed out after {PROCESSOR_TIMEOUT_SECONDS}s") from exc
+    proc = subprocess.Popen(
+        [sys.executable, str(path)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, env=_build_processor_env(org_id),
+    )
+    proc.stdin.write(json.dumps(payload))
+    proc.stdin.close()
 
+    cancelled = False
+    while proc.poll() is None:
+        if cancel_check is not None and cancel_check():
+            proc.kill()
+            proc.wait()
+            cancelled = True
+            break
+        if time.time() - start > PROCESSOR_TIMEOUT_SECONDS:
+            proc.kill()
+            proc.wait()
+            stderr = proc.stderr.read()
+            _log_processor_stderr(processor_id, name, stderr or "")
+            raise RuntimeError(f"Processor timed out after {PROCESSOR_TIMEOUT_SECONDS}s")
+        time.sleep(0.1)
+
+    stdout = proc.stdout.read()
+    stderr = proc.stderr.read()
     duration_ms = round((time.time() - start) * 1000)
-    _log_processor_stderr(processor_id, name, proc.stderr)
+    _log_processor_stderr(processor_id, name, stderr)
+
+    if cancelled:
+        log_event("warning", f"Processor '{name}' cancelled after {duration_ms}ms", processor_id=processor_id)
+        raise ProcessorCancelled(f"Processor '{name}' was cancelled")
 
     if proc.returncode != 0:
-        raise RuntimeError(f"Processor exited with code {proc.returncode}: {proc.stderr.strip()[:500]}")
+        raise RuntimeError(f"Processor exited with code {proc.returncode}: {stderr.strip()[:500]}")
 
     try:
-        result = json.loads(proc.stdout.strip() or "{}")
+        result = json.loads(stdout.strip() or "{}")
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Processor did not print valid JSON to stdout: {proc.stdout.strip()[:300]}") from exc
+        raise RuntimeError(f"Processor did not print valid JSON to stdout: {stdout.strip()[:300]}") from exc
 
     log_event("info", f"Processor '{processor_id}' ran in {duration_ms}ms", processor_id=processor_id)
     return result

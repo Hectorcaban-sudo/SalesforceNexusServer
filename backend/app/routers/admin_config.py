@@ -1,13 +1,17 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+import os
+import pathlib
 
 from ..auth import require_role
 from ..database import admin_settings_table, Q
 from ..models import (
     DSSClientConfigUpdate, DSSClientConfigOut, ProcessingModeConfig, BrokerConfig, BrokerConfigOut,
     LangflowConfigUpdate, LangflowConfigOut, EmailSettingsUpdate, EmailSettingsOut,
+    DatabaseConfigUpdate, DatabaseConfigOut, DatabaseTestRequest,
 )
 from ..logging_config import log_event
 from ..broker import broker, BROKER_CONFIG_ID
+from ..config import settings
 
 router = APIRouter(prefix="/api/admin-config", tags=["admin-config"], dependencies=[Depends(require_role("admin"))])
 
@@ -188,6 +192,155 @@ def upsert_email_settings(updates: EmailSettingsUpdate):
     return _mask_email(admin_settings_table.get(Q.id == EMAIL_SETTINGS_ID))
 
 
+# ---------- Database backend ----------
+# This one is fundamentally different from every other setting on this page:
+# the database itself is where all the OTHER settings live, so which
+# database to connect to can't be stored inside the database - it has to be
+# known before a connection is ever made. That means it can only come from
+# the environment (.env / real env vars), and - like the message broker -
+# changing it always requires a restart. This section is a config-builder
+# and connection-tester, not a live-apply control: it can write the new
+# values to a .env file for you (if the file is writable) so you just need
+# to restart, but it never touches the live connection.
+ENV_FILE_PATH = pathlib.Path(__file__).resolve().parent.parent.parent / ".env"
+
+
+def _build_test_url(cfg: DatabaseTestRequest) -> str:
+    import sqlalchemy as sa
+
+    db_type = cfg.database_type.lower()
+    if db_type == "sqlite":
+        raise HTTPException(400, "SQLite doesn't need a connection test - it's a local file, always available")
+    if db_type == "postgres":
+        port = cfg.database_port or 5432
+        return str(sa.URL.create(
+            "postgresql+psycopg2", username=cfg.database_user, password=cfg.database_password,
+            host=cfg.database_host, port=port, database=cfg.database_name,
+        ))
+    if db_type == "sqlserver":
+        port = cfg.database_port or 1433
+        return str(sa.URL.create(
+            "mssql+pyodbc", username=cfg.database_user, password=cfg.database_password,
+            host=cfg.database_host, port=port, database=cfg.database_name,
+            query={"driver": "ODBC Driver 18 for SQL Server", "TrustServerCertificate": "yes"},
+        ))
+    if db_type == "oracle":
+        port = cfg.database_port or 1521
+        return str(sa.URL.create(
+            "oracle+oracledb", username=cfg.database_user, password=cfg.database_password,
+            host=cfg.database_host, port=port, query={"service_name": cfg.database_name},
+        ))
+    raise HTTPException(400, f"Unknown database_type '{cfg.database_type}'")
+
+
+@router.get("/database", response_model=DatabaseConfigOut)
+def get_database_config():
+    return DatabaseConfigOut(
+        database_type=settings.database_type,
+        database_host=settings.database_host,
+        database_port=settings.database_port,
+        database_name=settings.database_name,
+        database_user=settings.database_user,
+        database_password="••••••••" if settings.database_password else "",
+        db_path=settings.db_path,
+        env_file_writable=_env_file_writable(),
+    )
+
+
+def _env_file_writable() -> bool:
+    try:
+        if ENV_FILE_PATH.exists():
+            return os.access(ENV_FILE_PATH, os.W_OK)
+        return os.access(ENV_FILE_PATH.parent, os.W_OK)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+@router.post("/database/test")
+def test_database_connection(cfg: DatabaseTestRequest):
+    """Tries a real connection with the given parameters WITHOUT touching
+    the app's live database connection - safe to try before committing to a
+    restart."""
+    import sqlalchemy as sa
+
+    if cfg.database_type.lower() == "sqlite":
+        return {"detail": "SQLite doesn't need a connection test - it's a local file, always available"}
+
+    url = _build_test_url(cfg)
+    try:
+        engine = sa.create_engine(url, connect_args={"connect_timeout": 5} if "postgresql" in url else {})
+        with engine.connect() as conn:
+            conn.execute(sa.text("SELECT 1"))
+        engine.dispose()
+        return {"detail": f"Connected successfully to {cfg.database_type}"}
+    except ModuleNotFoundError as exc:
+        raise HTTPException(400, f"Driver not installed for {cfg.database_type}: {exc}. See requirements.txt for the pip package this backend needs.")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"Connection failed: {exc}")
+
+
+@router.put("/database", response_model=DatabaseConfigOut)
+def update_database_config(cfg: DatabaseConfigUpdate):
+    """
+    Writes the new database settings to the backend's .env file (creating it
+    if it doesn't exist) and returns the result. This does NOT reconnect the
+    running app - restart the server for it to take effect (see the module
+    docstring above for why a live-apply isn't possible here).
+    """
+    env_updates = {"DATABASE_TYPE": cfg.database_type}
+    if cfg.database_host is not None:
+        env_updates["DATABASE_HOST"] = cfg.database_host
+    if cfg.database_port is not None:
+        env_updates["DATABASE_PORT"] = str(cfg.database_port)
+    if cfg.database_name is not None:
+        env_updates["DATABASE_NAME"] = cfg.database_name
+    if cfg.database_user is not None:
+        env_updates["DATABASE_USER"] = cfg.database_user
+    if cfg.database_password:  # never blank out a saved password by leaving the field empty
+        env_updates["DATABASE_PASSWORD"] = cfg.database_password
+
+    if not _env_file_writable():
+        raise HTTPException(
+            400,
+            f"Cannot write to {ENV_FILE_PATH} - set these environment variables manually instead: "
+            + ", ".join(f"{k}={v}" for k, v in env_updates.items() if k != "DATABASE_PASSWORD"),
+        )
+
+    _write_env_vars(env_updates)
+    log_event("warning", f"Database configuration written to .env (type={cfg.database_type}) - restart required to take effect")
+
+    return DatabaseConfigOut(
+        database_type=cfg.database_type,
+        database_host=cfg.database_host or settings.database_host,
+        database_port=cfg.database_port or settings.database_port,
+        database_name=cfg.database_name or settings.database_name,
+        database_user=cfg.database_user or settings.database_user,
+        database_password="••••••••" if (cfg.database_password or settings.database_password) else "",
+        db_path=settings.db_path,
+        env_file_writable=True,
+    )
+
+
+def _write_env_vars(updates: dict):
+    lines = []
+    if ENV_FILE_PATH.exists():
+        lines = ENV_FILE_PATH.read_text().splitlines()
+
+    remaining = dict(updates)
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if key in remaining:
+            lines[i] = f"{key}={remaining.pop(key)}"
+
+    for key, value in remaining.items():
+        lines.append(f"{key}={value}")
+
+    ENV_FILE_PATH.write_text("\n".join(lines) + "\n")
+
+
 # ---------- Message broker (internal in-process vs RabbitMQ) ----------
 def _mask_broker(cfg: dict) -> BrokerConfigOut:
     rmq = dict(cfg.get("rabbitmq", {}))
@@ -236,18 +389,35 @@ EXPORT_VERSION = 1
 @router.get("/export")
 def export_configuration():
     """
-    Exports Salesforce orgs, event configs, and integrations as a single JSON
-    bundle for backup/migration to another instance.
+    Exports the full admin configuration - Salesforce orgs, event configs,
+    integrations, alerts, rules, uploaded processor scripts (including their
+    actual code), and every Admin Configuration setting (DSSClient,
+    Langflow, Email/SMTP, message broker, processing mode) - as a single
+    JSON bundle for backup/migration to another instance.
 
-    SECURITY NOTE: this bundle includes org credentials (client secret,
-    password, security token) and integration secrets (API keys, webhook
-    signing secrets) in plaintext, because an export that couldn't restore
-    working connections wouldn't be useful as a backup. Treat the downloaded
-    file exactly like a credentials backup: store it securely, don't email
-    it around, and delete it once it's no longer needed.
+    Deliberately NOT included: local user accounts/password hashes. User
+    management is treated as a separate identity concern from application
+    configuration - re-importing accounts across environments (especially
+    password hashes) is a different kind of risk than restoring integration
+    settings, so it's left out of this bundle on purpose.
+
+    SECURITY NOTE: this bundle includes credentials in plaintext - org
+    secrets (client secret, password, security token), integration secrets
+    (API keys, webhook signing secrets), DSSClient/Langflow API keys, SMTP
+    password, and RabbitMQ password - because an export that couldn't
+    restore working connections wouldn't be useful as a backup. Treat the
+    downloaded file exactly like a credentials backup: store it securely,
+    don't email it around, and delete it once it's no longer needed.
     """
-    from ..database import orgs_table, event_configs_table, integrations_table
+    from ..database import orgs_table, event_configs_table, integrations_table, alerts_table, rules_table, processors_table
+    from .. import processors as proc_module
     from ..models import now_ts
+
+    processors_export = []
+    for p in processors_table.all():
+        record = dict(p)
+        record["code"] = proc_module.read_processor_code(p["id"])
+        processors_export.append(record)
 
     return {
         "version": EXPORT_VERSION,
@@ -255,6 +425,10 @@ def export_configuration():
         "orgs": orgs_table.all(),
         "event_configs": event_configs_table.all(),
         "integrations": integrations_table.all(),
+        "alerts": alerts_table.all(),
+        "rules": rules_table.all(),
+        "processors": processors_export,
+        "admin_settings": admin_settings_table.all(),  # dss_client, langflow, email_settings, broker_config, processing_mode
     }
 
 
@@ -264,34 +438,52 @@ async def import_configuration(bundle: dict):
     Imports a bundle produced by /export. Records are upserted by their
     original `id` (overwriting any existing record with the same id), which
     preserves cross-references between event configs, their routed publish
-    channels, and their routed integrations. Triggers a CometD resync
-    afterward so imported orgs/channels connect immediately.
+    channels/integrations/alerts, and alert->integration links. Triggers a
+    CometD resync afterward so imported orgs/channels connect immediately.
+
+    Message broker and uvicorn/server settings are NOT applied live even
+    though `admin_settings` includes the broker config record - like manual
+    changes to that setting, it takes effect on the next restart (see Admin
+    Configuration -> Message broker).
     """
-    from ..database import orgs_table, event_configs_table, integrations_table, Q as _Q
+    from ..database import orgs_table, event_configs_table, integrations_table, alerts_table, rules_table, processors_table, Q as _Q
+    from .. import processors as proc_module
     from ..cometd_client import cometd_manager
 
-    counts = {"orgs": 0, "event_configs": 0, "integrations": 0}
+    def _upsert(table, rows):
+        count = 0
+        for row in rows:
+            if table.get(_Q.id == row["id"]):
+                table.update(row, _Q.id == row["id"])
+            else:
+                table.insert(row)
+            count += 1
+        return count
 
-    for org in bundle.get("orgs", []):
-        if orgs_table.get(_Q.id == org["id"]):
-            orgs_table.update(org, _Q.id == org["id"])
-        else:
-            orgs_table.insert(org)
-        counts["orgs"] += 1
+    counts = {
+        "orgs": _upsert(orgs_table, bundle.get("orgs", [])),
+        "event_configs": _upsert(event_configs_table, bundle.get("event_configs", [])),
+        "integrations": _upsert(integrations_table, bundle.get("integrations", [])),
+        "alerts": _upsert(alerts_table, bundle.get("alerts", [])),
+        "rules": _upsert(rules_table, bundle.get("rules", [])),
+        "admin_settings": _upsert(admin_settings_table, bundle.get("admin_settings", [])),
+    }
 
-    for cfg in bundle.get("event_configs", []):
-        if event_configs_table.get(_Q.id == cfg["id"]):
-            event_configs_table.update(cfg, _Q.id == cfg["id"])
+    processor_count = 0
+    for p in bundle.get("processors", []):
+        code = p.pop("code", "")
+        error = proc_module.validate_syntax(code) if code else None
+        if error:
+            log_event("warning", f"Skipped importing processor '{p.get('name')}': invalid Python ({error})")
+            continue
+        if code:
+            proc_module.save_processor_file(p["id"], code)
+        if processors_table.get(_Q.id == p["id"]):
+            processors_table.update(p, _Q.id == p["id"])
         else:
-            event_configs_table.insert(cfg)
-        counts["event_configs"] += 1
-
-    for integ in bundle.get("integrations", []):
-        if integrations_table.get(_Q.id == integ["id"]):
-            integrations_table.update(integ, _Q.id == integ["id"])
-        else:
-            integrations_table.insert(integ)
-        counts["integrations"] += 1
+            processors_table.insert(p)
+        processor_count += 1
+    counts["processors"] = processor_count
 
     log_event("info", f"Configuration imported: {counts}")
     await cometd_manager.sync()

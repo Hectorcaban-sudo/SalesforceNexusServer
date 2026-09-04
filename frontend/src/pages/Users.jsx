@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, KeyRound, UserCog } from 'lucide-react'
+import { Plus, Trash2, KeyRound, UserCog, LockOpen } from 'lucide-react'
 import api from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 
@@ -50,6 +50,11 @@ export default function Users() {
     load()
   }
 
+  async function unlockUser(username) {
+    await api.post(`/users/${username}/unlock`)
+    load()
+  }
+
   async function submitReset(e) {
     e.preventDefault()
     await api.put(`/users/${resetTarget}`, { password: resetPassword })
@@ -71,9 +76,23 @@ export default function Users() {
         <table>
           <thead><tr><th>Username</th><th>Role</th><th>Auth</th><th>Created</th><th></th></tr></thead>
           <tbody>
-            {users.map((u) => (
+            {users.map((u) => {
+              const isLocked = u.locked_until && u.locked_until * 1000 > Date.now()
+              return (
               <tr key={u.username}>
-                <td>{u.username}{u.username === currentUser?.username && <span style={{ color: 'var(--text-muted)', fontSize: 11 }}> (you)</span>}</td>
+                <td>
+                  {u.username}{u.username === currentUser?.username && <span style={{ color: 'var(--text-muted)', fontSize: 11 }}> (you)</span>}
+                  {isLocked && (
+                    <div style={{ fontSize: 11, color: 'var(--accent-red)', marginTop: 3 }}>
+                      Locked until {new Date(u.locked_until * 1000).toLocaleTimeString()}
+                    </div>
+                  )}
+                  {!isLocked && u.failed_login_count > 0 && (
+                    <div style={{ fontSize: 11, color: 'var(--accent-orange)', marginTop: 3 }}>
+                      {u.failed_login_count} recent failed login{u.failed_login_count === 1 ? '' : 's'}
+                    </div>
+                  )}
+                </td>
                 <td>
                   <select
                     value={u.role}
@@ -91,6 +110,11 @@ export default function Users() {
                   {u.created_at ? new Date(u.created_at * 1000).toLocaleDateString() : '—'}
                 </td>
                 <td style={{ display: 'flex', gap: 6 }}>
+                  {(isLocked || u.failed_login_count > 0) && (
+                    <button className="btn btn-sm btn-icon" title="Unlock / clear failed attempts" onClick={() => unlockUser(u.username)}>
+                      <LockOpen size={13} />
+                    </button>
+                  )}
                   {u.auth_provider === 'local' && (
                     <button className="btn btn-sm btn-icon" title="Reset password" onClick={() => setResetTarget(u.username)}>
                       <KeyRound size={13} />
@@ -105,7 +129,8 @@ export default function Users() {
                   </button>
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </div>

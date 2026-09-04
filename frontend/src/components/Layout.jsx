@@ -1,7 +1,7 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, Radio, ListTree, ScrollText, Search, LogOut, Settings,
-  SlidersHorizontal, Users as UsersIcon, Share2, BellRing,
+  SlidersHorizontal, Users as UsersIcon, Share2, BellRing, ShieldCheck,
 } from 'lucide-react'
 import { logout } from '../lib/api'
 import { useAuth, hasRole } from '../lib/AuthContext'
@@ -19,6 +19,7 @@ const ADMIN_NAV_ITEMS = [
   { to: '/integrations', label: 'Integrations', icon: Share2 },
   { to: '/alerts', label: 'Alerts', icon: BellRing },
   { to: '/users', label: 'Users', icon: UsersIcon },
+  { to: '/security', label: 'Security', icon: ShieldCheck },
   { to: '/admin-config', label: 'Admin Configuration', icon: SlidersHorizontal },
 ]
 

@@ -32,9 +32,10 @@ from .database import orgs_table, event_configs_table, Q
 from .logging_config import log_event
 from . import transactions as tx
 from .salesforce_client import sf_client
-from .tracing import start_span
+from .tracing import start_span, inject_trace_context
 from .integrations import dispatch_integrations
 from .alerts import fire_alert_for_transaction
+from . import processors as proc_module
 
 # Several integrations/DSSClient deployments sit behind internally-issued or
 # self-signed certificates; disabling verification is a deliberate operator
@@ -126,7 +127,7 @@ def run_langflow(payload: dict) -> dict:
     }
 
 
-def process_payload(payload: dict, mode_override: Optional[str] = None, processor_id_override: Optional[str] = None, org_id: Optional[str] = None) -> dict:
+def process_payload(payload: dict, mode_override: Optional[str] = None, processor_id_override: Optional[str] = None, org_id: Optional[str] = None, transaction_id: Optional[str] = None) -> dict:
     """
     Business / AI processing logic for every inbound event.
 
@@ -152,7 +153,6 @@ def process_payload(payload: dict, mode_override: Optional[str] = None, processo
     or a bug in an uploaded script.
     """
     from .routers.admin_config import get_processing_mode_raw  # local import avoids a circular import at module load time
-    from . import processors as proc_module
 
     if mode_override:
         mode = mode_override
@@ -163,8 +163,16 @@ def process_payload(payload: dict, mode_override: Optional[str] = None, processo
         active_processor_id = mode_cfg.get("active_processor_id")
 
     if mode == "custom_script" and active_processor_id:
+        def _cancel_check():
+            if not transaction_id:
+                return False
+            current = tx.get_transaction(transaction_id)
+            return bool(current and current.get("cancel_requested"))
+
         try:
-            return proc_module.run_processor(active_processor_id, payload, org_id)
+            return proc_module.run_processor(active_processor_id, payload, org_id, cancel_check=_cancel_check)
+        except proc_module.ProcessorCancelled:
+            raise  # let the caller (inbound_worker) mark this "cancelled", not "failed"
         except Exception as exc:  # noqa: BLE001
             log_event("error", f"Custom processor failed, falling back to local processing: {exc}")
             return {
@@ -308,24 +316,33 @@ async def inbound_worker():
         org_id = message["org_id"]
         source_channel = message["channel"]
         payload = message["payload"]
+        # The carrier injected by whatever produced this message (CometD
+        # receive, or an earlier fan-out hop) - passing it to every span
+        # below keeps this event's whole journey as ONE trace instead of a
+        # new disconnected trace per pipeline stage.
+        parent_carrier = message.get("_trace")
+
+        # Cancellation checkpoint: an admin may have cancelled this
+        # transaction while it was still sitting in the queue, before we
+        # ever got here - honor that instead of processing it anyway.
+        current = tx.get_transaction(transaction_id)
+        if current and current.get("status") == "cancelled":
+            log_event("info", "Worker: skipping cancelled transaction", transaction_id=transaction_id)
+            return
 
         _, _, routed_alert_ids = _resolve_routes(org_id, source_channel)
 
-        # Validation gate: if this channel has a rule assigned, it runs
-        # BEFORE any processing - a "false" result skips processing entirely
-        # (the event is still recorded, just never handed to
-        # process_payload or published). This is deliberately separate from
-        # the processing modes below.
         rule_id = _resolve_rule_gate(org_id, source_channel)
         if rule_id:
-            with start_span("worker.rule_gate", transaction_id=transaction_id, org_id=org_id, rule_id=rule_id):
+            with start_span("worker.rule_gate", carrier=parent_carrier, transaction_id=transaction_id, org_id=org_id, rule_id=rule_id) as gate_span:
                 gate = await asyncio.to_thread(evaluate_rule_gate, rule_id, payload)
+            gate_carrier = inject_trace_context(span=gate_span) or parent_carrier
 
             if gate.error:
                 tx.update_transaction(transaction_id, status="failed", error=f"Rule gate evaluation failed: {gate.error}")
                 log_event("error", f"Worker: rule gate evaluation failed: {gate.error}", transaction_id=transaction_id, rule_id=rule_id)
                 failed_tx = tx.get_transaction(transaction_id)
-                await asyncio.to_thread(dispatch_integrations, failed_tx)
+                await asyncio.to_thread(dispatch_integrations, failed_tx, None, gate_carrier)
                 await asyncio.to_thread(fire_alert_for_transaction, failed_tx, routed_alert_ids)
                 return
 
@@ -337,7 +354,9 @@ async def inbound_worker():
                 )
                 return
 
-        with start_span("worker.process_payload", transaction_id=transaction_id, org_id=org_id):
+            parent_carrier = gate_carrier  # keep the chain going through the gate span
+
+        with start_span("worker.process_payload", carrier=parent_carrier, transaction_id=transaction_id, org_id=org_id) as process_span:
             tx.update_transaction(transaction_id, status="processing")
             log_event("info", "Worker: processing event", transaction_id=transaction_id, org_id=org_id)
 
@@ -346,16 +365,36 @@ async def inbound_worker():
             try:
                 # Offloaded to a thread: process_payload may do blocking HTTP/
                 # subprocess work and must never stall the web app's event loop.
-                result = await asyncio.to_thread(process_payload, payload, mode_override, processor_override, org_id)
+                result = await asyncio.to_thread(process_payload, payload, mode_override, processor_override, org_id, transaction_id)
+            except proc_module.ProcessorCancelled:
+                tx.update_transaction(transaction_id, status="cancelled", error="Cancelled during processing")
+                log_event("warning", "Worker: processing was cancelled", transaction_id=transaction_id)
+                return
             except Exception as exc:  # noqa: BLE001
                 tx.update_transaction(transaction_id, status="failed", error=str(exc))
                 log_event("error", f"Worker: processing failed: {exc}", transaction_id=transaction_id)
                 failed_tx = tx.get_transaction(transaction_id)
-                await asyncio.to_thread(dispatch_integrations, failed_tx)
+                fail_carrier = inject_trace_context(span=process_span) or parent_carrier
+                await asyncio.to_thread(dispatch_integrations, failed_tx, None, fail_carrier)
                 await asyncio.to_thread(fire_alert_for_transaction, failed_tx, routed_alert_ids)
                 return
 
+            # Soft-cancel checkpoint: cancellation was requested while this
+            # was running, but the processing mode couldn't be hard-killed
+            # (only custom_script subprocesses can be - see ProcessorCancelled
+            # above). Honor it now rather than proceeding to publish a result
+            # for a transaction the admin asked to stop.
+            if tx.get_transaction(transaction_id).get("cancel_requested"):
+                tx.update_transaction(transaction_id, status="cancelled", error="Cancelled after processing completed")
+                log_event("warning", "Worker: honoring cancellation requested during processing", transaction_id=transaction_id)
+                return
+
             tx.update_transaction(transaction_id, status="processed", result=result)
+
+        # process_span's `with` block has closed by this point, but the span
+        # object itself is still valid to read a fresh carrier from - this is
+        # what lets the NEXT broker hop (outbound publish) continue the same trace.
+        next_carrier = inject_trace_context(span=process_span) or parent_carrier
 
         routed_channels, routed_integration_ids, _ = _resolve_routes(org_id, source_channel)
 
@@ -371,7 +410,7 @@ async def inbound_worker():
                 transaction_id=transaction_id, org_id=org_id, channel=source_channel,
             )
             processed_tx = tx.get_transaction(transaction_id)
-            await asyncio.to_thread(dispatch_integrations, processed_tx, routed_integration_ids)
+            await asyncio.to_thread(dispatch_integrations, processed_tx, routed_integration_ids, next_carrier)
             await asyncio.to_thread(fire_alert_for_transaction, processed_tx, routed_alert_ids)
             return
 
@@ -393,6 +432,7 @@ async def inbound_worker():
                         "payload": result,
                         "routed_integration_ids": routed_integration_ids,
                         "routed_alert_ids": routed_alert_ids,
+                        "_trace": next_carrier,
                     },
                 )
             log_event("info", f"Worker: fanned out to {len(routed_channels)} publish channel(s)", transaction_id=transaction_id)
@@ -408,6 +448,7 @@ async def inbound_worker():
                         "payload": result,
                         "routed_integration_ids": routed_integration_ids,
                         "routed_alert_ids": routed_alert_ids,
+                        "_trace": next_carrier,
                     },
                 )
             else:
@@ -417,7 +458,7 @@ async def inbound_worker():
                     org_id=org_id,
                 )
                 no_channel_tx = tx.get_transaction(transaction_id)
-                await asyncio.to_thread(dispatch_integrations, no_channel_tx, routed_integration_ids)
+                await asyncio.to_thread(dispatch_integrations, no_channel_tx, routed_integration_ids, next_carrier)
                 await asyncio.to_thread(fire_alert_for_transaction, no_channel_tx, routed_alert_ids)
 
     await broker.consume_forever("inbound", handle)
@@ -433,13 +474,25 @@ async def outbound_publisher():
         payload = message["payload"]
         routed_integration_ids = message.get("routed_integration_ids")
         routed_alert_ids = message.get("routed_alert_ids")
+        parent_carrier = message.get("_trace")
 
-        with start_span("worker.publish_to_salesforce", transaction_id=transaction_id, org_id=org_id, channel=channel):
+        # Cancellation checkpoint: may have been cancelled while sitting in
+        # the outbound queue, or flagged while it was still being processed
+        # upstream (auto-publish path) - honor it before attempting to
+        # publish rather than sending it to Salesforce anyway.
+        current = tx.get_transaction(transaction_id)
+        if current and (current.get("status") == "cancelled" or current.get("cancel_requested")):
+            tx.update_transaction(transaction_id, status="cancelled", error="Cancelled before publishing to Salesforce")
+            log_event("warning", "Worker: skipping publish for cancelled transaction", transaction_id=transaction_id)
+            return
+
+        with start_span("worker.publish_to_salesforce", carrier=parent_carrier, transaction_id=transaction_id, org_id=org_id, channel=channel) as publish_span:
             org = orgs_table.get(Q.id == org_id)
             if not org:
                 tx.update_transaction(transaction_id, status="failed", error="Org no longer exists")
                 failed_tx = tx.get_transaction(transaction_id)
-                await asyncio.to_thread(dispatch_integrations, failed_tx, routed_integration_ids)
+                fail_carrier = inject_trace_context(span=publish_span) or parent_carrier
+                await asyncio.to_thread(dispatch_integrations, failed_tx, routed_integration_ids, fail_carrier)
                 await asyncio.to_thread(fire_alert_for_transaction, failed_tx, routed_alert_ids)
                 return
 
@@ -448,16 +501,24 @@ async def outbound_publisher():
 
             tx.update_transaction(transaction_id, status="publishing")
             try:
-                # Offloaded to a thread: this is a blocking `requests` call.
+                # Offloaded to a thread: this is a blocking `requests` call -
+                # it can't be aborted mid-flight, so a cancellation requested
+                # during this specific call takes effect right after it
+                # returns (see the check below), not immediately.
                 await asyncio.to_thread(sf_client.publish_platform_event, org, channel, payload)
-                tx.update_transaction(transaction_id, status="published")
-                log_event("info", "Publisher: event published back to Salesforce", transaction_id=transaction_id, org_id=org_id, channel=channel)
+                if tx.get_transaction(transaction_id).get("cancel_requested"):
+                    tx.update_transaction(transaction_id, status="cancelled", error="Cancelled during publish (Salesforce may still have received it)")
+                    log_event("warning", "Worker: honoring cancellation requested during publish", transaction_id=transaction_id)
+                else:
+                    tx.update_transaction(transaction_id, status="published")
+                    log_event("info", "Publisher: event published back to Salesforce", transaction_id=transaction_id, org_id=org_id, channel=channel)
             except Exception as exc:  # noqa: BLE001
                 tx.update_transaction(transaction_id, status="failed", error=str(exc))
                 log_event("error", f"Publisher: failed to publish to Salesforce: {exc}", transaction_id=transaction_id)
 
+        final_carrier = inject_trace_context(span=publish_span) or parent_carrier
         final_tx = tx.get_transaction(transaction_id)
-        await asyncio.to_thread(dispatch_integrations, final_tx, routed_integration_ids)
+        await asyncio.to_thread(dispatch_integrations, final_tx, routed_integration_ids, final_carrier)
         await asyncio.to_thread(fire_alert_for_transaction, final_tx, routed_alert_ids)
 
     await broker.consume_forever("outbound", handle)
@@ -528,17 +589,19 @@ async def publish_manual_event(org_id: str, channel: str, payload: dict) -> dict
         org_id=org_id, org_name=org["name"], direction="publish", channel=channel,
         status="publishing", payload=payload,
     )
-    with start_span("worker.publish_manual_event", transaction_id=record["id"], org_id=org_id, channel=channel):
+    with start_span("worker.publish_manual_event", transaction_id=record["id"], org_id=org_id, channel=channel) as manual_span:
         try:
             result = await asyncio.to_thread(sf_client.publish_platform_event, org, channel, payload)
             tx.update_transaction(record["id"], status="published", result=result)
         except Exception as exc:  # noqa: BLE001
             tx.update_transaction(record["id"], status="failed", error=str(exc))
             failed_tx = tx.get_transaction(record["id"])
-            await asyncio.to_thread(dispatch_integrations, failed_tx)
+            fail_carrier = inject_trace_context(span=manual_span)
+            await asyncio.to_thread(dispatch_integrations, failed_tx, None, fail_carrier)
             await asyncio.to_thread(fire_alert_for_transaction, failed_tx)
             raise
     final_tx = tx.get_transaction(record["id"])
-    await asyncio.to_thread(dispatch_integrations, final_tx)
+    final_carrier = inject_trace_context(span=manual_span)
+    await asyncio.to_thread(dispatch_integrations, final_tx, None, final_carrier)
     await asyncio.to_thread(fire_alert_for_transaction, final_tx)
     return record

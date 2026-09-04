@@ -35,6 +35,8 @@ class UserOut(BaseModel):
     role: str = "admin"
     auth_provider: str = "local"   # local | sso
     created_at: Optional[float] = None
+    failed_login_count: int = 0
+    locked_until: Optional[float] = None
 
 
 class UserCreate(BaseModel):
@@ -177,6 +179,7 @@ class TransactionStatus(str, Enum):
     publishing = "publishing"
     published = "published"
     failed = "failed"
+    cancelled = "cancelled"       # cancelled by an admin - see "Cancelling transactions"
 
 
 class TransactionOut(BaseModel):
@@ -191,6 +194,7 @@ class TransactionOut(BaseModel):
     error: Optional[str] = None
     attempts: int = 0
     parent_transaction_id: Optional[str] = None
+    cancel_requested: bool = False   # set while an in-flight cancellation is pending - see routers/transactions.py:cancel_transaction
     created_at: float
     updated_at: float
 
@@ -278,6 +282,37 @@ class EmailSettingsOut(BaseModel):
     use_tls: bool = True
     from_address: str = ""
     configured: bool = False
+
+
+# ---------- Database backend ----------
+class DatabaseConfigUpdate(BaseModel):
+    database_type: str          # "sqlite" | "postgres" | "sqlserver" | "oracle"
+    database_host: Optional[str] = None
+    database_port: Optional[int] = None
+    database_name: Optional[str] = None
+    database_user: Optional[str] = None
+    database_password: Optional[str] = None
+
+
+class DatabaseConfigOut(BaseModel):
+    database_type: str
+    database_host: str
+    database_port: int
+    database_name: str
+    database_user: str
+    database_password: str = ""   # masked
+    db_path: str                   # the SQLite file path, shown when database_type == "sqlite"
+    env_file_writable: bool
+    restart_required: bool = True
+
+
+class DatabaseTestRequest(BaseModel):
+    database_type: str
+    database_host: Optional[str] = None
+    database_port: Optional[int] = None
+    database_name: Optional[str] = None
+    database_user: Optional[str] = None
+    database_password: Optional[str] = None
 
 
 # ---------- Custom payload processors (uploaded Python scripts) ----------

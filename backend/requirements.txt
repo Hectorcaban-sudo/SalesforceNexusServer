@@ -18,10 +18,21 @@ aio-pika==10.0.1
 # incompatibilities - Dataiku recommends the client version track the server.
 dataiku-api-client==15.0.0
 
-# Rule engine (used by the "rule_engine" payload processing mode) - executes
-# GoRules JSON Decision Model (JDM) decision graphs, e.g. exported from the
-# free online editor at https://editor.gorules.io
+# Rule engine (validation gate for whether an event gets processed - see
+# app/rules.py) - executes GoRules JSON Decision Model (JDM) decision
+# graphs, e.g. exported from the free online editor at https://editor.gorules.io
 zen-engine==2.0.2
+
+# ---- Database backend (see Admin Configuration -> Database, README "Database backends") ----
+# SQLAlchemy Core provides the SQL-dialect abstraction; always required.
+sqlalchemy==2.0.35
+# SQLite (the default) needs no extra driver - it's in the Python standard library.
+# Uncomment ONLY the driver for the backend you actually configure via DATABASE_TYPE:
+# psycopg2-binary==2.9.9      # DATABASE_TYPE=postgres
+# pyodbc==5.1.0               # DATABASE_TYPE=sqlserver (also needs the OS-level
+#                              # "ODBC Driver 18 for SQL Server" package - see README)
+# oracledb==2.4.1             # DATABASE_TYPE=oracle (pure Python "thin" mode, no
+#                              # separate Oracle Instant Client needed)
 
 # OpenTelemetry (tracing is safe to leave unconfigured - see app/tracing.py)
 opentelemetry-api==1.27.0

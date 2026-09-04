@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi.responses import Response
 from typing import List, Optional
 
 from ..auth import require_role
@@ -31,6 +32,23 @@ def get_processor_code(processor_id: str):
     return {"code": proc_module.read_processor_code(processor_id)}
 
 
+@router.get("/{processor_id}/download")
+def download_processor(processor_id: str):
+    """Downloads the processor's actual .py file, so it can be edited
+    locally, version-controlled, or handed to another instance for upload
+    (this is the same content /upload's override accepts back)."""
+    record = processors_table.get(Q.id == processor_id)
+    if not record:
+        raise HTTPException(404, "Processor not found")
+    code = proc_module.read_processor_code(processor_id)
+    filename = record.get("filename") or f"{record['name']}.py"
+    return Response(
+        content=code,
+        media_type="text/x-python",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.post("", response_model=ProcessorOut)
 async def upload_processor(name: str = Form(...), file: UploadFile = File(...)):
     if not file.filename.endswith(".py"):
@@ -60,6 +78,46 @@ async def upload_processor(name: str = Form(...), file: UploadFile = File(...)):
     processors_table.insert(record)
     log_event("info", f"Processor script '{name}' uploaded", processor_id=processor_id, filename=file.filename)
     return record
+
+
+@router.post("/{processor_id}/upload", response_model=ProcessorOut)
+async def override_processor(processor_id: str, name: Optional[str] = Form(None), file: UploadFile = File(...)):
+    """
+    Uploads a new .py file to REPLACE an existing processor's code in place
+    (same id, so anything currently pointing at this processor - the global
+    processing mode, or a per-event override - keeps working against the
+    updated script with no reconfiguration needed). This is the counterpart
+    to /download: download, edit locally, upload back here to override.
+    """
+    existing = processors_table.get(Q.id == processor_id)
+    if not existing:
+        raise HTTPException(404, "Processor not found")
+
+    if not file.filename.endswith(".py"):
+        raise HTTPException(400, "Only .py files are accepted")
+
+    contents = await file.read()
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, f"File too large (max {MAX_UPLOAD_BYTES // 1024}KB)")
+
+    code = contents.decode("utf-8", errors="replace")
+    syntax_error = proc_module.validate_syntax(code)
+    if syntax_error:
+        raise HTTPException(400, f"Uploaded file is not valid Python: {syntax_error}")
+
+    proc_module.save_processor_file(processor_id, code)
+    updates = {
+        "filename": file.filename,
+        # Reset test history since the code actually changed - the old
+        # last_status/last_error no longer describes what's running now.
+        "last_status": None, "last_run_at": None, "last_error": None,
+    }
+    if name:
+        updates["name"] = name
+    processors_table.update(updates, Q.id == processor_id)
+
+    log_event("info", f"Processor script '{existing['name']}' overridden with a new upload", processor_id=processor_id, filename=file.filename)
+    return processors_table.get(Q.id == processor_id)
 
 
 @router.delete("/{processor_id}")

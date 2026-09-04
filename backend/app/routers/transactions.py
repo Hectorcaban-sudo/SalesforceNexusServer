@@ -3,11 +3,13 @@ from typing import Optional, List
 
 from ..auth import get_current_user, require_role
 from ..database import transactions_table, Q
-from ..models import TransactionOut
+from ..models import TransactionOut, now_ts
 from ..worker import reprocess_transaction
 from ..logging_config import log_event
 
 router = APIRouter(prefix="/api/transactions", tags=["transactions"], dependencies=[Depends(get_current_user)])
+
+TERMINAL_STATUSES = ("published", "failed", "skipped", "cancelled")
 
 
 @router.get("", response_model=List[TransactionOut])
@@ -78,3 +80,56 @@ async def reprocess_all_failed(org_id: Optional[str] = None):
             log_event("error", f"Bulk reprocess failed for transaction {r['id']}: {exc}", transaction_id=r["id"])
 
     return {"detail": f"requeued {len(requeued)} transaction(s)", "transaction_ids": requeued}
+
+
+@router.post("/{transaction_id}/cancel", dependencies=[Depends(require_role("operator"))])
+def cancel_transaction(transaction_id: str):
+    """
+    Cancels a transaction. What actually happens depends on how far along it
+    already is:
+      - "received"/"queued" (not yet picked up for processing): cancelled
+        immediately - the worker checks for this the moment it would
+        otherwise start work and skips it entirely.
+      - "processing"/"publishing" (actively running): flags the transaction
+        with `cancel_requested`. For custom-script processing this kills the
+        subprocess immediately. For everything else (local/DSSClient/
+        Langflow processing, and the Salesforce publish call itself) there's
+        no way to abort an in-flight blocking network call, so the current
+        step finishes first and the cancellation takes effect right after -
+        the event will NOT proceed to publishing (if still processing) or
+        won't be treated as published (if it was about to be), and no
+        integrations/alerts fire for it either way.
+      - Anything already in a terminal state (published/failed/skipped/
+        already cancelled) can't be cancelled - 400.
+    """
+    record = transactions_table.get(Q.id == transaction_id)
+    if not record:
+        raise HTTPException(404, "Transaction not found")
+
+    status = record["status"]
+    if status in TERMINAL_STATUSES:
+        raise HTTPException(400, f"Transaction is already in a terminal state ({status}) and can't be cancelled")
+
+    if status in ("received", "queued"):
+        transactions_table.update(
+            {"status": "cancelled", "error": "Cancelled by admin before processing started", "updated_at": now_ts()},
+            Q.id == transaction_id,
+        )
+        log_event("warning", f"Transaction {transaction_id} cancelled before processing started", transaction_id=transaction_id)
+        return {"detail": "Transaction cancelled"}
+
+    # Actively processing or publishing - best-effort. See docstring above
+    # for exactly what "cancel" means for each processing mode.
+    transactions_table.update({"cancel_requested": True, "updated_at": now_ts()}, Q.id == transaction_id)
+    log_event(
+        "warning",
+        f"Cancellation requested for in-flight transaction {transaction_id} (status={status})",
+        transaction_id=transaction_id,
+    )
+    return {
+        "detail": (
+            "Cancellation requested. A custom-script processor is killed immediately; other "
+            "processing modes and the Salesforce publish call finish their current network "
+            "operation first, then stop before completing the next step."
+        )
+    }

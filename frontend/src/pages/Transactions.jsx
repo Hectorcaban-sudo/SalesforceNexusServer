@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Eye, X, RotateCcw, RefreshCcw, ChevronDown, ChevronRight, Layers } from 'lucide-react'
+import { Eye, X, RotateCcw, RefreshCcw, ChevronDown, ChevronRight, Layers, XCircle } from 'lucide-react'
 import api from '../lib/api'
 import { StatusBadge, fmtTime } from '../components/UI'
 
@@ -20,6 +20,7 @@ export default function Transactions() {
   const [collapsed, setCollapsed] = useState({})
   const [selected, setSelected] = useState(null)
   const [reprocessingId, setReprocessingId] = useState(null)
+  const [cancellingId, setCancellingId] = useState(null)
   const [bulkBusy, setBulkBusy] = useState(false)
   const [toast, setToast] = useState('')
 
@@ -72,6 +73,20 @@ export default function Transactions() {
       await load()
     } finally {
       setBulkBusy(false)
+    }
+  }
+
+  async function cancel(t) {
+    if (!confirm(`Cancel transaction ${t.id}?`)) return
+    setCancellingId(t.id)
+    try {
+      const { data } = await api.post(`/transactions/${t.id}/cancel`)
+      flashToast(data.detail)
+      await load()
+    } catch (err) {
+      flashToast(err?.response?.data?.detail || 'Failed to cancel transaction')
+    } finally {
+      setCancellingId(null)
     }
   }
 
@@ -139,7 +154,7 @@ export default function Transactions() {
             <tbody>
               {rows.length === 0 && <tr><td colSpan={7} className="empty-state">No transactions match these filters</td></tr>}
               {rows.map((t) => (
-                <TransactionRow key={t.id} t={t} onView={setSelected} onReprocess={reprocess} reprocessingId={reprocessingId} />
+                <TransactionRow key={t.id} t={t} onView={setSelected} onReprocess={reprocess} reprocessingId={reprocessingId} onCancel={cancel} cancellingId={cancellingId} />
               ))}
             </tbody>
           </table>
@@ -168,7 +183,7 @@ export default function Transactions() {
                   </thead>
                   <tbody>
                     {groupRows.map((t) => (
-                      <TransactionRow key={t.id} t={t} onView={setSelected} onReprocess={reprocess} reprocessingId={reprocessingId} />
+                      <TransactionRow key={t.id} t={t} onView={setSelected} onReprocess={reprocess} reprocessingId={reprocessingId} onCancel={cancel} cancellingId={cancellingId} />
                     ))}
                   </tbody>
                 </table>
@@ -206,6 +221,15 @@ export default function Transactions() {
                   >
                     <RotateCcw size={13} /> {reprocessingId === selected.id ? 'Requeuing…' : 'Reprocess'}
                   </button>
+                  {NON_TERMINAL_STATUSES.includes(selected.status) && (
+                    <button
+                      className="btn btn-sm btn-danger"
+                      onClick={() => cancel(selected)}
+                      disabled={cancellingId === selected.id || selected.cancel_requested}
+                    >
+                      <XCircle size={13} /> {selected.cancel_requested ? 'Cancelling…' : 'Cancel'}
+                    </button>
+                  )}
                 </div>
               </div>
               {selected.error && (
@@ -235,14 +259,22 @@ export default function Transactions() {
   )
 }
 
-function TransactionRow({ t, onView, onReprocess, reprocessingId }) {
+const NON_TERMINAL_STATUSES = ['received', 'queued', 'processing', 'publishing']
+
+function TransactionRow({ t, onView, onReprocess, reprocessingId, onCancel, cancellingId }) {
+  const cancellable = NON_TERMINAL_STATUSES.includes(t.status)
   return (
     <tr>
       <td className="mono" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{fmtTime(t.created_at)}</td>
       <td>{t.org_name}</td>
       <td style={{ textTransform: 'capitalize' }}>{t.direction}</td>
       <td><code className="pill">{t.channel}</code></td>
-      <td><StatusBadge status={t.status} /></td>
+      <td>
+        <StatusBadge status={t.status} />
+        {t.cancel_requested && t.status !== 'cancelled' && (
+          <div style={{ fontSize: 10.5, color: 'var(--accent-orange)', marginTop: 3 }}>cancelling…</div>
+        )}
+      </td>
       <td className="mono" style={{ color: 'var(--text-muted)' }}>{t.attempts || 0}</td>
       <td style={{ display: 'flex', gap: 6 }}>
         <button className="btn btn-sm btn-icon" onClick={() => onView(t)}><Eye size={14} /></button>
@@ -254,6 +286,16 @@ function TransactionRow({ t, onView, onReprocess, reprocessingId }) {
         >
           <RotateCcw size={14} className={reprocessingId === t.id ? 'spin' : ''} />
         </button>
+        {cancellable && (
+          <button
+            className="btn btn-sm btn-icon btn-danger"
+            title="Cancel"
+            onClick={() => onCancel(t)}
+            disabled={cancellingId === t.id || t.cancel_requested}
+          >
+            <XCircle size={14} />
+          </button>
+        )}
       </td>
     </tr>
   )

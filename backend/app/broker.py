@@ -52,15 +52,31 @@ class InMemoryBroker:
         log_event("debug", f"Broker: message published to topic '{topic}'", topic=topic)
 
     async def consume_forever(self, topic: str, handler: Callable[[dict], Awaitable[Any]]):
+        """
+        Pulls messages off the queue as fast as they arrive and hands each
+        one to `handler` as an independent concurrent task, instead of
+        awaiting each handler to finish before dequeuing the next message.
+        A semaphore bounds how many run at once (settings.worker_max_concurrency)
+        so a burst of events can't spawn unbounded threads/tasks - once the
+        limit is hit, newly dequeued messages simply wait their turn on the
+        semaphore while already-running ones continue, rather than blocking
+        the dequeue loop itself.
+        """
         queue = self._get_queue(topic)
+        semaphore = asyncio.Semaphore(settings.worker_max_concurrency)
+
+        async def run_one(message: dict):
+            async with semaphore:
+                try:
+                    await handler(message)
+                except Exception as exc:  # noqa: BLE001
+                    log_event("error", f"Broker: handler for topic '{topic}' raised an exception: {exc}", topic=topic)
+                finally:
+                    queue.task_done()
+
         while True:
             message = await queue.get()
-            try:
-                await handler(message)
-            except Exception as exc:  # noqa: BLE001
-                log_event("error", f"Broker: handler for topic '{topic}' raised an exception: {exc}", topic=topic)
-            finally:
-                queue.task_done()
+            asyncio.create_task(run_one(message))
 
     def queue_depth(self, topic: str) -> int:
         return self._get_queue(topic).qsize()
@@ -94,7 +110,10 @@ class RabbitMQBroker:
         import aio_pika
         self._connection = await aio_pika.connect_robust(self._url())
         self._channel = await self._connection.channel()
-        await self._channel.set_qos(prefetch_count=10)
+        # Prefetch at least as many unacked messages as we're willing to
+        # process concurrently, or RabbitMQ will only ever hand us one at a
+        # time regardless of how the consumer loop is written below.
+        await self._channel.set_qos(prefetch_count=max(settings.worker_max_concurrency, 10))
         log_event("info", f"RabbitMQ broker connected to {self._config.get('host')}:{self._config.get('port')}")
 
     async def _get_queue(self, topic: str):
@@ -113,15 +132,24 @@ class RabbitMQBroker:
         log_event("debug", f"Broker (RabbitMQ): message published to topic '{topic}'", topic=topic)
 
     async def consume_forever(self, topic: str, handler: Callable[[dict], Awaitable[Any]]):
+        """Same bounded-concurrency approach as InMemoryBroker.consume_forever
+        - each message is handed to an independent task rather than awaited
+        in-line, so multiple events can be in flight at once."""
         queue = await self._get_queue(topic)
-        async with queue.iterator() as queue_iter:
-            async for message in queue_iter:
+        semaphore = asyncio.Semaphore(settings.worker_max_concurrency)
+
+        async def process_one(message):
+            async with semaphore:
                 async with message.process():
                     try:
                         payload = json.loads(message.body.decode("utf-8"))
                         await handler(payload)
                     except Exception as exc:  # noqa: BLE001
                         log_event("error", f"Broker (RabbitMQ): handler for topic '{topic}' raised an exception: {exc}", topic=topic)
+
+        async with queue.iterator() as queue_iter:
+            async for message in queue_iter:
+                asyncio.create_task(process_one(message))
 
     def queue_depth(self, topic: str) -> int:
         # aio-pika queue objects expose declaration_result.message_count only

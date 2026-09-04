@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   SlidersHorizontal, Save, CheckCircle2, CircleDashed, Upload, Trash2, Play,
   FileCode2, Download, Radio, Network, DatabaseZap, FileDown, FileUp, AlertTriangle,
-  Workflow, Mail, GitFork, Plus, Pencil,
+  Workflow, Mail, GitFork, Plus, Pencil, Database, PlugZap,
 } from 'lucide-react'
 import api from '../lib/api'
 
@@ -10,6 +10,7 @@ const EMPTY_DSS = { url: '', project_name: '', llm: '', api_key: '' }
 const EMPTY_LANGFLOW = { base_url: '', flow_id: '', api_key: '', input_field: 'input_value', output_path: '' }
 const EMPTY_RMQ = { host: 'localhost', port: 5672, username: 'guest', password: '', vhost: '/', use_tls: false }
 const EMPTY_EMAIL = { host: '', port: 587, username: '', password: '', use_tls: true, from_address: '' }
+const EMPTY_DB = { database_type: 'sqlite', database_host: 'localhost', database_port: '', database_name: 'nexus', database_user: '', database_password: '' }
 
 const TABS = [
   { key: 'processing', label: 'Processing mode', icon: Radio },
@@ -18,6 +19,7 @@ const TABS = [
   { key: 'processors', label: 'Payload processors', icon: FileCode2 },
   { key: 'rules', label: 'Rules', icon: GitFork },
   { key: 'broker', label: 'Message broker', icon: Network },
+  { key: 'database', label: 'Database', icon: Database },
   { key: 'email', label: 'Email', icon: Mail },
   { key: 'backup', label: 'Configuration backup', icon: FileDown },
 ]
@@ -70,13 +72,20 @@ export default function AdminConfig() {
   const [emailConfigured, setEmailConfigured] = useState(false)
   const [savingEmail, setSavingEmail] = useState(false)
 
+  // ---- Database ----
+  const [dbForm, setDbForm] = useState(EMPTY_DB)
+  const [dbInfo, setDbInfo] = useState(null)
+  const [savingDb, setSavingDb] = useState(false)
+  const [dbTestResult, setDbTestResult] = useState(null)
+  const [dbTesting, setDbTesting] = useState(false)
+
   // ---- Export / Import ----
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState(null)
   const importInputRef = useRef(null)
 
   async function load() {
-    const [dss, lf, pm, procs, brk, email, rls] = await Promise.all([
+    const [dss, lf, pm, procs, brk, email, rls, db] = await Promise.all([
       api.get('/admin-config/dss-client'),
       api.get('/admin-config/langflow'),
       api.get('/admin-config/processing-mode'),
@@ -84,6 +93,7 @@ export default function AdminConfig() {
       api.get('/admin-config/broker'),
       api.get('/admin-config/email'),
       api.get('/rules'),
+      api.get('/admin-config/database'),
     ])
     setDssForm({ url: dss.data.url, project_name: dss.data.project_name, llm: dss.data.llm, api_key: '' })
     setDssConfigured(dss.data.configured)
@@ -99,6 +109,11 @@ export default function AdminConfig() {
     setBrokerConnError(brk.data.connection_error)
     setEmailForm({ host: email.data.host, port: email.data.port, username: email.data.username, password: '', use_tls: email.data.use_tls, from_address: email.data.from_address })
     setEmailConfigured(email.data.configured)
+    setDbInfo(db.data)
+    setDbForm({
+      database_type: db.data.database_type, database_host: db.data.database_host, database_port: db.data.database_port || '',
+      database_name: db.data.database_name, database_user: db.data.database_user, database_password: '',
+    })
     setLoading(false)
   }
 
@@ -202,6 +217,29 @@ export default function AdminConfig() {
     load()
   }
 
+  async function downloadProcessor(p) {
+    const res = await api.get(`/processors/${p.id}/download`, { responseType: 'blob' })
+    const url = URL.createObjectURL(res.data)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = p.filename || `${p.name}.py`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  async function overrideProcessor(p, file) {
+    if (!file) return
+    const fd = new FormData()
+    fd.append('file', file)
+    try {
+      await api.post(`/processors/${p.id}/upload`, fd)
+      flashToast(`Processor "${p.name}" updated with the new file`)
+      load()
+    } catch (err) {
+      flashToast(err?.response?.data?.detail || 'Failed to override processor')
+    }
+  }
+
   function openCreateRule() {
     setEditingRuleId(null)
     setRuleForm({ name: '', description: '', jdmText: '' })
@@ -302,6 +340,36 @@ export default function AdminConfig() {
       flashToast('Email configuration saved')
     } finally {
       setSavingEmail(false)
+    }
+  }
+
+  async function testDbConnection() {
+    setDbTesting(true)
+    setDbTestResult(null)
+    try {
+      const payload = { ...dbForm, database_port: dbForm.database_port ? Number(dbForm.database_port) : null }
+      const { data } = await api.post('/admin-config/database/test', payload)
+      setDbTestResult({ ok: true, detail: data.detail })
+    } catch (err) {
+      setDbTestResult({ ok: false, detail: err?.response?.data?.detail || 'Connection test failed' })
+    } finally {
+      setDbTesting(false)
+    }
+  }
+
+  async function saveDbConfig(e) {
+    e.preventDefault()
+    setSavingDb(true)
+    try {
+      const payload = { ...dbForm, database_port: dbForm.database_port ? Number(dbForm.database_port) : null }
+      if (!payload.database_password) delete payload.database_password
+      const { data } = await api.put('/admin-config/database', payload)
+      setDbInfo(data)
+      flashToast('Database configuration saved to .env — restart the server for this to take effect')
+    } catch (err) {
+      flashToast(err?.response?.data?.detail || 'Failed to save database configuration')
+    } finally {
+      setSavingDb(false)
     }
   }
 
@@ -534,6 +602,11 @@ export default function AdminConfig() {
                           </td>
                           <td style={{ display: 'flex', gap: 6 }}>
                             <button className="btn btn-sm btn-icon" title="Test run" onClick={() => testProcessor(p.id)}><Play size={13} /></button>
+                            <button className="btn btn-sm btn-icon" title="Download" onClick={() => downloadProcessor(p)}><Download size={13} /></button>
+                            <label className="btn btn-sm btn-icon" title="Upload a new version to override this processor" style={{ margin: 0, cursor: 'pointer' }}>
+                              <FileUp size={13} />
+                              <input type="file" accept=".py" style={{ display: 'none' }} onChange={(e) => overrideProcessor(p, e.target.files[0])} />
+                            </label>
                             <button className="btn btn-sm btn-icon btn-danger" onClick={() => removeProcessor(p)}><Trash2 size={13} /></button>
                           </td>
                         </tr>
@@ -662,6 +735,89 @@ export default function AdminConfig() {
                   <button className="btn btn-primary" disabled={savingBroker}>
                     <DatabaseZap size={14} /> {savingBroker ? 'Saving…' : 'Save broker configuration'}
                   </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {tab === 'database' && (
+            <div className="panel" style={{ maxWidth: 720 }}>
+              <div className="panel-header">
+                <h3><Database size={15} /> Database backend</h3>
+                <span className="badge badge-blue"><span className="badge-dot" />Currently running: {dbInfo?.database_type}</span>
+              </div>
+              <div className="panel-body">
+                <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
+                  Choose between SQLite (default, zero setup, a local file), PostgreSQL, SQL Server, or Oracle.
+                  <strong> This can't be applied live</strong> — the database is where every other setting lives, so
+                  which one to connect to has to be known before the app can read anything, which means it can only
+                  come from environment variables. Saving here writes those variables to the backend's <code className="pill">.env</code> file
+                  and always requires a restart.
+                </p>
+
+                {dbInfo && !dbInfo.env_file_writable && (
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', background: 'rgba(255,84,112,.08)', border: '1px solid rgba(255,84,112,.3)', borderRadius: 8, padding: '10px 12px', marginBottom: 14, fontSize: 12.5, color: 'var(--accent-red)' }}>
+                    <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                    The .env file isn't writable from here — set these environment variables manually and restart instead.
+                  </div>
+                )}
+
+                <form onSubmit={saveDbConfig}>
+                  <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+                    {['sqlite', 'postgres', 'sqlserver', 'oracle'].map((t) => (
+                      <div key={t} className={`tab-pill ${dbForm.database_type === t ? 'active' : ''}`} style={{ border: '1px solid var(--border-light)', padding: '10px 16px' }} onClick={() => setDbForm({ ...dbForm, database_type: t })}>
+                        {t === 'sqlite' ? 'SQLite' : t === 'postgres' ? 'PostgreSQL' : t === 'sqlserver' ? 'SQL Server' : 'Oracle'}
+                      </div>
+                    ))}
+                  </div>
+
+                  {dbForm.database_type === 'sqlite' ? (
+                    <div className="field">
+                      <label>Database file path</label>
+                      <div className="mono" style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>{dbInfo?.db_path}</div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="form-row-2">
+                        <div className="field"><label>Host</label><input required value={dbForm.database_host} onChange={(e) => setDbForm({ ...dbForm, database_host: e.target.value })} /></div>
+                        <div className="field"><label>Port (optional — uses the standard port if blank)</label><input type="number" value={dbForm.database_port} onChange={(e) => setDbForm({ ...dbForm, database_port: e.target.value })} /></div>
+                      </div>
+                      <div className="form-row-2">
+                        <div className="field"><label>{dbForm.database_type === 'sqlserver' ? 'Database' : dbForm.database_type === 'oracle' ? 'Service name' : 'Database'}</label><input required value={dbForm.database_name} onChange={(e) => setDbForm({ ...dbForm, database_name: e.target.value })} /></div>
+                        <div className="field"><label>Username</label><input value={dbForm.database_user} onChange={(e) => setDbForm({ ...dbForm, database_user: e.target.value })} /></div>
+                      </div>
+                      <div className="field">
+                        <label>Password</label>
+                        <input type="password" value={dbForm.database_password} onChange={(e) => setDbForm({ ...dbForm, database_password: e.target.value })} placeholder="(unchanged) enter a new password to replace it" />
+                      </div>
+
+                      <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+                        <button type="button" className="btn" onClick={testDbConnection} disabled={dbTesting}>
+                          <PlugZap size={14} /> {dbTesting ? 'Testing…' : 'Test connection'}
+                        </button>
+                      </div>
+                      {dbTestResult && (
+                        <div style={{ marginBottom: 14, fontSize: 12.5, color: dbTestResult.ok ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                          {dbTestResult.detail}
+                        </div>
+                      )}
+
+                      <p style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 0 }}>
+                        {dbForm.database_type === 'postgres' && 'Requires psycopg2-binary installed (pip install psycopg2-binary).'}
+                        {dbForm.database_type === 'sqlserver' && 'Requires pyodbc installed, plus the OS-level "ODBC Driver 18 for SQL Server" package — see the README.'}
+                        {dbForm.database_type === 'oracle' && 'Requires oracledb installed (pip install oracledb) — pure Python, no separate Oracle client needed.'}
+                      </p>
+                    </>
+                  )}
+
+                  <button className="btn btn-primary" disabled={savingDb || dbForm.database_type === 'sqlite'}>
+                    <Save size={14} /> {savingDb ? 'Saving…' : 'Save to .env (restart required)'}
+                  </button>
+                  {dbForm.database_type === 'sqlite' && (
+                    <p style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 8 }}>
+                      SQLite is the active default — nothing to save unless you're switching to a different backend.
+                    </p>
+                  )}
                 </form>
               </div>
             </div>

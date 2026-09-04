@@ -23,6 +23,18 @@ class Settings(BaseSettings):
     # Database (SQLite) file location
     db_path: str = str(DATA_DIR / "nexus.db")
 
+    # Which database backend to use. This MUST come from the environment
+    # (not from within the database itself, obviously) and requires a
+    # restart to change - see Admin Configuration -> Database for a
+    # config-generator UI, and README "Database backends" for details and
+    # the driver each option needs installed.
+    database_type: str = "sqlite"          # "sqlite" | "postgres" | "sqlserver" | "oracle"
+    database_host: str = "localhost"
+    database_port: int = 0                  # 0 = use the dialect's standard port
+    database_name: str = "nexus"
+    database_user: str = ""
+    database_password: str = ""
+
     # Logging
     log_file: str = str(LOG_DIR / "nexus.log")
     log_level: str = "INFO"
@@ -48,6 +60,19 @@ class Settings(BaseSettings):
 
     # Custom payload processor subprocess timeout
     processor_timeout_seconds: int = 20
+
+    # How many events can be processed concurrently per broker topic (inbound
+    # and outbound each get their own independent budget of this size). Each
+    # in-flight handler's actual blocking work (HTTP calls, subprocess
+    # execution) runs on a thread via asyncio.to_thread, so raising this
+    # lets multiple events truly process in parallel instead of strictly one
+    # at a time - bounded so a flood of events can't spawn unlimited threads.
+    worker_max_concurrency: int = 10
+
+    # Authentication monitoring / account lockout (supports CMMC/NIST 800-171
+    # AC.L2-3.1.8 "Limit unsuccessful logon attempts" - see docs/SECURITY.md)
+    max_failed_login_attempts: int = 5
+    lockout_duration_seconds: int = 900  # 15 minutes
 
     # Uvicorn server settings (used by run.py) - configurable so the same
     # image/checkout can be pointed at a different bind address/port purely

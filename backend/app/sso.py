@@ -32,6 +32,7 @@ from jose import jwt as jose_jwt
 
 from .config import settings
 from .auth import find_or_create_sso_user, create_access_token
+from .audit import log_auth_event
 from .logging_config import log_event
 
 # short-lived in-memory state store for CSRF protection during the redirect
@@ -85,7 +86,7 @@ async def start_login():
     return RedirectResponse(auth_url)
 
 
-async def handle_callback(code: Optional[str], state: Optional[str], error: Optional[str]):
+async def handle_callback(code: Optional[str], state: Optional[str], error: Optional[str], ip: Optional[str] = None):
     if not is_sso_enabled():
         raise HTTPException(status_code=404, detail="SSO is not configured")
 
@@ -137,6 +138,7 @@ async def handle_callback(code: Optional[str], state: Optional[str], error: Opti
 
     user = find_or_create_sso_user(username, default_role=settings.sso_default_role)
     log_event("info", f"SSO: user '{username}' authenticated via identity provider", role=user.get("role"))
+    log_auth_event(username, "sso_login_success", ip=ip)
 
     app_token = create_access_token({"sub": user["username"]})
     redirect_target = f"{settings.frontend_base_url.rstrip('/')}/sso-callback?token={app_token}"

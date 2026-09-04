@@ -35,7 +35,7 @@ from .broker import broker
 from .logging_config import log_event
 from .database import orgs_table, event_configs_table, Q
 from . import transactions as tx
-from .tracing import start_span
+from .tracing import start_span, inject_trace_context
 
 
 class SalesforceAuthHeaderExtension(AuthExtension):
@@ -205,7 +205,7 @@ class OrgStreamManager:
         channel = message.get("channel", "unknown")
         payload = message.get("data", {}).get("payload", message.get("data", {}))
 
-        with start_span("cometd.receive_event", org_id=org["id"], channel=channel):
+        with start_span("cometd.receive_event", org_id=org["id"], channel=channel) as span:
             record = tx.record_transaction(
                 org_id=org["id"],
                 org_name=org["name"],
@@ -217,9 +217,18 @@ class OrgStreamManager:
             log_event("info", f"CometD: event received on '{channel}' from org '{org['name']}'", org_id=org["id"], channel=channel)
 
             tx.update_transaction(record["id"], status="queued")
+            # Captures this span's trace context so every downstream stage
+            # (worker processing, Salesforce publish, integration fan-out -
+            # each running in a separate asyncio task at a later point in
+            # time, on the other side of the broker) attaches as a child of
+            # THIS span instead of starting a disconnected trace of its own.
+            trace_carrier = inject_trace_context(span=span)
             await broker.publish(
                 "inbound",
-                {"transaction_id": record["id"], "org_id": org["id"], "channel": channel, "payload": payload},
+                {
+                    "transaction_id": record["id"], "org_id": org["id"], "channel": channel,
+                    "payload": payload, "_trace": trace_carrier,
+                },
             )
 
 
