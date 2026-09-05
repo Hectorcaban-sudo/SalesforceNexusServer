@@ -38,11 +38,11 @@ def execute_dss_client(req: ExecuteRequest):
 
 
 @router.post("/langflow")
-def execute_langflow(req: ExecuteRequest):
+async def execute_langflow(req: ExecuteRequest):
     from ..worker import run_langflow  # local import avoids a circular import at module load time
 
     try:
-        result = run_langflow(req.payload)
+        result = await run_langflow(req.payload)
         log_event("info", "Direct execute: Langflow call succeeded", result=result)
         return {"detail": "ok", "result": result}
     except Exception as exc:  # noqa: BLE001

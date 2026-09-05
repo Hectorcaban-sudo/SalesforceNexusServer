@@ -161,9 +161,10 @@ class OrgStreamManager:
         org = self.org
         connected = False
         try:
-            # Offloaded to a thread: this is a blocking `requests` call and
-            # must never freeze the web app's event loop while retrying.
-            session = await asyncio.to_thread(sf_client.get_session, org)
+            # Native async now (httpx) - no thread needed; this also means a
+            # cancelled/shutting-down connection attempt actually stops here
+            # instead of a background thread continuing to run unsupervised.
+            session = await sf_client.get_session(org)
         except SalesforceAuthError as exc:
             log_event("error", f"CometD: auth failed for org '{org['name']}': {exc}", org_id=org["id"])
             orgs_table.update({"status": "error", "last_error": str(exc)}, Q.id == org["id"])

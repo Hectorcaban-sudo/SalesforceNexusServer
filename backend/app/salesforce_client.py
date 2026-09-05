@@ -6,11 +6,21 @@ Thin Salesforce REST API client used to:
 
 Multiple orgs are supported concurrently - each org keeps its own cached
 session (token + instance_url) which is refreshed on 401 responses.
+
+This is native async (httpx.AsyncClient), not sync `requests` wrapped in a
+thread - that distinction matters for cancellation: an `asyncio.Task` running
+one of these coroutines can actually be aborted mid-flight (httpx checks for
+cancellation at each internal await point), whereas a sync call running in a
+worker thread cannot be safely interrupted once started. See worker.py's
+`_inflight_tasks` registry and routers/transactions.py's cancel endpoint for
+where that's put to use.
 """
 import time
-import requests
+import httpx
 from typing import Optional, Dict
 from .logging_config import log_event
+
+REQUEST_TIMEOUT = 15.0
 
 
 class SalesforceAuthError(Exception):
@@ -37,7 +47,7 @@ class SalesforceClient:
     def _token_url(self, org: dict) -> str:
         return f"{org['login_url'].rstrip('/')}/services/oauth2/token"
 
-    def login(self, org: dict) -> SalesforceSession:
+    async def login(self, org: dict) -> SalesforceSession:
         auth_type = org.get("auth_type", "password")
         data = {
             "client_id": org.get("client_id", ""),
@@ -60,8 +70,9 @@ class SalesforceClient:
             )
 
         try:
-            resp = requests.post(self._token_url(org), data=data, timeout=15)
-        except requests.RequestException as exc:
+            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+                resp = await client.post(self._token_url(org), data=data)
+        except httpx.HTTPError as exc:
             raise SalesforceAuthError(f"Network error contacting Salesforce: {exc}") from exc
 
         if resp.status_code != 200:
@@ -78,31 +89,33 @@ class SalesforceClient:
         log_event("info", f"Authenticated to Salesforce org '{org['name']}'", org_id=org["id"])
         return session
 
-    def get_session(self, org: dict, force_refresh: bool = False) -> SalesforceSession:
+    async def get_session(self, org: dict, force_refresh: bool = False) -> SalesforceSession:
         session = self._sessions.get(org["id"])
         if session and session.is_valid() and not force_refresh:
             return session
-        return self.login(org)
+        return await self.login(org)
 
-    def publish_platform_event(self, org: dict, channel: str, payload: dict) -> dict:
+    async def publish_platform_event(self, org: dict, channel: str, payload: dict) -> dict:
         """
         Publish a platform event. `channel` may be given either as the API name
         ('My_Event__e') or the streaming channel form ('/event/My_Event__e').
         """
         event_api_name = channel.split("/")[-1]
-        session = self.get_session(org)
+        session = await self.get_session(org)
         url = f"{session.instance_url}/services/data/v{org.get('api_version', '60.0')}/sobjects/{event_api_name}/"
         headers = {
             "Authorization": f"Bearer {session.access_token}",
             "Content-Type": "application/json",
         }
-        resp = requests.post(url, json=payload, headers=headers, timeout=15)
 
-        if resp.status_code == 401:
-            # token expired mid-flight - refresh once and retry
-            session = self.get_session(org, force_refresh=True)
-            headers["Authorization"] = f"Bearer {session.access_token}"
-            resp = requests.post(url, json=payload, headers=headers, timeout=15)
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+
+            if resp.status_code == 401:
+                # token expired mid-flight - refresh once and retry
+                session = await self.get_session(org, force_refresh=True)
+                headers["Authorization"] = f"Bearer {session.access_token}"
+                resp = await client.post(url, json=payload, headers=headers)
 
         if resp.status_code not in (200, 201):
             raise RuntimeError(

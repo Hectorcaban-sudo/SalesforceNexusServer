@@ -37,6 +37,57 @@ from .integrations import dispatch_integrations
 from .alerts import fire_alert_for_transaction
 from . import processors as proc_module
 
+# ---------------------------------------------------------------------------
+# Cancellation support for genuinely async operations (Langflow, Salesforce
+# publish). Unlike custom_script/DSSClient (which run as real OS subprocesses
+# and are cancelled via a polled `cancel_requested` flag - see
+# processors.py/dss_runner.py), these run as native asyncio coroutines, so
+# they can be cancelled immediately and directly via asyncio.Task.cancel()
+# instead of waiting for a poll interval to notice. This registry is how
+# routers/transactions.py's cancel endpoint finds the right task to cancel.
+# ---------------------------------------------------------------------------
+_inflight_tasks: dict = {}
+
+
+class OperationCancelled(RuntimeError):
+    """Raised when an async operation (Langflow call, Salesforce publish) is
+    cancelled mid-flight via asyncio.Task.cancel() - distinct from a genuine
+    failure, same spirit as processors.ProcessorCancelled for subprocesses."""
+
+
+def cancel_inflight_task(transaction_id: str) -> bool:
+    """Called by routers/transactions.py's cancel endpoint. Returns True if
+    a real asyncio task was found and cancelled immediately."""
+    task = _inflight_tasks.get(transaction_id)
+    if task and not task.done():
+        task.cancel()
+        return True
+    return False
+
+
+async def _run_cancellable(coro, transaction_id: str):
+    """
+    Runs `coro` as a task registered under `transaction_id` so it can be
+    cancelled immediately (via cancel_inflight_task, called directly from the
+    cancel API endpoint) OR by the usual `cancel_requested` flag (polled here
+    too, for the case where cancellation was requested just before this
+    function even got called and nothing is registered yet to catch it).
+    """
+    task = asyncio.create_task(coro)
+    _inflight_tasks[transaction_id] = task
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=0.1)
+            if task in done:
+                return task.result()
+            current = tx.get_transaction(transaction_id)
+            if current and current.get("cancel_requested") and not task.cancelled():
+                task.cancel()
+    except asyncio.CancelledError:
+        raise OperationCancelled("Operation was cancelled") from None
+    finally:
+        _inflight_tasks.pop(transaction_id, None)
+
 # Several integrations/DSSClient deployments sit behind internally-issued or
 # self-signed certificates; disabling verification is a deliberate operator
 # choice (see integrations.py and the dss_client branch below) so we also
@@ -44,33 +95,14 @@ from . import processors as proc_module
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-def run_dss_client(payload: dict) -> dict:
-    """Calls a Dataiku DSS LLM endpoint via `dataikuapi`. Raises on failure -
-    callers decide whether to fall back or propagate (process_payload falls
-    back to local; the direct /api/execute/dss-client endpoint propagates so
-    the caller sees the real error)."""
-    import dataikuapi  # imported lazily so the app still runs if this optional dependency isn't installed
-    from .routers.admin_config import get_dss_client_config_raw
+from . import dss_runner
 
-    config = get_dss_client_config_raw()
-    conversation_id = payload.get("Conversation_Id__c")
 
-    if not config.get("url"):
-        raise RuntimeError("DSSClient is not configured (no URL set in Admin Configuration)")
-
-    end_user_client = dataikuapi.DSSClient(
-        config.get("url"), config.get("api_key"), no_check_certificate=True,
-    )
-    agent = end_user_client.get_project(config["project_name"]).get_llm(config["llm"])
-    completion = agent.new_completion()
-    completion.with_message(payload.get("User_Message__c", ""))
-    response = completion.execute()
-
-    return {
-        "Conversation_Id__c": conversation_id,
-        "Status__c": "Ok",
-        "Payload_Json__c": json.dumps({"replyText": response.text}),
-    }
+def run_dss_client(payload: dict, cancel_check=None) -> dict:
+    """Re-exported from dss_runner.py (kept here so existing imports of
+    `from .worker import run_dss_client` - e.g. routers/execute.py - don't
+    need to change). See dss_runner.py for why this runs in a subprocess."""
+    return dss_runner.run_dss_client(payload, cancel_check)
 
 
 def _extract_langflow_text(response_json: dict, output_path: str = "") -> str:
@@ -93,10 +125,12 @@ def _extract_langflow_text(response_json: dict, output_path: str = "") -> str:
         return json.dumps(response_json)
 
 
-def run_langflow(payload: dict) -> dict:
+async def run_langflow(payload: dict) -> dict:
     """Calls a Langflow flow's /api/v1/run/{flow_id} endpoint. Raises on
-    failure - see `run_dss_client` docstring for why."""
-    import requests as _requests
+    failure - see `run_dss_client` docstring for why. Native async (httpx),
+    so a Task running this can be cancelled mid-flight - see `_run_cancellable`
+    and its use in process_payload's langflow branch below."""
+    import httpx
     from .routers.admin_config import get_langflow_config_raw
 
     config = get_langflow_config_raw()
@@ -114,7 +148,8 @@ def run_langflow(payload: dict) -> dict:
         headers["x-api-key"] = config["api_key"]
 
     url = f"{config['base_url'].rstrip('/')}/api/v1/run/{config['flow_id']}"
-    resp = _requests.post(url, json=body, headers=headers, timeout=60, verify=False)
+    async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
+        resp = await client.post(url, json=body, headers=headers)
     resp.raise_for_status()
     response_json = resp.json()
 
@@ -127,7 +162,7 @@ def run_langflow(payload: dict) -> dict:
     }
 
 
-def process_payload(payload: dict, mode_override: Optional[str] = None, processor_id_override: Optional[str] = None, org_id: Optional[str] = None, transaction_id: Optional[str] = None) -> dict:
+async def process_payload(payload: dict, mode_override: Optional[str] = None, processor_id_override: Optional[str] = None, org_id: Optional[str] = None, transaction_id: Optional[str] = None) -> dict:
     """
     Business / AI processing logic for every inbound event.
 
@@ -136,13 +171,18 @@ def process_payload(payload: dict, mode_override: Optional[str] = None, processo
     channel can override it (see `_resolve_processing`):
       - "local"          : simple built-in echo/fallback (default)
       - "dss_client"     : calls into a Dataiku DSS LLM endpoint via
-                            `dataikuapi.DSSClient(...).get_project(...).get_llm(...)`
+                            `dataikuapi.DSSClient(...).get_project(...).get_llm(...)`,
+                            run in its own subprocess (dss_runner.py) so it can
+                            be hard-cancelled - dataikuapi is a sync-only
+                            third-party SDK with no async variant, so a
+                            subprocess is the only way to make it killable.
       - "custom_script"  : runs the currently-active (or per-event-selected)
                             uploaded Python script in an isolated subprocess.
                             `org_id` (the triggering event's Salesforce org,
                             when known) is made available to the script via
                             environment variables - see `processors.py:_build_processor_env`.
-      - "langflow"        : calls a Langflow flow's /run endpoint
+      - "langflow"        : calls a Langflow flow's /run endpoint - native
+                            async (httpx), run as a genuinely cancellable task.
 
     (The rule engine is NOT a processing mode - it's a pre-processing gate
     that decides whether an event gets processed at all. See
@@ -150,7 +190,10 @@ def process_payload(payload: dict, mode_override: Optional[str] = None, processo
 
     Any failure in dss_client/custom_script/langflow mode falls back to a
     local result so the pipeline never breaks because of a downstream outage
-    or a bug in an uploaded script.
+    or a bug in an uploaded script - EXCEPT a cancellation, which propagates
+    up as ProcessorCancelled/OperationCancelled so the caller marks the
+    transaction "cancelled" instead of silently substituting a fallback
+    result for an event the admin explicitly stopped.
     """
     from .routers.admin_config import get_processing_mode_raw  # local import avoids a circular import at module load time
 
@@ -162,15 +205,15 @@ def process_payload(payload: dict, mode_override: Optional[str] = None, processo
         mode = mode_cfg.get("mode", "local")
         active_processor_id = mode_cfg.get("active_processor_id")
 
-    if mode == "custom_script" and active_processor_id:
-        def _cancel_check():
-            if not transaction_id:
-                return False
-            current = tx.get_transaction(transaction_id)
-            return bool(current and current.get("cancel_requested"))
+    def _cancel_check():
+        if not transaction_id:
+            return False
+        current = tx.get_transaction(transaction_id)
+        return bool(current and current.get("cancel_requested"))
 
+    if mode == "custom_script" and active_processor_id:
         try:
-            return proc_module.run_processor(active_processor_id, payload, org_id, cancel_check=_cancel_check)
+            return await asyncio.to_thread(proc_module.run_processor, active_processor_id, payload, org_id, _cancel_check)
         except proc_module.ProcessorCancelled:
             raise  # let the caller (inbound_worker) mark this "cancelled", not "failed"
         except Exception as exc:  # noqa: BLE001
@@ -184,7 +227,9 @@ def process_payload(payload: dict, mode_override: Optional[str] = None, processo
 
     if mode == "dss_client":
         try:
-            return run_dss_client(payload)
+            return await asyncio.to_thread(run_dss_client, payload, _cancel_check)
+        except dss_runner.DSSClientCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001
             log_event("error", f"DSSClient call failed, falling back to local processing: {exc}")
             return {
@@ -197,7 +242,11 @@ def process_payload(payload: dict, mode_override: Optional[str] = None, processo
 
     if mode == "langflow":
         try:
-            return run_langflow(payload)
+            if transaction_id:
+                return await _run_cancellable(run_langflow(payload), transaction_id)
+            return await run_langflow(payload)
+        except OperationCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001
             log_event("error", f"Langflow call failed, falling back to local processing: {exc}")
             return {
@@ -363,10 +412,12 @@ async def inbound_worker():
             mode_override, processor_override = _resolve_processing(org_id, source_channel)
 
             try:
-                # Offloaded to a thread: process_payload may do blocking HTTP/
-                # subprocess work and must never stall the web app's event loop.
-                result = await asyncio.to_thread(process_payload, payload, mode_override, processor_override, org_id, transaction_id)
-            except proc_module.ProcessorCancelled:
+                # process_payload is itself async now and decides its own
+                # threading/async strategy per mode (subprocess+thread for
+                # custom_script/dss_client, native async task for langflow,
+                # instant for local) - no to_thread wrapper needed here.
+                result = await process_payload(payload, mode_override, processor_override, org_id, transaction_id)
+            except (proc_module.ProcessorCancelled, dss_runner.DSSClientCancelled, OperationCancelled):
                 tx.update_transaction(transaction_id, status="cancelled", error="Cancelled during processing")
                 log_event("warning", "Worker: processing was cancelled", transaction_id=transaction_id)
                 return
@@ -501,17 +552,20 @@ async def outbound_publisher():
 
             tx.update_transaction(transaction_id, status="publishing")
             try:
-                # Offloaded to a thread: this is a blocking `requests` call -
-                # it can't be aborted mid-flight, so a cancellation requested
-                # during this specific call takes effect right after it
-                # returns (see the check below), not immediately.
-                await asyncio.to_thread(sf_client.publish_platform_event, org, channel, payload)
+                # Native async now (httpx), run as a registered, genuinely
+                # cancellable task - a cancellation requested during this
+                # call now aborts the actual in-flight HTTP request instead
+                # of waiting for it to finish first.
+                await _run_cancellable(sf_client.publish_platform_event(org, channel, payload), transaction_id)
                 if tx.get_transaction(transaction_id).get("cancel_requested"):
                     tx.update_transaction(transaction_id, status="cancelled", error="Cancelled during publish (Salesforce may still have received it)")
                     log_event("warning", "Worker: honoring cancellation requested during publish", transaction_id=transaction_id)
                 else:
                     tx.update_transaction(transaction_id, status="published")
                     log_event("info", "Publisher: event published back to Salesforce", transaction_id=transaction_id, org_id=org_id, channel=channel)
+            except OperationCancelled:
+                tx.update_transaction(transaction_id, status="cancelled", error="Cancelled during publish (Salesforce may still have received it)")
+                log_event("warning", "Publisher: publish cancelled mid-flight", transaction_id=transaction_id)
             except Exception as exc:  # noqa: BLE001
                 tx.update_transaction(transaction_id, status="failed", error=str(exc))
                 log_event("error", f"Publisher: failed to publish to Salesforce: {exc}", transaction_id=transaction_id)
@@ -591,7 +645,7 @@ async def publish_manual_event(org_id: str, channel: str, payload: dict) -> dict
     )
     with start_span("worker.publish_manual_event", transaction_id=record["id"], org_id=org_id, channel=channel) as manual_span:
         try:
-            result = await asyncio.to_thread(sf_client.publish_platform_event, org, channel, payload)
+            result = await sf_client.publish_platform_event(org, channel, payload)
             tx.update_transaction(record["id"], status="published", result=result)
         except Exception as exc:  # noqa: BLE001
             tx.update_transaction(record["id"], status="failed", error=str(exc))

@@ -584,18 +584,31 @@ how far along it is:
 
 - **Not started yet** (`received`/`queued`): cancelled immediately — the worker checks for this the
   moment it would otherwise start work and skips it entirely.
-- **A custom-script processor actively running**: killed immediately. This is the one processing
-  mode that can be hard-cancelled, because it's the only one running as a real, independently
-  killable OS subprocess rather than a plain blocking library call — verified by cancelling a
-  script mid-way through a deliberate 10-second sleep and confirming it was killed in ~1 second, not
-  10.
-- **Any other in-flight step** (local/DSSClient/Langflow processing, or the Salesforce publish call
-  itself): there's no way to abort a blocking network call already in progress, so it's flagged
-  (`cancel_requested`) and the cancellation takes effect right after that specific call returns —
-  the event won't proceed to the next step (publishing, or being marked `published`), and no
-  integrations/alerts fire for it either way.
+- **A custom-script processor actively running**: killed immediately (`SIGKILL`). This works because
+  it's a real, independently killable OS subprocess — verified by cancelling a script mid-way
+  through a deliberate 10-second sleep and confirming it was killed in ~1 second, not 10.
+- **A DSSClient call actively running**: also killed immediately, same mechanism — `dataikuapi` is a
+  sync-only third-party SDK with no async variant, so it runs in its own subprocess
+  (`app/dss_runner.py`) purely so it can be hard-cancelled the same way a custom script can.
+  Verified with a simulated slow DSS call: killed in ~1 second instead of running to completion.
+- **A Langflow call or the Salesforce publish call actively running**: also aborted immediately —
+  these are native async (`httpx`), run as a registered `asyncio.Task` that the cancel endpoint
+  cancels directly rather than waiting for a poll interval. Verified against real slow servers
+  (deliberately sleeping 15 seconds before responding): both were cancelled in well under half a
+  second, and the server-side logs confirm the connection was actually torn down client-side — the
+  server itself never got to finish handling the request.
+- **Local processing**: nothing to cancel — it's instantaneous.
+- **Outbound integration/alert dispatch** (webhook, Slack, Teams, email, Snowflake, BigQuery): not
+  cancellable, but also not something that needs to be — dispatch only starts once a transaction has
+  already reached a terminal state, so there's no "in-flight processing" left to interrupt by the
+  time it runs.
 - Already-terminal transactions (`published`/`failed`/`skipped`/already `cancelled`) return a 400 —
   there's nothing left to cancel.
+
+**One nuance worth knowing**: if a cancellation lands in the narrow window right as the Salesforce
+publish call is completing, Salesforce may have already received the event even though the
+transaction ends up marked `cancelled` on this side — the transaction's error message says so
+explicitly when that specific case happens.
 
 ## Message broker
 

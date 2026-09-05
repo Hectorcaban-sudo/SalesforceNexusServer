@@ -6,6 +6,7 @@ python-multipart==0.0.9
 aiocometd_ng==0.5.6
 aiohttp==3.10.5
 requests==2.32.3
+httpx==0.28.1
 pydantic==2.9.2
 pydantic-settings==2.5.2
 python-dotenv==1.0.1
