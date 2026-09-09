@@ -587,10 +587,17 @@ how far along it is:
 - **A custom-script processor actively running**: killed immediately (`SIGKILL`). This works because
   it's a real, independently killable OS subprocess — verified by cancelling a script mid-way
   through a deliberate 10-second sleep and confirming it was killed in ~1 second, not 10.
-- **A DSSClient call actively running**: also killed immediately, same mechanism — `dataikuapi` is a
-  sync-only third-party SDK with no async variant, so it runs in its own subprocess
-  (`app/dss_runner.py`) purely so it can be hard-cancelled the same way a custom script can.
-  Verified with a simulated slow DSS call: killed in ~1 second instead of running to completion.
+- **A DSSClient call actively running**: runs in-process (a thread-pool thread), not a subprocess —
+  `dataikuapi` is a sync-only third-party SDK, so a cancellation request is only honored *after* the
+  call returns (same "check after this step" behavior as before subprocess-based hard-cancellation
+  was ever added). This is a deliberate simplicity trade-off: an earlier version ran DSSClient calls
+  in their own subprocess purely to make them hard-cancellable, but that added a real amount of
+  complexity (stdin/stdout JSON round-tripping, subprocess working-directory dependencies) for a
+  narrower benefit than it was worth. One consequence worth knowing: without a subprocess, if the
+  DSS server itself hangs and never responds, the call has no external timeout enforcement and will
+  block its thread-pool thread indefinitely (`dataikuapi` doesn't expose a configurable request
+  timeout) - in practice the thread pool is large enough that this won't starve the rest of the app,
+  but it's a real trade-off, not a free simplification.
 - **A Langflow call or the Salesforce publish call actively running**: also aborted immediately —
   these are native async (`httpx`), run as a registered `asyncio.Task` that the cancel endpoint
   cancels directly rather than waiting for a poll interval. Verified against real slow servers

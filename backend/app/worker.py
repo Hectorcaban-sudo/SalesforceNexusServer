@@ -39,9 +39,9 @@ from . import processors as proc_module
 
 # ---------------------------------------------------------------------------
 # Cancellation support for genuinely async operations (Langflow, Salesforce
-# publish). Unlike custom_script/DSSClient (which run as real OS subprocesses
-# and are cancelled via a polled `cancel_requested` flag - see
-# processors.py/dss_runner.py), these run as native asyncio coroutines, so
+# publish). Unlike custom_script (which runs as a real OS subprocess and is
+# cancelled via a polled `cancel_requested` flag - see processors.py),
+# these run as native asyncio coroutines, so
 # they can be cancelled immediately and directly via asyncio.Task.cancel()
 # instead of waiting for a poll interval to notice. This registry is how
 # routers/transactions.py's cancel endpoint finds the right task to cancel.
@@ -95,14 +95,55 @@ async def _run_cancellable(coro, transaction_id: str):
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-from . import dss_runner
+def run_dss_client(payload: dict) -> dict:
+    """
+    Calls a Dataiku DSS LLM endpoint via `dataikuapi`. Runs in-process (on a
+    thread pool thread via asyncio.to_thread - see process_payload's
+    dss_client branch), not a subprocess: `dataikuapi` is a sync-only
+    third-party SDK, so this trades away hard mid-flight cancellation (a
+    cancellation request is only honored after this call returns, via the
+    generic post-processing check in inbound_worker.handle()) for a much
+    simpler, more directly debuggable call path - no stdin/stdout JSON
+    round-trip, no subprocess working-directory dependency, real Python
+    exceptions/tracebacks instead of ones serialized through a pipe.
 
+    One real consequence of not running in a subprocess: if the DSS server
+    itself hangs and never responds, this call has no external timeout
+    enforcement and will block its thread-pool thread indefinitely (dataikuapi
+    doesn't expose a configurable request timeout). In practice this thread
+    pool is large enough that an occasional hung call won't starve the rest
+    of the app, but it's a real trade-off worth knowing about.
+    """
+    import dataikuapi  # imported lazily so the app still runs if this optional dependency isn't installed
+    from .routers.admin_config import get_dss_client_config_raw
 
-def run_dss_client(payload: dict, cancel_check=None) -> dict:
-    """Re-exported from dss_runner.py (kept here so existing imports of
-    `from .worker import run_dss_client` - e.g. routers/execute.py - don't
-    need to change). See dss_runner.py for why this runs in a subprocess."""
-    return dss_runner.run_dss_client(payload, cancel_check)
+    config = get_dss_client_config_raw()
+    if not config.get("url"):
+        raise RuntimeError("DSSClient is not configured (no URL set in Admin Configuration)")
+
+    conversation_id = payload.get("Conversation_Id__c")
+    client = dataikuapi.DSSClient(config.get("url"), config.get("api_key"), no_check_certificate=True)
+    agent = client.get_project(config["project_name"]).get_llm(config["llm"])
+    completion = agent.new_completion()
+    completion.with_message(payload.get("User_Message__c", ""))
+    response = completion.execute()
+
+    # Dataiku's own docs: execute() sets response.success = False when the
+    # LLM call fails - it does NOT necessarily raise an exception. Without
+    # this check, a fast DSS-side failure (bad model config, rate limit,
+    # content policy rejection - anything that fails before actually
+    # invoking the model) would be silently treated as a real, fast result
+    # and published as-is instead of being surfaced as a failure. (This is
+    # the exact bug that was found and fixed - keep this check.)
+    if not getattr(response, "success", True):
+        error_detail = getattr(response, "text", None) or "DSS completion returned success=False with no further detail"
+        raise RuntimeError(f"DSS completion failed: {error_detail}")
+
+    return {
+        "Conversation_Id__c": conversation_id,
+        "Status__c": "Ok",
+        "Payload_Json__c": json.dumps({"replyText": response.text}),
+    }
 
 
 def _extract_langflow_text(response_json: dict, output_path: str = "") -> str:
@@ -172,10 +213,9 @@ async def process_payload(payload: dict, mode_override: Optional[str] = None, pr
       - "local"          : simple built-in echo/fallback (default)
       - "dss_client"     : calls into a Dataiku DSS LLM endpoint via
                             `dataikuapi.DSSClient(...).get_project(...).get_llm(...)`,
-                            run in its own subprocess (dss_runner.py) so it can
-                            be hard-cancelled - dataikuapi is a sync-only
-                            third-party SDK with no async variant, so a
-                            subprocess is the only way to make it killable.
+                            run in-process on a thread pool thread (not a
+                            subprocess) - see `run_dss_client`'s docstring for
+                            the cancellation/timeout trade-offs that implies.
       - "custom_script"  : runs the currently-active (or per-event-selected)
                             uploaded Python script in an isolated subprocess.
                             `org_id` (the triggering event's Salesforce org,
@@ -227,9 +267,7 @@ async def process_payload(payload: dict, mode_override: Optional[str] = None, pr
 
     if mode == "dss_client":
         try:
-            return await asyncio.to_thread(run_dss_client, payload, _cancel_check)
-        except dss_runner.DSSClientCancelled:
-            raise
+            return await asyncio.to_thread(run_dss_client, payload)
         except Exception as exc:  # noqa: BLE001
             log_event("error", f"DSSClient call failed, falling back to local processing: {exc}")
             return {
@@ -414,10 +452,11 @@ async def inbound_worker():
             try:
                 # process_payload is itself async now and decides its own
                 # threading/async strategy per mode (subprocess+thread for
-                # custom_script/dss_client, native async task for langflow,
-                # instant for local) - no to_thread wrapper needed here.
+                # custom_script, in-process thread for dss_client, native
+                # async task for langflow, instant for local) - no to_thread
+                # wrapper needed here.
                 result = await process_payload(payload, mode_override, processor_override, org_id, transaction_id)
-            except (proc_module.ProcessorCancelled, dss_runner.DSSClientCancelled, OperationCancelled):
+            except (proc_module.ProcessorCancelled, OperationCancelled):
                 tx.update_transaction(transaction_id, status="cancelled", error="Cancelled during processing")
                 log_event("warning", "Worker: processing was cancelled", transaction_id=transaction_id)
                 return
