@@ -30,6 +30,7 @@ import urllib3
 from .database import integrations_table, Q
 from .logging_config import log_event
 from .tracing import start_span
+from .template_renderer import build_integration_body
 
 # Many internal/enterprise integration endpoints sit behind self-signed or
 # internally-issued certificates. SSL verification is disabled for every
@@ -58,9 +59,17 @@ def _response_summary(resp) -> dict:
 def _send_webhook(cfg: dict, transaction: dict) -> dict:
     url = cfg["config"]["url"]
     secret = cfg["config"].get("secret", "")
-    body = json.dumps(transaction, default=str)
+
+    # Optional custom body template; otherwise send the full transaction.
+    custom = build_integration_body(cfg, transaction)
+    if custom is None:
+        body_obj = transaction
+    else:
+        body_obj = custom
+
+    body = json.dumps(body_obj, default=str) if not isinstance(body_obj, str) else body_obj
     headers = dict(cfg["config"].get("headers", {}))
-    headers["Content-Type"] = "application/json"
+    headers.setdefault("Content-Type", "application/json")
     if secret:
         signature = hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()
         headers["X-Nexus-Signature"] = f"sha256={signature}"
@@ -75,48 +84,73 @@ def _send_custom_api(cfg: dict, transaction: dict) -> dict:
     headers = dict(c.get("headers", {}))
     if c.get("auth_header"):
         headers["Authorization"] = c["auth_header"]
-    resp = requests.request(method, c["url"], json=transaction, headers=headers, timeout=15, verify=False)
+
+    custom = build_integration_body(cfg, transaction)
+    payload = transaction if custom is None else custom
+
+    if isinstance(payload, str):
+        headers.setdefault("Content-Type", "application/json")
+        resp = requests.request(method, c["url"], data=payload, headers=headers, timeout=15, verify=False)
+    else:
+        resp = requests.request(method, c["url"], json=payload, headers=headers, timeout=15, verify=False)
     resp.raise_for_status()
     return _response_summary(resp)
 
 
 def _send_slack(cfg: dict, transaction: dict) -> dict:
     webhook_url = cfg["config"]["webhook_url"]
-    status_emoji = {"published": "✅", "failed": "❌"}.get(transaction.get("status"), "ℹ️")
-    text = (
-        f"{status_emoji} *Salesforce Nexus AI Server* — transaction `{transaction.get('id')}`\n"
-        f"Org: *{transaction.get('org_name')}* · Channel: `{transaction.get('channel')}` · "
-        f"Status: *{transaction.get('status')}*"
-    )
-    if transaction.get("error"):
-        text += f"\nError: {transaction['error']}"
-    resp = requests.post(webhook_url, json={"text": text}, timeout=15, verify=False)
+
+    custom = build_integration_body(cfg, transaction)
+    if custom is not None:
+        # Template can return a full Slack payload (dict) or a plain string.
+        body = custom if isinstance(custom, dict) else {"text": str(custom)}
+    else:
+        # Default legacy text card
+        status_emoji = {"published": "✅", "failed": "❌"}.get(transaction.get("status"), "ℹ️")
+        text = (
+            f"{status_emoji} *Salesforce Nexus AI Server* — transaction `{transaction.get('id')}`\n"
+            f"Org: *{transaction.get('org_name')}* · Channel: `{transaction.get('channel')}` · "
+            f"Status: *{transaction.get('status')}*"
+        )
+        if transaction.get("error"):
+            text += f"\nError: {transaction['error']}"
+        body = {"text": text}
+
+    resp = requests.post(webhook_url, json=body, timeout=15, verify=False)
     resp.raise_for_status()
     return _response_summary(resp)
 
 
 def _send_teams(cfg: dict, transaction: dict) -> dict:
     webhook_url = cfg["config"]["webhook_url"]
-    status = transaction.get("status")
-    color = {"published": "33D685", "failed": "FF5470"}.get(status, "3D8BFD")
-    card = {
-        "@type": "MessageCard",
-        "@context": "http://schema.org/extensions",
-        "themeColor": color,
-        "summary": f"Nexus transaction {status}",
-        "title": "Salesforce Nexus AI Server",
-        "sections": [
-            {
-                "facts": [
-                    {"name": "Transaction", "value": transaction.get("id", "")},
-                    {"name": "Org", "value": transaction.get("org_name", "")},
-                    {"name": "Channel", "value": transaction.get("channel", "")},
-                    {"name": "Status", "value": status or ""},
-                    {"name": "Error", "value": transaction.get("error") or "—"},
-                ]
-            }
-        ],
-    }
+
+    custom = build_integration_body(cfg, transaction)
+    if custom is not None:
+        # Template should produce a MessageCard / Adaptive Card dict (or raw JSON string).
+        card = custom if isinstance(custom, dict) else json.loads(custom)
+    else:
+        # Default legacy MessageCard
+        status = transaction.get("status")
+        color = {"published": "33D685", "failed": "FF5470"}.get(status, "3D8BFD")
+        card = {
+            "@type": "MessageCard",
+            "@context": "http://schema.org/extensions",
+            "themeColor": color,
+            "summary": f"Nexus transaction {status}",
+            "title": "Salesforce Nexus AI Server",
+            "sections": [
+                {
+                    "facts": [
+                        {"name": "Transaction", "value": transaction.get("id", "")},
+                        {"name": "Org", "value": transaction.get("org_name", "")},
+                        {"name": "Channel", "value": transaction.get("channel", "")},
+                        {"name": "Status", "value": status or ""},
+                        {"name": "Error", "value": transaction.get("error") or "—"},
+                    ]
+                }
+            ],
+        }
+
     resp = requests.post(webhook_url, json=card, timeout=15, verify=False)
     resp.raise_for_status()
     return _response_summary(resp)
@@ -140,19 +174,29 @@ def _send_email(cfg: dict, transaction: dict) -> dict:
     status = transaction.get("status")
     subject = cfg["config"].get("subject") or f"[Salesforce Nexus AI Server] {transaction.get('channel', 'event')} — {status}"
 
-    body_lines = [
-        f"Transaction: {transaction.get('id')}",
-        f"Org: {transaction.get('org_name')}",
-        f"Channel: {transaction.get('channel')}",
-        f"Direction: {transaction.get('direction')}",
-        f"Status: {status}",
-    ]
-    if transaction.get("error"):
-        body_lines.append(f"Error: {transaction['error']}")
-    body_lines.append("")
-    body_lines.append(f"Payload: {json.dumps(transaction.get('payload'), default=str)}")
+    custom = build_integration_body(cfg, transaction)
+    if custom is not None:
+        # Template can return a plain string or a dict with "subject" / "body" keys
+        if isinstance(custom, dict):
+            subject = custom.get("subject", subject)
+            body_text = custom.get("body", json.dumps(custom, default=str))
+        else:
+            body_text = str(custom)
+    else:
+        body_lines = [
+            f"Transaction: {transaction.get('id')}",
+            f"Org: {transaction.get('org_name')}",
+            f"Channel: {transaction.get('channel')}",
+            f"Direction: {transaction.get('direction')}",
+            f"Status: {status}",
+        ]
+        if transaction.get("error"):
+            body_lines.append(f"Error: {transaction['error']}")
+        body_lines.append("")
+        body_lines.append(f"Payload: {json.dumps(transaction.get('payload'), default=str)}")
+        body_text = "\n".join(body_lines)
 
-    msg = MIMEText("\n".join(body_lines))
+    msg = MIMEText(body_text)
     msg["Subject"] = subject
     msg["From"] = settings["from_address"]
     msg["To"] = ", ".join(to_addresses)

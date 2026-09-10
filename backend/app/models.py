@@ -429,6 +429,11 @@ class IntegrationBase(BaseModel):
     # from also firing on every ordinary transaction because its trigger/org
     # happen to match (e.g. trigger="always", org=None matches everything).
     alert_only: bool = False
+    # Optional custom body templating (Jinja2).
+    # body_mode = "default"  → use the hard-coded card/text for the integration type
+    # body_mode = "template" → render body_template with transaction context
+    body_mode: str = "default"          # "default" | "template"
+    body_template: Optional[str] = None  # Jinja2 template string (JSON or plain text)
 
 
 class IntegrationCreate(IntegrationBase):
@@ -442,6 +447,8 @@ class IntegrationUpdate(BaseModel):
     org_id: Optional[str] = None
     config: Optional[dict] = None
     alert_only: Optional[bool] = None
+    body_mode: Optional[str] = None
+    body_template: Optional[str] = None
 
 
 class IntegrationOut(IntegrationBase):

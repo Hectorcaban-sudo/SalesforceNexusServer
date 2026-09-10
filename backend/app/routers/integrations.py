@@ -1,12 +1,28 @@
 from fastapi import APIRouter, Depends, HTTPException
-from typing import List
+from typing import List, Optional
+from pydantic import BaseModel
 
 from ..auth import get_current_user, require_role
 from ..database import integrations_table, Q
 from ..models import IntegrationCreate, IntegrationUpdate, IntegrationOut, new_id, now_ts
 from ..logging_config import log_event
+from ..template_renderer import build_integration_body
 
 router = APIRouter(prefix="/api/integrations", tags=["integrations"], dependencies=[Depends(get_current_user)])
+
+
+class TemplatePreviewRequest(BaseModel):
+    body_template: str
+    # Optional overrides so the UI can preview against a custom sample
+    sample_payload: Optional[dict] = None
+    sample_result: Optional[dict] = None
+    sample_status: Optional[str] = "published"
+
+
+class TemplatePreviewResponse(BaseModel):
+    ok: bool
+    rendered: Optional[object] = None   # dict or str
+    error: Optional[str] = None
 
 
 def _mask(cfg: dict) -> dict:
@@ -59,6 +75,42 @@ def delete_integration(integration_id: str):
     return {"detail": "deleted"}
 
 
+@router.post("/preview-template", response_model=TemplatePreviewResponse, dependencies=[Depends(require_role("admin"))])
+def preview_template(req: TemplatePreviewRequest):
+    """Render a body_template against a sample transaction so the admin UI can
+    show a live preview while the operator edits the Jinja2 template.
+    Does not send anything — pure render only.
+    """
+    sample = {
+        "id": "preview-" + new_id()[:8],
+        "org_id": "preview-org",
+        "org_name": "Acme Corp",
+        "direction": "subscribe",
+        "channel": "Opportunity_Update__e",
+        "status": req.sample_status or "published",
+        "payload": req.sample_payload or {
+            "Message__c": "Sample Salesforce event",
+            "Subject__c": "Q3 Pipeline Review",
+            "OpportunityName__c": "Acme Corp – Renewal",
+            "Amount__c": 125000,
+            "StageName__c": "Negotiation",
+        },
+        "result": req.sample_result or {
+            "status": "ok",
+            "summary": "High-confidence renewal opportunity",
+            "insight": "Customer expanded usage 40% this quarter; recommend executive sponsor outreach.",
+        },
+        "error": None if (req.sample_status or "published") != "failed" else "Sample processing error",
+        "created_at": now_ts(),
+    }
+    cfg = {"body_mode": "template", "body_template": req.body_template}
+    try:
+        rendered = build_integration_body(cfg, sample)
+        return TemplatePreviewResponse(ok=True, rendered=rendered)
+    except Exception as exc:  # noqa: BLE001
+        return TemplatePreviewResponse(ok=False, error=str(exc))
+
+
 @router.post("/{integration_id}/test", dependencies=[Depends(require_role("admin"))])
 def test_integration(integration_id: str):
     cfg = integrations_table.get(Q.id == integration_id)
@@ -72,8 +124,17 @@ def test_integration(integration_id: str):
         "direction": "publish",
         "channel": "Test__e",
         "status": "published",
-        "payload": {"Message__c": "This is a test event from Salesforce Nexus AI Server"},
-        "result": {"status": "ok"},
+        "payload": {
+            "Message__c": "This is a test event from Salesforce Nexus AI Server",
+            "Subject__c": "Test Subject",
+            "OpportunityName__c": "Acme Corp – Renewal",
+            "Amount__c": 125000,
+        },
+        "result": {
+            "status": "ok",
+            "summary": "Test AI summary",
+            "insight": "This is a sample processor result for template testing.",
+        },
         "error": None,
         "created_at": now_ts(),
     }

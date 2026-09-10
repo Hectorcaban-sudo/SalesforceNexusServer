@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Plus, Trash2, Send, Share2, Webhook, MessageSquare, Database, Cloud, Link2, BellOff, Mail, Pencil } from 'lucide-react'
+import { useEffect, useState, useRef, useCallback } from 'react'
+import { Plus, Trash2, Send, Share2, Webhook, MessageSquare, Database, Cloud, Link2, BellOff, Mail, Pencil, Code2, Eye } from 'lucide-react'
 import api from '../lib/api'
 import { TruncatedWithPopup } from '../components/UI'
 
@@ -13,6 +13,8 @@ const TYPE_META = {
   custom_api: { label: 'Custom API', icon: Link2 },
 }
 
+const TEMPLATE_SUPPORTED = new Set(['teams', 'slack', 'email', 'webhook', 'custom_api'])
+
 const DEFAULT_CONFIG = {
   webhook: { url: '', secret: '' },
   slack: { webhook_url: '' },
@@ -23,7 +25,65 @@ const DEFAULT_CONFIG = {
   custom_api: { url: '', method: 'POST', auth_header: '' },
 }
 
-const EMPTY = { name: '', type: 'webhook', enabled: true, trigger: 'always', org_id: '', alert_only: false, config: DEFAULT_CONFIG.webhook }
+const EXAMPLE_TEMPLATES = {
+  teams: `{
+  "@type": "MessageCard",
+  "@context": "http://schema.org/extensions",
+  "themeColor": "{{ '33D685' if status == 'published' else 'FF5470' }}",
+  "summary": "{{ payload.Subject__c | default('Nexus Event') }}",
+  "title": "{{ result.summary | default('Salesforce Event Processed') }}",
+  "sections": [{
+    "facts": [
+      {"name": "Opportunity", "value": "{{ payload.OpportunityName__c | default('—') }}"},
+      {"name": "Amount", "value": "{{ payload.Amount__c | default('—') }}"},
+      {"name": "AI Insight", "value": "{{ result.insight | default('—') }}"},
+      {"name": "Status", "value": "{{ status }}"},
+      {"name": "Transaction", "value": "{{ id }}"}
+    ]
+  }]
+}`,
+  slack: `{
+  "blocks": [
+    {
+      "type": "header",
+      "text": {"type": "plain_text", "text": "{{ result.summary | default('Nexus Update') }}"}
+    },
+    {
+      "type": "section",
+      "fields": [
+        {"type": "mrkdwn", "text": "*Org:*\\n{{ org_name }}"},
+        {"type": "mrkdwn", "text": "*Status:*\\n{{ status }}"},
+        {"type": "mrkdwn", "text": "*Opportunity:*\\n{{ payload.OpportunityName__c | default('—') }}"},
+        {"type": "mrkdwn", "text": "*Amount:*\\n{{ payload.Amount__c | default('—') }}"}
+      ]
+    }
+  ]
+}`,
+  email: `{
+  "subject": "[Nexus] {{ payload.Subject__c | default(channel) }} — {{ status }}",
+  "body": "Transaction: {{ id }}\\nOrg: {{ org_name }}\\nStatus: {{ status }}\\n\\nOpportunity: {{ payload.OpportunityName__c | default('—') }}\\nAmount: {{ payload.Amount__c | default('—') }}\\n\\nAI Insight:\\n{{ result.insight | default('—') }}"
+}`,
+  webhook: `{{ t | tojson }}`,
+  custom_api: `{
+  "event_id": "{{ id }}",
+  "status": "{{ status }}",
+  "org": "{{ org_name }}",
+  "payload": {{ payload | tojson }},
+  "result": {{ result | tojson }}
+}`,
+}
+
+const EMPTY = {
+  name: '',
+  type: 'webhook',
+  enabled: true,
+  trigger: 'always',
+  org_id: '',
+  alert_only: false,
+  body_mode: 'default',
+  body_template: '',
+  config: DEFAULT_CONFIG.webhook,
+}
 
 export default function Integrations() {
   const [orgs, setOrgs] = useState([])
@@ -34,6 +94,9 @@ export default function Integrations() {
   const [saving, setSaving] = useState(false)
   const [testResult, setTestResult] = useState(null)
 
+  const [preview, setPreview] = useState({ status: 'idle', rendered: null, error: null })
+  const previewTimer = useRef(null)
+
   async function load() {
     const [o, i] = await Promise.all([api.get('/orgs'), api.get('/integrations')])
     setOrgs(o.data)
@@ -42,10 +105,46 @@ export default function Integrations() {
 
   useEffect(() => { load() }, [])
 
+  const runPreview = useCallback(async (template) => {
+    if (!template || !template.trim()) {
+      setPreview({ status: 'idle', rendered: null, error: null })
+      return
+    }
+    setPreview((p) => ({ ...p, status: 'loading' }))
+    try {
+      const { data } = await api.post('/integrations/preview-template', {
+        body_template: template,
+        sample_status: 'published',
+      })
+      if (data.ok) {
+        setPreview({ status: 'ok', rendered: data.rendered, error: null })
+      } else {
+        setPreview({ status: 'error', rendered: null, error: data.error || 'Render failed' })
+      }
+    } catch (err) {
+      setPreview({
+        status: 'error',
+        rendered: null,
+        error: err?.response?.data?.detail || err.message || 'Preview request failed',
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!modalOpen || form.body_mode !== 'template') {
+      setPreview({ status: 'idle', rendered: null, error: null })
+      return
+    }
+    if (previewTimer.current) clearTimeout(previewTimer.current)
+    previewTimer.current = setTimeout(() => runPreview(form.body_template), 450)
+    return () => { if (previewTimer.current) clearTimeout(previewTimer.current) }
+  }, [form.body_template, form.body_mode, modalOpen, runPreview])
+
   function openCreate() {
     setEditingId(null)
     setForm(EMPTY)
     setTestResult(null)
+    setPreview({ status: 'idle', rendered: null, error: null })
     setModalOpen(true)
   }
 
@@ -58,27 +157,45 @@ export default function Integrations() {
       trigger: item.trigger,
       org_id: item.org_id || '',
       alert_only: item.alert_only || false,
+      body_mode: item.body_mode || 'default',
+      body_template: item.body_template || '',
       config: { ...DEFAULT_CONFIG[item.type], ...item.config },
     })
     setTestResult(null)
+    setPreview({ status: 'idle', rendered: null, error: null })
     setModalOpen(true)
   }
 
   function setType(type) {
-    setForm({ ...form, type, config: DEFAULT_CONFIG[type] })
+    setForm({
+      ...form,
+      type,
+      config: DEFAULT_CONFIG[type],
+      body_mode: TEMPLATE_SUPPORTED.has(type) ? form.body_mode : 'default',
+    })
   }
 
   function setConfigField(key, value) {
     setForm({ ...form, config: { ...form.config, [key]: value } })
   }
 
+  function loadExample() {
+    const example = EXAMPLE_TEMPLATES[form.type]
+    if (example) {
+      setForm({ ...form, body_mode: 'template', body_template: example })
+    }
+  }
+
   async function save(e) {
     e.preventDefault()
     setSaving(true)
     try {
-      const payload = { ...form, org_id: form.org_id || null }
+      const payload = {
+        ...form,
+        org_id: form.org_id || null,
+        body_template: form.body_mode === 'template' ? (form.body_template || null) : null,
+      }
       if (editingId) {
-        // type is immutable once created - editing only touches the fields below
         const { type, ...updatable } = payload
         await api.put(`/integrations/${editingId}`, updatable)
       } else {
@@ -119,6 +236,18 @@ export default function Integrations() {
     return orgs.find((o) => o.id === id)?.name || id
   }
 
+  const showTemplateUI = TEMPLATE_SUPPORTED.has(form.type)
+
+  function formatPreview(rendered) {
+    if (rendered == null) return ''
+    if (typeof rendered === 'string') return rendered
+    try {
+      return JSON.stringify(rendered, null, 2)
+    } catch {
+      return String(rendered)
+    }
+  }
+
   return (
     <div>
       <div className="page-title-row">
@@ -134,6 +263,7 @@ export default function Integrations() {
       <div className="org-grid">
         {items.map((item) => {
           const Icon = TYPE_META[item.type]?.icon || Share2
+          const hasTemplate = item.body_mode === 'template' && item.body_template
           return (
             <div className="panel org-card" key={item.id}>
               <div className="org-card-top">
@@ -158,6 +288,11 @@ export default function Integrations() {
               {item.alert_only && (
                 <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 5 }}>
                   <BellOff size={12} /> Alert-only — excluded from normal transaction fan-out
+                </div>
+              )}
+              {hasTemplate && (
+                <div style={{ fontSize: 11, color: 'var(--accent-purple)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <Code2 size={12} /> Custom body template
                 </div>
               )}
 
@@ -190,7 +325,7 @@ export default function Integrations() {
 
       {modalOpen && (
         <div className="modal-overlay" onClick={() => setModalOpen(false)}>
-          <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-box" style={{ maxWidth: form.body_mode === 'template' ? 920 : 640 }} onClick={(e) => e.stopPropagation()}>
             <div className="panel-header"><h3><Share2 size={15} /> {editingId ? 'Edit integration' : 'Add integration'}</h3></div>
             <form onSubmit={save}>
               <div className="panel-body">
@@ -235,6 +370,7 @@ export default function Integrations() {
                     </div>
                     <p style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
                       Uses the SMTP server configured in Admin Configuration → Email.
+                      {form.body_mode === 'template' && ' Subject can also be set from the template.'}
                     </p>
                   </>
                 )}
@@ -307,6 +443,105 @@ export default function Integrations() {
                   <input type="checkbox" style={{ width: 16 }} checked={form.alert_only} onChange={(e) => setForm({ ...form, alert_only: e.target.checked })} />
                   <label style={{ margin: 0 }}>Alert-only (don't include in normal per-transaction fan-out — only usable from the Alerts page)</label>
                 </div>
+
+                {showTemplateUI && (
+                  <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+                    <div className="field">
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Code2 size={14} /> Body template
+                      </label>
+                      <select
+                        value={form.body_mode}
+                        onChange={(e) => setForm({ ...form, body_mode: e.target.value })}
+                      >
+                        <option value="default">Default (built-in card / text)</option>
+                        <option value="template">Custom Jinja2 template</option>
+                      </select>
+                    </div>
+
+                    {form.body_mode === 'template' && (
+                      <>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, alignItems: 'start' }}>
+                          <div className="field" style={{ marginBottom: 0 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                              <label style={{ margin: 0 }}>Template</label>
+                              <button type="button" className="btn btn-sm" onClick={loadExample}>
+                                Load {TYPE_META[form.type]?.label} example
+                              </button>
+                            </div>
+                            <textarea
+                              value={form.body_template}
+                              onChange={(e) => setForm({ ...form, body_template: e.target.value })}
+                              rows={16}
+                              spellCheck={false}
+                              placeholder="Paste a Jinja2 template here…"
+                              style={{
+                                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                                fontSize: 12.5,
+                                lineHeight: 1.45,
+                                whiteSpace: 'pre',
+                                tabSize: 2,
+                                minHeight: 280,
+                              }}
+                            />
+                          </div>
+
+                          <div className="field" style={{ marginBottom: 0 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                              <label style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 5 }}>
+                                <Eye size={13} /> Live preview
+                              </label>
+                              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                {preview.status === 'loading' && 'Rendering…'}
+                                {preview.status === 'ok' && '✓ Valid'}
+                                {preview.status === 'error' && '✗ Error'}
+                                {preview.status === 'idle' && 'Waiting…'}
+                              </span>
+                            </div>
+                            <div
+                              style={{
+                                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                                fontSize: 12,
+                                lineHeight: 1.45,
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-word',
+                                minHeight: 280,
+                                maxHeight: 360,
+                                overflow: 'auto',
+                                padding: '10px 12px',
+                                borderRadius: 8,
+                                border: '1px solid var(--border)',
+                                background: preview.status === 'error'
+                                  ? 'rgba(255, 84, 112, 0.06)'
+                                  : 'var(--bg-elevated, rgba(0,0,0,0.15))',
+                                color: preview.status === 'error' ? 'var(--accent-red)' : 'var(--text-primary)',
+                              }}
+                            >
+                              {preview.status === 'idle' && (
+                                <span style={{ color: 'var(--text-muted)' }}>Start typing a template to see a live render against sample data.</span>
+                              )}
+                              {preview.status === 'loading' && (
+                                <span style={{ color: 'var(--text-muted)' }}>Rendering…</span>
+                              )}
+                              {preview.status === 'error' && (preview.error || 'Unknown error')}
+                              {preview.status === 'ok' && formatPreview(preview.rendered)}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ fontSize: 11.5, color: 'var(--text-muted)', lineHeight: 1.55, marginTop: 10 }}>
+                          <b>Available variables:</b>{' '}
+                          <code>id</code>, <code>status</code>, <code>org_name</code>, <code>channel</code>,{' '}
+                          <code>error</code>, <code>payload.*</code> (Salesforce event),{' '}
+                          <code>result.*</code> (processor output), <code>t</code> (full transaction).
+                          <br />
+                          Use filters like <code>| default('—')</code> and <code>| tojson</code>.
+                          Preview uses a fixed sample payload (Acme Corp renewal). The <b>Test</b> button sends a real request.
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn" onClick={() => setModalOpen(false)}>Cancel</button>

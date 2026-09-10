@@ -340,7 +340,8 @@ export default function EventsConfig() {
 
                 <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
                   Pick which publish channels and integration hooks should receive the processed result of events
-                  received on this channel. Leave everything unchecked to use the default behavior (first enabled
+                  received on this channel. You can select <b>multiple</b> integration hooks (e.g. Teams + Slack + Webhook)
+                  — each fires independently. Leave everything unchecked to use the default behavior (first enabled
                   publish channel for the org, integrations auto-matched by their own trigger rules).
                 </p>
 
@@ -371,9 +372,12 @@ export default function EventsConfig() {
                 <label style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8, display: 'block' }}>
                   <Share2 size={13} style={{ verticalAlign: -2, marginRight: 5 }} />
                   Integration hooks
+                  <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 6 }}>
+                    (select one or more — each fires independently)
+                  </span>
                 </label>
                 {routableIntegrations.length === 0 ? (
-                  <div className="empty-state" style={{ padding: '14px 0' }}>No integrations configured yet.</div>
+                  <div className="empty-state" style={{ padding: '14px 0' }}>No integrations configured yet. Create them on the Integrations page first.</div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
                     {routableIntegrations.map((i) => (
@@ -384,9 +388,18 @@ export default function EventsConfig() {
                           checked={routingIntegrations.includes(i.id)}
                           onChange={() => toggleInList(routingIntegrations, setRoutingIntegrations, i.id)}
                         />
-                        {i.name} <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>({i.type})</span>
+                        {i.name}{' '}
+                        <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>({i.type})</span>
+                        {i.body_mode === 'template' && (
+                          <span style={{ fontSize: 10, color: 'var(--accent-purple)', marginLeft: 4 }}>custom template</span>
+                        )}
                       </label>
                     ))}
+                    {routingIntegrations.length > 0 && (
+                      <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 2 }}>
+                        {routingIntegrations.length} integration{routingIntegrations.length === 1 ? '' : 's'} selected — all will receive this event's processed result.
+                      </div>
+                    )}
                   </div>
                 )}
 
