@@ -5,6 +5,7 @@ import SsoCallback from './pages/SsoCallback'
 import Dashboard from './pages/Dashboard'
 import Orgs from './pages/Orgs'
 import EventsConfig from './pages/EventsConfig'
+import EventFlowDesigner from './pages/EventFlowDesigner'
 import Transactions from './pages/Transactions'
 import Logs from './pages/Logs'
 import AdminConfig from './pages/AdminConfig'
@@ -57,6 +58,7 @@ export default function App() {
         <Route path="/" element={<RequireAuth><Dashboard /></RequireAuth>} />
         <Route path="/orgs" element={<RequireAuth><Orgs /></RequireAuth>} />
         <Route path="/events" element={<RequireAuth><EventsConfig /></RequireAuth>} />
+        <Route path="/events/:eventId/flow" element={<RequireAuth><EventFlowDesigner /></RequireAuth>} />
         <Route path="/transactions" element={<RequireAuth><Transactions /></RequireAuth>} />
         <Route path="/logs" element={<RequireAuth><Logs /></RequireAuth>} />
         <Route path="/admin-config" element={<RequireAuth><RequireRole role="admin"><AdminConfig /></RequireRole></RequireAuth>} />

@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Plus, Radio, Trash2, Send, ArrowDownToLine, ArrowUpFromLine, Share2, GitBranch, Cpu, BellRing } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Plus, Radio, Trash2, Send, ArrowDownToLine, ArrowUpFromLine, Share2, GitBranch, Cpu, BellRing, Workflow } from 'lucide-react'
 import api from '../lib/api'
 
 const EMPTY = { org_id: '', channel: '', direction: 'subscribe', enabled: true, description: '', broker_topic: 'default' }
 
 export default function EventsConfig() {
+  const navigate = useNavigate()
   const [orgs, setOrgs] = useState([])
   const [configs, setConfigs] = useState([])
   const [integrations, setIntegrations] = useState([])
@@ -158,15 +160,20 @@ export default function EventsConfig() {
                     <td><code className="pill">{c.channel}</code></td>
                     <td>{orgName(c.org_id)}</td>
                     <td>
-                      <button className="btn btn-sm" onClick={() => openRouting(c)}>
-                        <GitBranch size={12} />
-                        {hasRule && 'gated · '}
-                        {autoPublishOff
-                          ? 'No auto-publish'
-                          : chCount === 0 && intCount === 0 && !hasProcessorOverride
-                            ? 'Auto (default)'
-                            : `${chCount} channel${chCount === 1 ? '' : 's'} · ${intCount} hook${intCount === 1 ? '' : 's'}${hasProcessorOverride ? ' · custom processor' : ''}`}
-                      </button>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <button className="btn btn-sm" onClick={() => openRouting(c)}>
+                          <GitBranch size={12} />
+                          {hasRule && 'gated · '}
+                          {autoPublishOff
+                            ? 'No auto-publish'
+                            : chCount === 0 && intCount === 0 && !hasProcessorOverride
+                              ? 'Auto (default)'
+                              : `${chCount} channel${chCount === 1 ? '' : 's'} · ${intCount} hook${intCount === 1 ? '' : 's'}${hasProcessorOverride ? ' · custom processor' : ''}`}
+                        </button>
+                        <button className="btn btn-sm" title="Open visual flow designer" onClick={() => navigate(`/events/${c.id}/flow`)}>
+                          <Workflow size={12} /> Flow
+                        </button>
+                      </div>
                     </td>
                     <td>
                       <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: 0, cursor: 'pointer' }}>
