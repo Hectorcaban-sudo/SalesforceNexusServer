@@ -35,6 +35,53 @@ def _mask_conn(row: dict) -> dict:
 
 # ── Connections ──────────────────────────────────────────────
 
+
+
+@router.post("/connections/test-credentials", dependencies=[Depends(require_role("admin"))])
+def test_credentials(body: SharePointConnectionCreate):
+    """Test tenant/client/secret without saving (for the create form)."""
+    import requests
+    from ..sharepoint import get_graph_token, GRAPH_ROOT, SharePointError
+    conn = {
+        "name": body.name or "test",
+        "tenant_id": body.tenant_id,
+        "client_id": body.client_id,
+        "client_secret": body.client_secret,
+        "enabled": True,
+        "cloud": "gcchigh",
+    }
+    if not conn["client_secret"]:
+        raise HTTPException(400, "client_secret is required to test")
+    try:
+        token = get_graph_token(conn)
+    except SharePointError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        raise HTTPException(400, f"Token request failed: {exc}")
+    probe = {"token_ok": True, "message": "Access token acquired successfully (GCC High)."}
+    try:
+        r = requests.get(
+            f"{GRAPH_ROOT}/organization",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"$select": "id,displayName"},
+            timeout=30,
+        )
+        if r.status_code < 400:
+            orgs = (r.json() or {}).get("value") or []
+            name = (orgs[0].get("displayName") if orgs else None) or "OK"
+            probe["message"] = f"Token OK. Graph organization probe succeeded ({name})."
+        elif r.status_code == 403:
+            probe["message"] = (
+                "Token OK, but /organization returned 403 (common). Credentials work; "
+                "enter Site/Drive/List IDs manually if site search is also blocked."
+            )
+        else:
+            probe["message"] = f"Token OK. Graph probe returned {r.status_code}."
+    except Exception as exc:
+        probe["message"] = f"Token OK. Probe skipped: {exc}"
+    return probe
+
+
 @router.get("/connections", response_model=List[SharePointConnectionOut])
 def list_connections():
     return [_mask_conn(r) for r in sharepoint_connections_table.all()]
@@ -80,6 +127,50 @@ def delete_connection(connection_id: str):
 
 
 # ── File actions ─────────────────────────────────────────────
+
+
+@router.post("/connections/{connection_id}/test", dependencies=[Depends(require_role("admin"))])
+def test_connection(connection_id: str):
+    """Validate client credentials by acquiring a Graph token (GCC High)."""
+    import requests
+    from ..sharepoint import _get_connection, get_graph_token, GRAPH_ROOT, SharePointError
+    try:
+        conn = _get_connection(connection_id)
+        token = get_graph_token(conn)
+    except SharePointError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        raise HTTPException(400, f"Token request failed: {exc}")
+
+    # Lightweight authenticated call — /organization is usually allowed with basic app roles;
+    # if it 403s we still report token OK and note limited directory read.
+    probe = {"token_ok": True, "graph_probe": None, "message": "Access token acquired successfully (GCC High)."}
+    try:
+        r = requests.get(
+            f"{GRAPH_ROOT}/organization",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"$select": "id,displayName"},
+            timeout=30,
+        )
+        if r.status_code < 400:
+            orgs = (r.json() or {}).get("value") or []
+            name = (orgs[0].get("displayName") if orgs else None) or "OK"
+            probe["graph_probe"] = "organization"
+            probe["message"] = f"Token OK. Graph organization probe succeeded ({name})."
+        elif r.status_code == 403:
+            probe["graph_probe"] = "organization_forbidden"
+            probe["message"] = (
+                "Token OK, but /organization returned 403 (common). "
+                "Credentials work; site browse may still need Sites.Read.All. "
+                "You can enter Site/Drive/List IDs manually on actions."
+            )
+        else:
+            probe["graph_probe"] = f"http_{r.status_code}"
+            probe["message"] = f"Token OK. Graph probe returned {r.status_code}."
+    except Exception as exc:
+        probe["graph_probe"] = "error"
+        probe["message"] = f"Token OK. Probe skipped: {exc}"
+    return probe
 
 @router.get("/file-actions", response_model=List[SharePointFileActionOut])
 def list_file_actions():
@@ -179,7 +270,15 @@ def browse_sites(connection_id: str, q: str = "*"):
     params = {"search": q or "*", "$select": "id,name,displayName,webUrl,siteCollection"}
     resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, params=params, timeout=45)
     if resp.status_code >= 400:
-        raise HTTPException(400, f"Graph sites search failed ({resp.status_code}): {resp.text[:400]}")
+        hint = ""
+        if resp.status_code == 403:
+            hint = (
+                " App-only (client credentials) cannot list sites with your tenant permissions. "
+                "Enter Site ID / Drive ID / List ID manually in the form, or ask admins for "
+                "Sites.Read.All (application). Power Automate often works because it uses "
+                "delegated user OAuth, not app-only."
+            )
+        raise HTTPException(400, f"Graph sites search failed ({resp.status_code}): {resp.text[:300]}.{hint}")
     values = resp.json().get("value") or []
     return [
         {
@@ -208,7 +307,10 @@ def browse_drives(connection_id: str, site_id: str):
         timeout=45,
     )
     if resp.status_code >= 400:
-        raise HTTPException(400, f"Graph drives list failed ({resp.status_code}): {resp.text[:400]}")
+        hint = ""
+        if resp.status_code == 403:
+            hint = " Enter Drive ID manually, or request Sites.Read.All (application) for this app."
+        raise HTTPException(400, f"Graph drives list failed ({resp.status_code}): {resp.text[:300]}.{hint}")
     values = resp.json().get("value") or []
     return [
         {
@@ -238,7 +340,10 @@ def browse_lists(connection_id: str, site_id: str):
         timeout=45,
     )
     if resp.status_code >= 400:
-        raise HTTPException(400, f"Graph lists failed ({resp.status_code}): {resp.text[:400]}")
+        hint = ""
+        if resp.status_code == 403:
+            hint = " Enter List ID manually, or request Sites.Read.All (application) for this app."
+        raise HTTPException(400, f"Graph lists failed ({resp.status_code}): {resp.text[:300]}.{hint}")
     values = resp.json().get("value") or []
     return [
         {

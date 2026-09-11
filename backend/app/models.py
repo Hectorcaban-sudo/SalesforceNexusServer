@@ -383,7 +383,9 @@ class SharePointFileActionBase(BaseModel):
     connection_id: str
     enabled: bool = True
     site_id: str = ""
+    site_name: str = ""                     # optional display label when Graph browse is blocked
     drive_id: str = ""
+    drive_name: str = ""                    # optional display label
     folder_path_template: str = ""          # Jinja2, e.g. "{{ year }} NBF Reports/{{ business }} Projects"
     file_name_template: str = "{{ title }}.{{ extension }}"
     create_missing_folders: bool = True
@@ -409,7 +411,9 @@ class SharePointFileActionUpdate(BaseModel):
     connection_id: Optional[str] = None
     enabled: Optional[bool] = None
     site_id: Optional[str] = None
+    site_name: Optional[str] = None
     drive_id: Optional[str] = None
+    drive_name: Optional[str] = None
     folder_path_template: Optional[str] = None
     file_name_template: Optional[str] = None
     create_missing_folders: Optional[bool] = None
@@ -436,7 +440,9 @@ class SharePointListActionBase(BaseModel):
     connection_id: str
     enabled: bool = True
     site_id: str = ""
+    site_name: str = ""
     list_id: str = ""                   # Graph list id
+    list_name: str = ""
     operation: SharePointListOperation = SharePointListOperation.create
     # Jinja2 for update: item id
     item_id_template: str = ""
@@ -453,7 +459,9 @@ class SharePointListActionUpdate(BaseModel):
     connection_id: Optional[str] = None
     enabled: Optional[bool] = None
     site_id: Optional[str] = None
+    site_name: Optional[str] = None
     list_id: Optional[str] = None
+    list_name: Optional[str] = None
     operation: Optional[SharePointListOperation] = None
     item_id_template: Optional[str] = None
     field_map: Optional[dict] = None

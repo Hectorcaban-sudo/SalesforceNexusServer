@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Pencil, Cloud, RefreshCw, Search } from 'lucide-react'
+import { Plus, Trash2, Pencil, Cloud, RefreshCw, Search, FlaskConical } from 'lucide-react'
 import api from '../lib/api'
 
 const EMPTY_CONN = { name: '', tenant_id: '', client_id: '', client_secret: '', enabled: true }
 const EMPTY_FILE = {
   name: '', connection_id: '', enabled: true,
-  site_id: '', drive_id: '',
+  site_id: '', site_name: '', drive_id: '', drive_name: '',
   folder_path_template: '{{ year }} NBF Reports/{{ business }} Projects',
   file_name_template: '{{ title }}.{{ extension }}',
   create_missing_folders: true, check_in_after_upload: true,
@@ -18,7 +18,7 @@ const EMPTY_FILE = {
 }
 const EMPTY_LIST = {
   name: '', connection_id: '', enabled: true,
-  site_id: '', list_id: '',
+  site_id: '', site_name: '', list_id: '', list_name: '',
   operation: 'create',
   item_id_template: '',
   field_map_text: '{\n  "Title": "{{ payload.Name }}"\n}',
@@ -50,6 +50,9 @@ export default function SharePoint() {
   const [siteSearch, setSiteSearch] = useState('*')
   const [sitePathHostname, setSitePathHostname] = useState('')
   const [sitePathRel, setSitePathRel] = useState('')
+  const [discoveryBlocked, setDiscoveryBlocked] = useState(false)
+  const [testingConn, setTestingConn] = useState(null) // id or 'form'
+  const [testMsg, setTestMsg] = useState(null)
 
   async function load() {
     const [c, f, l] = await Promise.all([
@@ -64,6 +67,53 @@ export default function SharePoint() {
 
   useEffect(() => { load().catch((e) => setError(e.message)) }, [])
 
+  async function testSavedConnection(id) {
+    setTestingConn(id)
+    setTestMsg(null)
+    setError(null)
+    try {
+      const { data } = await api.post(`/sharepoint/connections/${id}/test`)
+      setTestMsg({ ok: true, text: data.message || 'OK' })
+    } catch (err) {
+      setTestMsg({ ok: false, text: err?.response?.data?.detail || err.message })
+    } finally {
+      setTestingConn(null)
+    }
+  }
+
+  async function testFormCredentials() {
+    if (!modal || modal.kind !== 'conn') return
+    const f = modal.form
+    if (!f.tenant_id || !f.client_id || (!f.client_secret && !modal.id)) {
+      setTestMsg({ ok: false, text: 'Tenant ID, Client ID, and Client secret are required to test.' })
+      return
+    }
+    setTestingConn('form')
+    setTestMsg(null)
+    setError(null)
+    try {
+      if (modal.id && !f.client_secret) {
+        // use saved secret on server
+        const { data } = await api.post(`/sharepoint/connections/${modal.id}/test`)
+        setTestMsg({ ok: true, text: data.message || 'OK' })
+      } else {
+        const { data } = await api.post('/sharepoint/connections/test-credentials', {
+          name: f.name || 'test',
+          tenant_id: f.tenant_id,
+          client_id: f.client_id,
+          client_secret: f.client_secret,
+          enabled: true,
+        })
+        setTestMsg({ ok: true, text: data.message || 'OK' })
+      }
+    } catch (err) {
+      setTestMsg({ ok: false, text: err?.response?.data?.detail || err.message })
+    } finally {
+      setTestingConn(null)
+    }
+  }
+
+
   async function loadSites(connectionId, q = '*') {
     if (!connectionId) { setSites([]); return }
     setLoadingSites(true)
@@ -71,9 +121,14 @@ export default function SharePoint() {
     try {
       const { data } = await api.get(`/sharepoint/connections/${connectionId}/sites`, { params: { q } })
       setSites(data || [])
+      setDiscoveryBlocked(false)
     } catch (err) {
       setSites([])
-      setError(err?.response?.data?.detail || err.message)
+      const detail = err?.response?.data?.detail || err.message
+      setError(detail)
+      if (String(detail).includes('403') || String(detail).toLowerCase().includes('forbidden')) {
+        setDiscoveryBlocked(true)
+      }
     } finally {
       setLoadingSites(false)
     }
@@ -110,7 +165,11 @@ export default function SharePoint() {
       setDrives(data || [])
     } catch (err) {
       setDrives([])
-      setError(err?.response?.data?.detail || err.message)
+      const detail = err?.response?.data?.detail || err.message
+      setError(detail)
+      if (String(detail).includes('403') || String(detail).toLowerCase().includes('forbidden')) {
+        setDiscoveryBlocked(true)
+      }
     } finally {
       setLoadingDrives(false)
     }
@@ -124,7 +183,11 @@ export default function SharePoint() {
       setSpLists(data || [])
     } catch (err) {
       setSpLists([])
-      setError(err?.response?.data?.detail || err.message)
+      const detail = err?.response?.data?.detail || err.message
+      setError(detail)
+      if (String(detail).includes('403') || String(detail).toLowerCase().includes('forbidden')) {
+        setDiscoveryBlocked(true)
+      }
     } finally {
       setLoadingLists(false)
     }
@@ -136,7 +199,9 @@ export default function SharePoint() {
       : { ...EMPTY_LIST, connection_id: conns[0]?.id || '' }
     setModal({ kind, id: null, form })
     setSites([]); setDrives([]); setSpLists([])
+    setDiscoveryBlocked(false)
     setError(null)
+    setTestMsg(null)
     if (kind !== 'conn' && form.connection_id) loadSites(form.connection_id)
   }
 
@@ -271,6 +336,11 @@ export default function SharePoint() {
       </div>
 
       {error && !modal && <div className="panel" style={{ color: 'var(--accent-red)', marginBottom: 12 }}>{String(error)}</div>}
+      {testMsg && !modal && (
+        <div className="panel" style={{ color: testMsg.ok ? 'var(--accent-green, #22c55e)' : 'var(--accent-red)', marginBottom: 12, fontSize: 13 }}>
+          {testMsg.text}
+        </div>
+      )}
 
       {tab === 'connections' && (
         <>
@@ -297,6 +367,9 @@ export default function SharePoint() {
                   <div>Cloud <b>GCC High</b></div>
                 </div>
                 <div className="org-card-actions">
+                  <button className="btn btn-sm" disabled={testingConn === c.id} onClick={() => testSavedConnection(c.id)}>
+                    <FlaskConical size={13} /> {testingConn === c.id ? 'Testing…' : 'Test'}
+                  </button>
                   <button className="btn btn-sm" onClick={() => openEdit('conn', c)}><Pencil size={13} /> Edit</button>
                   <button className="btn btn-sm btn-icon btn-danger" onClick={() => remove('conn', c)}><Trash2 size={13} /></button>
                 </div>
@@ -377,6 +450,13 @@ export default function SharePoint() {
 
                 {modal.kind === 'conn' && (
                   <>
+                    {testMsg && (
+                      <div style={{
+                        fontSize: 12.5, marginBottom: 10, padding: '8px 10px', borderRadius: 8,
+                        background: testMsg.ok ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
+                        color: testMsg.ok ? 'var(--accent-green, #22c55e)' : 'var(--accent-red)',
+                      }}>{testMsg.text}</div>
+                    )}
                     <div className="field"><label>Name</label>
                       <input required value={modal.form.name} onChange={(e) => setField('name', e.target.value)} /></div>
                     <div className="field"><label>Tenant ID</label>
@@ -401,10 +481,23 @@ export default function SharePoint() {
                       </select>
                     </div>
 
-                    {/* Site picker */}
+                    {/* Resource pickers + manual ID fallback */}
+                    {discoveryBlocked && (
+                      <div style={{
+                        fontSize: 12.5, lineHeight: 1.45, marginBottom: 12, padding: '10px 12px',
+                        borderRadius: 8, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
+                        color: 'var(--text-secondary)',
+                      }}>
+                        <b style={{ color: 'var(--accent-red)' }}>Graph browse blocked (403).</b>
+                        {' '}Your tenant likely denies app-only site listing.
+                        Enter <b>Site / Drive / List IDs</b> manually below (names are optional labels only).
+                        Power Automate often works because it uses <b>delegated user OAuth</b>, not client credentials.
+                      </div>
+                    )}
+
                     <div className="field">
                       <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span>Site</span>
+                        <span>Site (browse)</span>
                         <span style={{ fontWeight: 400, fontSize: 11, color: 'var(--text-muted)' }}>
                           {loadingSites ? 'Loading…' : `${sites.length} found`}
                         </span>
@@ -426,22 +519,34 @@ export default function SharePoint() {
                         </button>
                       </div>
                       <select
-                        required
                         value={modal.form.site_id}
-                        onChange={(e) => onSiteChange(e.target.value)}
-                        disabled={!modal.form.connection_id}
+                        onChange={(e) => {
+                          const id = e.target.value
+                          const s = sites.find((x) => x.id === id)
+                          setField('site_id', id)
+                          if (s?.name) setField('site_name', s.name)
+                          setField('drive_id', '')
+                          setField('drive_name', '')
+                          setField('list_id', '')
+                          setField('list_name', '')
+                          if (id) {
+                            if (modal.kind === 'file') loadDrives(modal.form.connection_id, id)
+                            if (modal.kind === 'list') loadSpLists(modal.form.connection_id, id)
+                          }
+                        }}
+                        disabled={!modal.form.connection_id || sites.length === 0}
                       >
-                        <option value="">Select a site…</option>
+                        <option value="">{sites.length ? 'Select a site…' : 'No sites from Graph — use manual entry'}</option>
                         {modal.form.site_id && !sites.some((s) => s.id === modal.form.site_id) && (
-                          <option value={modal.form.site_id}>{modal.form.site_id} (saved)</option>
+                          <option value={modal.form.site_id}>{modal.form.site_name || modal.form.site_id} (saved)</option>
                         )}
                         {sites.map((s) => (
                           <option key={s.id} value={s.id}>{s.name}{s.web_url ? ` — ${s.web_url}` : ''}</option>
                         ))}
                       </select>
-                      <details style={{ marginTop: 8 }}>
+                      <details style={{ marginTop: 8 }} open={discoveryBlocked || undefined}>
                         <summary style={{ fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer' }}>
-                          Or resolve by hostname + path (Power Automate style)
+                          Resolve by hostname + path (still uses Graph)
                         </summary>
                         <div className="form-row-2" style={{ marginTop: 8 }}>
                           <div className="field" style={{ marginBottom: 0 }}>
@@ -473,23 +578,99 @@ export default function SharePoint() {
                       </details>
                     </div>
 
-                    {modal.kind === 'file' && (
+                    {/* Manual IDs — always available; required when browse fails */}
+                    <details open style={{ marginBottom: 12 }}>
+                      <summary style={{ fontSize: 12.5, fontWeight: 600, cursor: 'pointer', marginBottom: 8 }}>
+                        Enter IDs manually (works without Sites.Read.All)
+                      </summary>
+                      <div className="form-row-2">
+                        <div className="field">
+                          <label>Site ID <span style={{ color: 'var(--accent-red)' }}>*</span></label>
+                          <input
+                            required
+                            value={modal.form.site_id || ''}
+                            onChange={(e) => setField('site_id', e.target.value)}
+                            placeholder="Graph site id (guid or composite)"
+                          />
+                        </div>
+                        <div className="field">
+                          <label>Site display name (optional)</label>
+                          <input
+                            value={modal.form.site_name || ''}
+                            onChange={(e) => setField('site_name', e.target.value)}
+                            placeholder="IS-HQ NBF"
+                          />
+                        </div>
+                      </div>
+                      {modal.kind === 'file' && (
+                        <div className="form-row-2">
+                          <div className="field">
+                            <label>Drive ID <span style={{ color: 'var(--accent-red)' }}>*</span></label>
+                            <input
+                              required
+                              value={modal.form.drive_id || ''}
+                              onChange={(e) => setField('drive_id', e.target.value)}
+                              placeholder="b!...."
+                            />
+                          </div>
+                          <div className="field">
+                            <label>Library display name (optional)</label>
+                            <input
+                              value={modal.form.drive_name || ''}
+                              onChange={(e) => setField('drive_name', e.target.value)}
+                              placeholder="Documents"
+                            />
+                          </div>
+                        </div>
+                      )}
+                      {modal.kind === 'list' && (
+                        <div className="form-row-2">
+                          <div className="field">
+                            <label>List ID <span style={{ color: 'var(--accent-red)' }}>*</span></label>
+                            <input
+                              required
+                              value={modal.form.list_id || ''}
+                              onChange={(e) => setField('list_id', e.target.value)}
+                              placeholder="List GUID"
+                            />
+                          </div>
+                          <div className="field">
+                            <label>List display name (optional)</label>
+                            <input
+                              value={modal.form.list_name || ''}
+                              onChange={(e) => setField('list_name', e.target.value)}
+                              placeholder="NBF Tracking"
+                            />
+                          </div>
+                        </div>
+                      )}
+                      <p style={{ fontSize: 11.5, color: 'var(--text-muted)', margin: '4px 0 0' }}>
+                        Tip: from SharePoint in the browser, open the library/list → Settings → or use Graph Explorer
+                        with your user account to copy IDs. Runtime upload still uses app-only credentials.
+                      </p>
+                    </details>
+
+                    {modal.kind === 'file' && sites.length > 0 && (
                       <div className="field">
                         <label style={{ display: 'flex', justifyContent: 'space-between' }}>
-                          <span>Document library (Drive)</span>
+                          <span>Document library (from Graph)</span>
                           <span style={{ fontWeight: 400, fontSize: 11, color: 'var(--text-muted)' }}>
                             {loadingDrives ? 'Loading…' : `${drives.length} libraries`}
                           </span>
                         </label>
                         <select
-                          required
                           value={modal.form.drive_id}
-                          onChange={(e) => setField('drive_id', e.target.value)}
+                          onChange={(e) => {
+                            const id = e.target.value
+                            const d = drives.find((x) => x.id === id)
+                            setField('drive_id', id)
+                            if (d?.name) setField('drive_name', d.name)
+                          }}
                           disabled={!modal.form.site_id}
                         >
                           <option value="">Select a library…</option>
                           {modal.form.drive_id && !drives.some((d) => d.id === modal.form.drive_id) && (
-                            <option value={modal.form.drive_id}>{modal.form.drive_id} (saved)</option>
+                            <option value={modal.form.drive_id}>{modal.form.drive_name || modal.form.drive_id} (saved)</option>
                           )}
                           {drives.map((d) => (
                             <option key={d.id} value={d.id}>{d.name}{d.drive_type ? ` (${d.drive_type})` : ''}</option>
@@ -498,23 +679,27 @@ export default function SharePoint() {
                       </div>
                     )}
 
-                    {modal.kind === 'list' && (
+                    {modal.kind === 'list' && sites.length > 0 && (
                       <div className="field">
                         <label style={{ display: 'flex', justifyContent: 'space-between' }}>
-                          <span>List</span>
+                          <span>List (from Graph)</span>
                           <span style={{ fontWeight: 400, fontSize: 11, color: 'var(--text-muted)' }}>
                             {loadingLists ? 'Loading…' : `${spLists.length} lists`}
                           </span>
                         </label>
                         <select
-                          required
                           value={modal.form.list_id}
-                          onChange={(e) => setField('list_id', e.target.value)}
+                          onChange={(e) => {
+                            const id = e.target.value
+                            const l = spLists.find((x) => x.id === id)
+                            setField('list_id', id)
+                            if (l?.name) setField('list_name', l.name)
+                          }}
                           disabled={!modal.form.site_id}
                         >
                           <option value="">Select a list…</option>
                           {modal.form.list_id && !spLists.some((l) => l.id === modal.form.list_id) && (
-                            <option value={modal.form.list_id}>{modal.form.list_id} (saved)</option>
+                            <option value={modal.form.list_id}>{modal.form.list_name || modal.form.list_id} (saved)</option>
                           )}
                           {spLists.map((l) => (
                             <option key={l.id} value={l.id}>{l.name}</option>
@@ -522,6 +707,7 @@ export default function SharePoint() {
                         </select>
                       </div>
                     )}
+
                   </>
                 )}
 
@@ -586,6 +772,11 @@ export default function SharePoint() {
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn" onClick={() => setModal(null)}>Cancel</button>
+                {modal.kind === 'conn' && (
+                  <button type="button" className="btn" disabled={testingConn === 'form'} onClick={testFormCredentials}>
+                    <FlaskConical size={14} /> {testingConn === 'form' ? 'Testing…' : 'Test connection'}
+                  </button>
+                )}
                 <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
               </div>
             </form>
