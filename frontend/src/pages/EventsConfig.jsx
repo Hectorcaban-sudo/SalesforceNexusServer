@@ -111,7 +111,7 @@ export default function EventsConfig() {
         route_integration_ids: routingIntegrations,
         route_alert_ids: routingAlerts,
         processing_mode: routingProcessingMode || '',
-        processor_id: routingProcessingMode === 'custom_script' ? routingProcessorId : '',
+        processor_id: ['custom_script', 'sharepoint_file', 'sharepoint_list'].includes(routingProcessingMode) ? routingProcessorId : '',
         rule_id: routingRuleId || '',
         auto_publish: routingAutoPublish,
       })
@@ -337,11 +337,25 @@ export default function EventsConfig() {
                   <option value="dss_client">DSSClient</option>
                   <option value="langflow">Langflow</option>
                   <option value="custom_script">Custom uploaded script</option>
+                  <option value="sharepoint_file">SharePoint File</option>
+                  <option value="sharepoint_list">SharePoint List</option>
                 </select>
                 {routingProcessingMode === 'custom_script' && (
                   <select value={routingProcessorId} onChange={(e) => setRoutingProcessorId(e.target.value)} style={{ marginBottom: 18 }}>
                     <option value="">Select an uploaded processor…</option>
                     {processors.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                )}
+                {routingProcessingMode === 'sharepoint_file' && (
+                  <select value={routingProcessorId} onChange={(e) => setRoutingProcessorId(e.target.value)} style={{ marginBottom: 18 }}>
+                    <option value="">Select a SharePoint file action…</option>
+                    {spFileActions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                )}
+                {routingProcessingMode === 'sharepoint_list' && (
+                  <select value={routingProcessorId} onChange={(e) => setRoutingProcessorId(e.target.value)} style={{ marginBottom: 18 }}>
+                    <option value="">Select a SharePoint list action…</option>
+                    {spListActions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 )}
 

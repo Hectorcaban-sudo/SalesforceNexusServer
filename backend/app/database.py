@@ -242,6 +242,9 @@ alerts_table = _db.table("alerts")
 rules_table = _db.table("rules")
 audit_log_table = _db.table("audit_log")
 auth_events_table = _db.table("auth_events")
+sharepoint_connections_table = _db.table("sharepoint_connections")
+sharepoint_file_actions_table = _db.table("sharepoint_file_actions")
+sharepoint_list_actions_table = _db.table("sharepoint_list_actions")
 
 
 def db_lock():

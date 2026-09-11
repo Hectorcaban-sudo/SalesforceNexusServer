@@ -11,6 +11,8 @@ const TYPE_META = {
   snowflake: { label: 'Snowflake', icon: Database },
   bigquery: { label: 'BigQuery', icon: Cloud },
   custom_api: { label: 'Custom API', icon: Link2 },
+  sharepoint_file: { label: 'SharePoint File', icon: Cloud },
+  sharepoint_list: { label: 'SharePoint List', icon: Cloud },
 }
 
 const TEMPLATE_SUPPORTED = new Set(['teams', 'slack', 'email', 'webhook', 'custom_api'])
@@ -93,14 +95,23 @@ export default function Integrations() {
   const [form, setForm] = useState(EMPTY)
   const [saving, setSaving] = useState(false)
   const [testResult, setTestResult] = useState(null)
+  const [spFileActions, setSpFileActions] = useState([])
+  const [spListActions, setSpListActions] = useState([])
 
   const [preview, setPreview] = useState({ status: 'idle', rendered: null, error: null })
   const previewTimer = useRef(null)
 
   async function load() {
-    const [o, i] = await Promise.all([api.get('/orgs'), api.get('/integrations')])
+    const [o, i, sf, sl] = await Promise.all([
+      api.get('/orgs'),
+      api.get('/integrations'),
+      api.get('/sharepoint/file-actions').catch(() => ({ data: [] })),
+      api.get('/sharepoint/list-actions').catch(() => ({ data: [] })),
+    ])
     setOrgs(o.data)
     setItems(i.data)
+    setSpFileActions(sf.data || [])
+    setSpListActions(sl.data || [])
   }
 
   useEffect(() => { load() }, [])
@@ -391,6 +402,36 @@ export default function Integrations() {
                       </div>
                     </div>
                   </>
+                )}
+
+                {form.type === 'sharepoint_file' && (
+                  <div className="field">
+                    <label>SharePoint file action</label>
+                    <select required value={form.config.action_id || ''} onChange={(e) => setConfigField('action_id', e.target.value)}>
+                      <option value="">Select a file action…</option>
+                      {spFileActions.map((a) => (
+                        <option key={a.id} value={a.id}>{a.name}</option>
+                      ))}
+                    </select>
+                    <p style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 6 }}>
+                      Configure actions under SharePoint → File actions. Runs after processing as a fan-out sink.
+                    </p>
+                  </div>
+                )}
+
+                {form.type === 'sharepoint_list' && (
+                  <div className="field">
+                    <label>SharePoint list action</label>
+                    <select required value={form.config.action_id || ''} onChange={(e) => setConfigField('action_id', e.target.value)}>
+                      <option value="">Select a list action…</option>
+                      {spListActions.map((a) => (
+                        <option key={a.id} value={a.id}>{a.name}</option>
+                      ))}
+                    </select>
+                    <p style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 6 }}>
+                      Configure actions under SharePoint → List actions. Runs after processing as a fan-out sink.
+                    </p>
+                  </div>
                 )}
 
                 {form.type === 'snowflake' && (

@@ -13,6 +13,7 @@ import Users from './pages/Users'
 import Security from './pages/Security'
 import Integrations from './pages/Integrations'
 import Alerts from './pages/Alerts'
+import SharePoint from './pages/SharePoint'
 import Layout from './components/Layout'
 import { isAuthed } from './lib/api'
 import { AuthProvider, useAuth, hasRole } from './lib/AuthContext'
@@ -66,6 +67,7 @@ export default function App() {
         <Route path="/security" element={<RequireAuth><RequireRole role="admin"><Security /></RequireRole></RequireAuth>} />
         <Route path="/integrations" element={<RequireAuth><RequireRole role="admin"><Integrations /></RequireRole></RequireAuth>} />
         <Route path="/alerts" element={<RequireAuth><RequireRole role="admin"><Alerts /></RequireRole></RequireAuth>} />
+        <Route path="/sharepoint" element={<RequireAuth><RequireRole role="admin"><SharePoint /></RequireRole></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

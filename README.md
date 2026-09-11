@@ -25,20 +25,31 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   infra), or a real RabbitMQ server for durability, chosen from Admin Configuration. Both sit behind
   the same interface so nothing else in the app needs to know which one is active. See "Message
   broker" below.
-- **Pluggable worker/processor** — `app/worker.py:process_payload()` supports four interchangeable
+- **Pluggable worker/processor** — `app/worker.py:process_payload()` supports interchangeable
   processing modes, switchable globally from Admin Configuration *or* per subscribed event channel:
-  a **local fallback**, a **Dataiku DSS LLM** call (via `dataikuapi`), a **Langflow** flow, or an
-  **uploaded custom Python script**. A processor script also gets the triggering org's Salesforce
-  credentials and the rest of admin configuration (DSSClient/Langflow/Email) via environment
-  variables, so it can call out to Salesforce or send its own email directly (its subprocess
-  timeout is configurable via `PROCESSOR_TIMEOUT_SECONDS`, default 20s). See "Custom payload
-  processors" and "Per-event processor override" below.
+  a **local fallback**, a **Dataiku DSS LLM** call (via `dataikuapi`), a **Langflow** flow, an
+  **uploaded custom Python script**, or **SharePoint Online** file/list actions (GCC High, Microsoft
+  Graph). A processor script also gets the triggering org's Salesforce credentials and the rest of
+  admin configuration (DSSClient/Langflow/Email) via environment variables, so it can call out to
+  Salesforce or send its own email directly (its subprocess timeout is configurable via
+  `PROCESSOR_TIMEOUT_SECONDS`, default 20s). See "Custom payload processors", "SharePoint Online",
+  and "Per-event processor override" below.
 - **Validation rules (GoRules JDM / Zen Engine)** — a *gate*, not a processing mode: assign a
   no-code decision graph to a subscribed event channel to decide whether an event gets processed at
   all before any processing mode runs. See "Rule engine" below.
 - **Graphical event routing** — for any subscribed event channel, visually select (checkboxes) which
   publish channels, integration hooks, *and* alert rules the processed result should fan out to,
   instead of one implicit default channel. See "Event routing" below.
+- **Event Flow Designer** — a React Flow canvas (`/events/:id/flow`) that visualizes the same
+  pipeline (Source → Rule → Processor → publish/integrations/alerts) and saves back to the existing
+  routing/processor fields. See "Event Flow Designer" below.
+- **SharePoint Online (GCC High)** — multi-connection admin, reusable **File** (upload + metadata +
+  check-in) and **List** (create/update) actions with Jinja2 field maps, Graph-backed site/drive/list
+  pickers, usable as a **processing mode** *or* as an **integration fan-out** sink. See
+  "SharePoint Online" below.
+- **Integration body templates** — optional Jinja2 templates for Teams, Slack, Email, Webhook, and
+  Custom API message bodies, with a live preview in the Integrations admin UI. See "Integrations"
+  below.
 - **Direct execute API** — `POST /api/execute/dss-client` and `POST /api/execute/langflow` invoke
   either processor directly with an arbitrary payload, outside the Salesforce pipeline entirely —
   useful for testing a configuration or for another internal system to reuse the same AI processor.
@@ -53,11 +64,12 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   also **group** the list (by org, status, direction, channel, or fan-out group) instead of one
   flat table.
 - **Outbound integrations** — fan any processed transaction out to a **webhook** (HMAC-signed),
-  **Slack**, **Microsoft Teams**, **Snowflake**, **BigQuery**, or a generic **custom API**, each
-  independently scoped by org and trigger (always / on success / on failure). Every dispatch's real
-  result (HTTP response body, rows inserted, etc.) is captured and shown on hover wherever it's
-  logged. SSL/TLS certificate verification is disabled on every outbound integration call by
-  design, to support internally-issued or self-signed certificates. See "Integrations" below.
+  **Slack**, **Microsoft Teams**, **Email**, **Snowflake**, **BigQuery**, a generic **custom API**,
+  or **SharePoint File/List** actions, each independently scoped by org and trigger (always / on
+  success / on failure). Optional **Jinja2 body templates** customize Teams/Slack/Email/Webhook/API
+  payloads (with live preview). Every dispatch's real result is captured and shown on hover.
+  SSL/TLS certificate verification is disabled on outbound HTTP integration calls by design, to
+  support internally-issued or self-signed certificates. See "Integrations" below.
 - **Alerts** — get notified (including by **email**) through any configured integration sink when a
   transaction, a Salesforce org's connection, an integration dispatch, or the message broker fails.
   See "Alerts" below.
@@ -120,20 +132,23 @@ sfnexus/
 │   │   ├── broker.py             Message broker: internal in-process queues or RabbitMQ (aio-pika)
 │   │   ├── cometd_client.py      Per-org CometD subscription manager with auto-reconnect/backoff
 │   │   ├── salesforce_client.py  OAuth login + publish Platform Events via REST
-│   │   ├── integrations.py        Outbound fan-out: webhook/Slack/Teams/Email/Snowflake/BigQuery/custom
+│   │   ├── integrations.py        Outbound fan-out: webhook/Slack/Teams/Email/Snowflake/BigQuery/
+│   │   │                         custom API/SharePoint (+ optional Jinja2 body templates)
+│   │   ├── template_renderer.py   Shared Jinja2 renderer for integration bodies & SharePoint maps
+│   │   ├── sharepoint.py          SharePoint Online (GCC High) Graph client + file/list runners
 │   │   ├── processors.py          Uploaded Python processor storage + isolated subprocess execution
 │   │   │                         (with org/admin-config context passed via env vars)
 │   │   ├── rules.py                GoRules JDM decision graph storage + evaluation (Zen Engine)
 │   │   ├── alerts.py               Alert rules - fire on success/failure, deliver via an integration sink
 │   │   ├── worker.py             The "internal function": processes inbound events
-│   │   │                         (via DSSClient/Langflow/custom script/rule engine if configured),
+│   │   │                         (via DSSClient/Langflow/custom script/SharePoint/rule gate),
 │   │   │                         fans results out to selected publish channels + integrations +
 │   │   │                         alerts, and handles reprocessing
 │   │   ├── transactions.py       Transaction audit-trail helpers
 │   │   └── routers/              /api/auth, /api/orgs, /api/events, /api/transactions,
 │   │                             /api/logs, /api/dashboard, /api/admin-config, /api/users,
 │   │                             /api/integrations, /api/processors, /api/alerts, /api/execute,
-│   │                             /api/rules
+│   │                             /api/rules, /api/sharepoint
 │   ├── dev_tools/
 │   │   └── fake_oidc_provider.py  Local fake IdP for testing SSO without a real provider
 │   ├── data/                     nexus.db (SQLite) lives here (gitignored)
@@ -143,8 +158,8 @@ sfnexus/
 └── frontend/
     ├── src/
     │   ├── pages/                Login, SsoCallback, Dashboard, Orgs, EventsConfig,
-    │   │                         Transactions (with grouping), Logs (with hover popups),
-    │   │                         AdminConfig (submenu tabs), Users, Integrations, Alerts
+    │   │                         EventFlowDesigner (React Flow), Transactions (grouping),
+    │   │                         Logs, AdminConfig, Users, Integrations, Alerts, SharePoint
     │   ├── components/           Layout (role-gated sidebar/topbar), shared UI bits
     │   └── lib/                  api.js (JWT client), AuthContext.jsx (role-aware auth state)
     └── dist/                     Production build output (served by FastAPI) — run `npm run build`
@@ -369,17 +384,34 @@ authenticated role), **add, edit, or delete** any number of sinks that every pro
 is fanned out to, independent of the Salesforce publish step (the sink's type is fixed once
 created; everything else — name, config, trigger, org scope, alert-only flag — can be edited later):
 
-- **Webhook** — POSTs the full transaction JSON to a URL you provide; optionally HMAC-signs the
-  body (`X-Nexus-Signature: sha256=...`) if you set a signing secret.
-- **Slack** / **Microsoft Teams** — posts a formatted status card to an incoming webhook URL.
-- **Email** — sends an email via the SMTP server configured in Admin Configuration → Email (see
-  below), to one or more recipients you specify, with an optional custom subject.
+- **Webhook** — POSTs the full transaction JSON (or a Jinja2-rendered body) to a URL you provide;
+  optionally HMAC-signs the body (`X-Nexus-Signature: sha256=...`) if you set a signing secret.
+- **Slack** / **Microsoft Teams** — posts a default status card, or a **custom Jinja2 template**
+  (MessageCard / Block Kit, etc.) with live preview in the admin UI.
+- **Email** — sends via Admin Configuration → Email SMTP; subject/body can use Jinja2 templates.
 - **Snowflake** / **BigQuery** — inserts a row per transaction into a table you specify. These use
   optional client libraries not installed by default — if you enable one, add it to your
   environment: `pip install snowflake-connector-python` or `pip install google-cloud-bigquery`
   (BigQuery uses Application Default Credentials; no key needs to be pasted into the UI).
-- **Custom API** — a generic HTTP call (method, URL, and an `Authorization` header you choose) for
-  any other SaaS's event API.
+- **Custom API** — a generic HTTP call (method, URL, and an `Authorization` header you choose),
+  optionally with a Jinja2-rendered JSON body.
+- **SharePoint File** / **SharePoint List** — run a preconfigured SharePoint action (see
+  "SharePoint Online") as a post-processing fan-out sink. Config is `{ "action_id": "..." }`.
+
+### Custom body templates (Jinja2)
+
+For Teams, Slack, Email, Webhook, and Custom API, set `body_mode` to `template` and provide a
+`body_template` string. Available variables:
+
+| Variable | Meaning |
+|---|---|
+| `id`, `status`, `org_name`, `channel`, `error`, `created_at` | Transaction fields |
+| `payload` | Original Salesforce event payload |
+| `result` | Processor / AI output |
+| `t` | Full transaction object |
+
+Filters include `| default('—')` and `| tojson`. Preview via
+`POST /api/integrations/preview-template` (used by the Integrations UI live preview pane).
 
 Each integration has a **trigger** (`always`, `on_success`, `on_failure`) and an optional **org
 scope** (leave blank to apply to every org). Use the **Test** button on any integration to send a
@@ -515,6 +547,86 @@ types that don't have a meaningful reply. The transaction's terminal status beco
 instead of `published`/`failed`, and routed (or globally auto-matched) integrations/alerts still
 fire off of it.
 
+
+## Event Flow Designer
+
+Open **Flow** on any subscribed channel (Event Configuration) to open `/events/:eventId/flow`.
+
+Phase 1 visualizes the existing pipeline as a React Flow graph:
+
+```
+Salesforce Event → Rule gate → Processor → ┬─ Publish channel(s)
+                                           ├─ Integration hook(s)  (incl. SharePoint / Teams / …)
+                                           └─ Alert(s)
+```
+
+The left sidebar edits the same fields as the classic routing dialog (rule, processing mode,
+processor/action id, auto-publish, multi-select publish channels / integrations / alerts). **Save
+flow** writes those fields via `PUT /api/events/{id}` — no separate graph storage. Nodes are
+draggable for layout; removing a fan-out node unchecks that target.
+
+Requires the frontend dependency `@xyflow/react` (`npm install` in `frontend/`).
+
+## SharePoint Online (GCC High)
+
+Admin nav → **SharePoint**. Cloud and auth are fixed for this deployment:
+
+- **Cloud:** GCC High only (`graph.microsoft.us`, `login.microsoftonline.us`)
+- **Auth:** Azure AD app-only client credentials
+
+### Connections
+
+Multiple named connections (tenant id, client id, client secret). Secrets are masked in the API.
+
+The Azure app needs Graph application permissions sufficient to search sites and read
+drives/lists (e.g. `Sites.Read.All` or `Sites.Selected` with grants), plus write permissions for
+the libraries/lists you upload to.
+
+### File actions
+
+Reusable upload configurations:
+
+| Setting | Description |
+|---|---|
+| Connection | Which app registration to use |
+| Site / Drive | Picked from Graph dropdowns (search sites, or resolve by hostname + path) |
+| Folder path / file name | Jinja2 templates |
+| File source | `salesforce_content_version` (ContentDocumentId template) or `url` |
+| Create missing folders | Optional |
+| Check in after upload | Optional |
+| Metadata map | Free-form JSON: SharePoint column → Jinja2 expression |
+| SF enrichment | Optional record id template + object API name (e.g. Opportunity → `business`) |
+
+### List actions
+
+| Setting | Description |
+|---|---|
+| Connection, Site, List | Graph pickers |
+| Operation | `create` or `update` |
+| Item ID template | Required for update (Jinja2) |
+| Field map | Free-form JSON: list field → Jinja2 |
+
+### Two ways to run an action
+
+1. **Processing mode** (primary path) — on the event, set processing mode to `sharepoint_file` or
+   `sharepoint_list` and `processor_id` to the action id. Failures **hard-fail** the transaction
+   (no silent local fallback), matching “SharePoint is the job of this channel.”
+2. **Integration fan-out** — create an integration of type SharePoint File/List pointing at the
+   same `action_id`. Runs after whatever processor you chose (Langflow, script, etc.), alongside
+   Teams/Slack/webhooks.
+
+Jinja context for maps/paths includes `payload`, `org`, `year`, `month`, `day`, `title`,
+`extension`, `business`, and `sf_record` when enrichment succeeds.
+
+### Graph discovery APIs
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/sharepoint/connections/{id}/sites?q=` | Search sites |
+| `GET /api/sharepoint/connections/{id}/sites-by-path?hostname=&path=` | Resolve site by path |
+| `GET /api/sharepoint/connections/{id}/sites/{siteId}/drives` | Document libraries |
+| `GET /api/sharepoint/connections/{id}/sites/{siteId}/lists` | Lists |
+
 ## Alerts
 
 Admin Configuration → **Alerts** (its own page, alongside Integrations) notifies you through an
@@ -542,13 +654,15 @@ the **Test** button on any alert to confirm delivery before relying on it.
 
 ## Per-event processor override
 
-The same **Route & process** dialog also lets an individual subscribed channel pin its own
-processing mode (Local / DSSClient / Langflow / Custom uploaded script — and which script) instead
-of using the global Admin Configuration default. This is resolved per event at processing time
+The same **Route & process** dialog (and the Event Flow Designer) also lets an individual subscribed
+channel pin its own processing mode — Local / DSSClient / Langflow / Custom uploaded script /
+**SharePoint File** / **SharePoint List** — and which script or SharePoint action — instead of using
+the global Admin Configuration default. This is resolved per event at processing time
 (`worker.py:_resolve_processing()`); leaving it on "Use global default" preserves existing behavior.
 Useful when different event types need different handling — e.g. one channel always uses a specific
-custom script while everything else uses the global DSSClient setting. (This is separate from the
-channel's **validation rule**, which decides *whether* to process at all — see "Rule engine" above.)
+SharePoint file action while everything else uses the global DSSClient setting. (This is separate
+from the channel's **validation rule**, which decides *whether* to process at all — see "Rule
+engine" above.)
 
 ## Reliability & threading
 

@@ -186,6 +186,14 @@ function buildGraph({ event, orgName, rules, processors, pubs, integrations, ale
     procLabel = proc?.name || 'Custom script'
     procSub = 'processing_mode: custom_script'
     procBadge = 'Script'
+  } else if (mode === 'sharepoint_file') {
+    procLabel = 'SharePoint File'
+    procSub = selected.processorId ? `action: ${selected.processorId.slice(0, 8)}…` : 'processing_mode: sharepoint_file'
+    procBadge = 'SP File'
+  } else if (mode === 'sharepoint_list') {
+    procLabel = 'SharePoint List'
+    procSub = selected.processorId ? `action: ${selected.processorId.slice(0, 8)}…` : 'processing_mode: sharepoint_list'
+    procBadge = 'SP List'
   }
 
   nodes.push({
@@ -282,6 +290,8 @@ export default function EventFlowDesigner() {
   const [alerts, setAlerts] = useState([])
   const [processors, setProcessors] = useState([])
   const [rules, setRules] = useState([])
+  const [spFileActions, setSpFileActions] = useState([])
+  const [spListActions, setSpListActions] = useState([])
 
   const [selected, setSelected] = useState({
     ruleId: '',
@@ -359,13 +369,15 @@ export default function EventFlowDesigner() {
       setLoading(true)
       setError(null)
       try {
-        const [o, c, i, p, a, r] = await Promise.all([
+        const [o, c, i, p, a, r, sf, sl] = await Promise.all([
           api.get('/orgs'),
           api.get('/events'),
           api.get('/integrations'),
           api.get('/processors'),
           api.get('/alerts'),
           api.get('/rules'),
+          api.get('/sharepoint/file-actions').catch(() => ({ data: [] })),
+          api.get('/sharepoint/list-actions').catch(() => ({ data: [] })),
         ])
         if (cancelled) return
         const ev = c.data.find((x) => x.id === eventId)
@@ -385,6 +397,8 @@ export default function EventFlowDesigner() {
         setProcessors(p.data)
         setAlerts(a.data)
         setRules(r.data)
+        setSpFileActions(sf.data || [])
+        setSpListActions(sl.data || [])
         setEvent(ev)
 
         const sel = {
@@ -445,7 +459,7 @@ export default function EventFlowDesigner() {
         route_integration_ids: selected.integrationIds,
         route_alert_ids: selected.alertIds,
         processing_mode: selected.processingMode || '',
-        processor_id: selected.processingMode === 'custom_script' ? selected.processorId : '',
+        processor_id: ['custom_script','sharepoint_file','sharepoint_list'].includes(selected.processingMode) ? selected.processorId : '',
         rule_id: selected.ruleId || '',
         auto_publish: selected.autoPublish,
       })
@@ -547,7 +561,9 @@ export default function EventFlowDesigner() {
                 value={selected.processingMode}
                 onChange={(e) => updateSelected({
                   processingMode: e.target.value,
-                  processorId: e.target.value === 'custom_script' ? selected.processorId : '',
+                  processorId: ['custom_script', 'sharepoint_file', 'sharepoint_list'].includes(e.target.value)
+                    ? selected.processorId
+                    : '',
                 })}
               >
                 <option value="">Global default</option>
@@ -555,6 +571,8 @@ export default function EventFlowDesigner() {
                 <option value="dss_client">Dataiku DSS</option>
                 <option value="langflow">Langflow</option>
                 <option value="custom_script">Custom script</option>
+                <option value="sharepoint_file">SharePoint File (primary)</option>
+                <option value="sharepoint_list">SharePoint List (primary)</option>
               </select>
             </div>
             {selected.processingMode === 'custom_script' && (
@@ -566,6 +584,34 @@ export default function EventFlowDesigner() {
                 >
                   <option value="">Select…</option>
                   {processors.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {selected.processingMode === 'sharepoint_file' && (
+              <div className="field">
+                <label>SharePoint file action</label>
+                <select
+                  value={selected.processorId}
+                  onChange={(e) => updateSelected({ processorId: e.target.value })}
+                >
+                  <option value="">Select file action…</option>
+                  {spFileActions.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {selected.processingMode === 'sharepoint_list' && (
+              <div className="field">
+                <label>SharePoint list action</label>
+                <select
+                  value={selected.processorId}
+                  onChange={(e) => updateSelected({ processorId: e.target.value })}
+                >
+                  <option value="">Select list action…</option>
+                  {spListActions.map((p) => (
                     <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
                 </select>
@@ -615,7 +661,9 @@ export default function EventFlowDesigner() {
                   onChange={() => toggleId('integrationIds', i.id)}
                 />
                 <span>{i.name}</span>
-                <span className="flow-check-meta">({i.type})</span>
+                <span className="flow-check-meta">
+                  ({i.type === 'sharepoint_file' ? 'SharePoint File' : i.type === 'sharepoint_list' ? 'SharePoint List' : i.type})
+                </span>
               </label>
             ))}
           </div>

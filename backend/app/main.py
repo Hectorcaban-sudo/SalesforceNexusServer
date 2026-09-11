@@ -29,6 +29,7 @@ from .routers import alerts as alerts_router
 from .routers import execute as execute_router
 from .routers import rules as rules_router
 from .routers import audit as audit_router
+from .routers import sharepoint as sharepoint_router
 from .audit import AuditMiddleware
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -93,6 +94,7 @@ app.include_router(alerts_router.router)
 app.include_router(execute_router.router)
 app.include_router(rules_router.router)
 app.include_router(audit_router.router)
+app.include_router(sharepoint_router.router)
 
 
 @app.get("/api/health")

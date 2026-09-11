@@ -331,11 +331,136 @@ class ProcessingMode(str, Enum):
     dss_client = "dss_client"
     custom_script = "custom_script"
     langflow = "langflow"
+    sharepoint_file = "sharepoint_file"
+    sharepoint_list = "sharepoint_list"
 
 
 class ProcessingModeConfig(BaseModel):
     mode: ProcessingMode = ProcessingMode.local
     active_processor_id: Optional[str] = None
+
+
+# ---------- SharePoint Online (GCC High) ----------
+class SharePointConnectionBase(BaseModel):
+    name: str
+    tenant_id: str
+    client_id: str
+    client_secret: str = ""          # write-only on update if blank
+    enabled: bool = True
+    # Fixed to GCC High for this deployment; stored for forward-compat
+    cloud: str = "gcchigh"
+
+
+class SharePointConnectionCreate(SharePointConnectionBase):
+    pass
+
+
+class SharePointConnectionUpdate(BaseModel):
+    name: Optional[str] = None
+    tenant_id: Optional[str] = None
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+class SharePointConnectionOut(BaseModel):
+    id: str
+    name: str
+    tenant_id: str
+    client_id: str
+    client_secret: str = "••••••••"  # always masked in API
+    enabled: bool = True
+    cloud: str = "gcchigh"
+
+
+class SharePointFileSource(str, Enum):
+    salesforce_content_version = "salesforce_content_version"
+    url = "url"
+
+
+class SharePointFileActionBase(BaseModel):
+    name: str
+    connection_id: str
+    enabled: bool = True
+    site_id: str = ""
+    drive_id: str = ""
+    folder_path_template: str = ""          # Jinja2, e.g. "{{ year }} NBF Reports/{{ business }} Projects"
+    file_name_template: str = "{{ title }}.{{ extension }}"
+    create_missing_folders: bool = True
+    check_in_after_upload: bool = True
+    file_source: SharePointFileSource = SharePointFileSource.salesforce_content_version
+    # Jinja2: resolve ContentDocumentId from any event shape
+    content_document_id_template: str = "{{ payload.ContentDocumentId }}"
+    # Jinja2: when file_source == url
+    file_url_template: str = ""
+    # Free-form SharePoint column -> Jinja2 expression
+    metadata_map: dict = Field(default_factory=dict)
+    # Optional: linked Salesforce record field for enrichment (Opportunity Id etc.)
+    salesforce_record_id_template: str = "{{ payload.LinkedEntityId }}"
+    salesforce_object: Optional[str] = "Opportunity"  # used if enrichment query needed; blank = skip
+
+
+class SharePointFileActionCreate(SharePointFileActionBase):
+    pass
+
+
+class SharePointFileActionUpdate(BaseModel):
+    name: Optional[str] = None
+    connection_id: Optional[str] = None
+    enabled: Optional[bool] = None
+    site_id: Optional[str] = None
+    drive_id: Optional[str] = None
+    folder_path_template: Optional[str] = None
+    file_name_template: Optional[str] = None
+    create_missing_folders: Optional[bool] = None
+    check_in_after_upload: Optional[bool] = None
+    file_source: Optional[SharePointFileSource] = None
+    content_document_id_template: Optional[str] = None
+    file_url_template: Optional[str] = None
+    metadata_map: Optional[dict] = None
+    salesforce_record_id_template: Optional[str] = None
+    salesforce_object: Optional[str] = None
+
+
+class SharePointFileActionOut(SharePointFileActionBase):
+    id: str
+
+
+class SharePointListOperation(str, Enum):
+    create = "create"
+    update = "update"
+
+
+class SharePointListActionBase(BaseModel):
+    name: str
+    connection_id: str
+    enabled: bool = True
+    site_id: str = ""
+    list_id: str = ""                   # Graph list id
+    operation: SharePointListOperation = SharePointListOperation.create
+    # Jinja2 for update: item id
+    item_id_template: str = ""
+    # Free-form SharePoint field -> Jinja2
+    field_map: dict = Field(default_factory=dict)
+
+
+class SharePointListActionCreate(SharePointListActionBase):
+    pass
+
+
+class SharePointListActionUpdate(BaseModel):
+    name: Optional[str] = None
+    connection_id: Optional[str] = None
+    enabled: Optional[bool] = None
+    site_id: Optional[str] = None
+    list_id: Optional[str] = None
+    operation: Optional[SharePointListOperation] = None
+    item_id_template: Optional[str] = None
+    field_map: Optional[dict] = None
+
+
+class SharePointListActionOut(SharePointListActionBase):
+    id: str
 
 
 class ProcessorTestRequest(BaseModel):
@@ -408,6 +533,8 @@ class IntegrationType(str, Enum):
     bigquery = "bigquery"
     custom_api = "custom_api"
     email = "email"
+    sharepoint_file = "sharepoint_file"
+    sharepoint_list = "sharepoint_list"
 
 
 class IntegrationTrigger(str, Enum):

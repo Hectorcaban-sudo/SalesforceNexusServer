@@ -294,6 +294,30 @@ async def process_payload(payload: dict, mode_override: Optional[str] = None, pr
                 "echo": payload,
             }
 
+    if mode == "sharepoint_file":
+        from .sharepoint import run_sharepoint_file, SharePointError
+        if not active_processor_id:
+            raise SharePointError("sharepoint_file mode requires a file action id (processor_id)")
+        try:
+            return await asyncio.to_thread(run_sharepoint_file, active_processor_id, payload, org_id)
+        except SharePointError:
+            raise  # hard-fail the transaction (no silent local fallback)
+        except Exception as exc:  # noqa: BLE001
+            log_event("error", f"SharePoint file processor failed: {exc}")
+            raise
+
+    if mode == "sharepoint_list":
+        from .sharepoint import run_sharepoint_list, SharePointError
+        if not active_processor_id:
+            raise SharePointError("sharepoint_list mode requires a list action id (processor_id)")
+        try:
+            return await asyncio.to_thread(run_sharepoint_list, active_processor_id, payload, org_id)
+        except SharePointError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log_event("error", f"SharePoint list processor failed: {exc}")
+            raise
+
     return {
         "status": "ok",
         "summary": "Event processed by Salesforce Nexus AI Server (local mode)",

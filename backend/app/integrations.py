@@ -275,6 +275,30 @@ def _load_bigquery(cfg: dict, transaction: dict) -> dict:
     return {"rows_inserted": 1, "table": table_ref}
 
 
+
+def _send_sharepoint_file(cfg: dict, transaction: dict) -> dict:
+    """Fan-out: run a configured SharePoint file action against this transaction."""
+    from .sharepoint import run_sharepoint_file
+    action_id = (cfg.get("config") or {}).get("action_id") or cfg.get("action_id")
+    if not action_id:
+        raise RuntimeError("SharePoint file integration is missing config.action_id")
+    # Use the original event payload; fall back to full transaction if needed
+    payload = transaction.get("payload") or transaction
+    org_id = transaction.get("org_id")
+    return run_sharepoint_file(action_id, payload, org_id)
+
+
+def _send_sharepoint_list(cfg: dict, transaction: dict) -> dict:
+    """Fan-out: run a configured SharePoint list action against this transaction."""
+    from .sharepoint import run_sharepoint_list
+    action_id = (cfg.get("config") or {}).get("action_id") or cfg.get("action_id")
+    if not action_id:
+        raise RuntimeError("SharePoint list integration is missing config.action_id")
+    payload = transaction.get("payload") or transaction
+    org_id = transaction.get("org_id")
+    return run_sharepoint_list(action_id, payload, org_id)
+
+
 _SENDERS = {
     "webhook": _send_webhook,
     "custom_api": _send_custom_api,
@@ -283,6 +307,8 @@ _SENDERS = {
     "email": _send_email,
     "snowflake": _load_snowflake,
     "bigquery": _load_bigquery,
+    "sharepoint_file": _send_sharepoint_file,
+    "sharepoint_list": _send_sharepoint_list,
 }
 
 
