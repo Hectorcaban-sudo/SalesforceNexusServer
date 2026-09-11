@@ -203,6 +203,19 @@ async def run_langflow(payload: dict) -> dict:
     }
 
 
+
+def apply_result_transform(result: dict, payload: dict, template: str) -> dict:
+    """Optional Jinja2 transform of processor result before publish/integrations."""
+    if not template or not str(template).strip():
+        return result
+    from .template_renderer import render_template
+    import json
+    rendered = render_template(template, {"payload": payload or {}, "result": result or {}})
+    try:
+        return json.loads(rendered)
+    except Exception:
+        return {**(result or {}), "transformed_text": rendered}
+
 async def process_payload(payload: dict, mode_override: Optional[str] = None, processor_id_override: Optional[str] = None, org_id: Optional[str] = None, transaction_id: Optional[str] = None) -> dict:
     """
     Business / AI processing logic for every inbound event.
@@ -480,6 +493,16 @@ async def inbound_worker():
                 # async task for langflow, instant for local) - no to_thread
                 # wrapper needed here.
                 result = await process_payload(payload, mode_override, processor_override, org_id, transaction_id)
+                # Optional Map/Transform (Phase 2): Jinja2 reshape of processor result
+                try:
+                    src_cfg = event_configs_table.get(
+                        (Q.org_id == org_id) & (Q.channel == source_channel) & (Q.direction == "subscribe")
+                    ) if org_id and source_channel else None
+                    tmpl = (src_cfg or {}).get("result_transform_template") or ""
+                    if tmpl.strip():
+                        result = apply_result_transform(result, payload, tmpl)
+                except Exception as exc:  # noqa: BLE001
+                    log_event("warning", f"result_transform_template failed: {exc}")
             except (proc_module.ProcessorCancelled, OperationCancelled):
                 tx.update_transaction(transaction_id, status="cancelled", error="Cancelled during processing")
                 log_event("warning", "Worker: processing was cancelled", transaction_id=transaction_id)

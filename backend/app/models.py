@@ -145,6 +145,7 @@ class EventConfigBase(BaseModel):
     # "processed" transaction, but nothing is queued onto the outbound
     # publish path. Defaults to True (existing behavior).
     auto_publish: bool = True
+    result_transform_template: Optional[str] = None  # Jinja2 transform of result before publish
 
 
 class EventConfigCreate(EventConfigBase):
@@ -152,6 +153,7 @@ class EventConfigCreate(EventConfigBase):
 
 
 class EventConfigUpdate(BaseModel):
+    result_transform_template: Optional[str] = None
     channel: Optional[str] = None
     enabled: Optional[bool] = None
     description: Optional[str] = None
@@ -433,6 +435,9 @@ class SharePointFileActionOut(SharePointFileActionBase):
 class SharePointListOperation(str, Enum):
     create = "create"
     update = "update"
+    upsert = "upsert"
+    lookup = "lookup"
+    delete = "delete"
 
 
 class SharePointListActionBase(BaseModel):
@@ -444,8 +449,11 @@ class SharePointListActionBase(BaseModel):
     list_id: str = ""                   # Graph list id
     list_name: str = ""
     operation: SharePointListOperation = SharePointListOperation.create
-    # Jinja2 for update: item id
+    # Jinja2 for update/delete: item id (optional if lookup is set)
     item_id_template: str = ""
+    # Lookup / upsert: find item where fields/<lookup_field> equals rendered value
+    lookup_field: str = ""
+    lookup_value_template: str = ""
     # Free-form SharePoint field -> Jinja2
     field_map: dict = Field(default_factory=dict)
 
@@ -464,6 +472,8 @@ class SharePointListActionUpdate(BaseModel):
     list_name: Optional[str] = None
     operation: Optional[SharePointListOperation] = None
     item_id_template: Optional[str] = None
+    lookup_field: Optional[str] = None
+    lookup_value_template: Optional[str] = None
     field_map: Optional[dict] = None
 
 

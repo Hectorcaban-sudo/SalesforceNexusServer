@@ -21,6 +21,8 @@ const EMPTY_LIST = {
   site_id: '', site_name: '', list_id: '', list_name: '',
   operation: 'create',
   item_id_template: '',
+  lookup_field: '',
+  lookup_value_template: '',
   field_map_text: '{\n  "Title": "{{ payload.Name }}"\n}',
 }
 
@@ -417,7 +419,7 @@ export default function SharePoint() {
       {tab === 'lists' && (
         <>
           <div className="page-title-row" style={{ marginBottom: 12 }}>
-            <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 13 }}>Create or update list items. Pick site & list from Graph dropdowns.</p>
+            <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 13 }}>Create, update, upsert, lookup, or delete list items. Graph browse optional — paste IDs if 403.</p>
             <button className="btn btn-primary" onClick={() => openCreate('list')} disabled={!conns.length}><Plus size={15} /> Add list action</button>
           </div>
           <div className="org-grid">
@@ -774,15 +776,31 @@ export default function SharePoint() {
                       <select value={modal.form.operation} onChange={(e) => setField('operation', e.target.value)}>
                         <option value="create">Create</option>
                         <option value="update">Update</option>
+                        <option value="upsert">Upsert (lookup then update or create)</option>
+                        <option value="lookup">Lookup only</option>
+                        <option value="delete">Delete</option>
                       </select>
                     </div>
-                    {modal.form.operation === 'update' && (
-                      <div className="field"><label>Item ID template (Jinja2)</label>
-                        <input value={modal.form.item_id_template} onChange={(e) => setField('item_id_template', e.target.value)} /></div>
+                    {['update', 'delete'].includes(modal.form.operation) && (
+                      <div className="field"><label>Item ID template (Jinja2) — optional if lookup is set</label>
+                        <input value={modal.form.item_id_template || ''} onChange={(e) => setField('item_id_template', e.target.value)}
+                          placeholder="{{ payload.SharePointItemId__c }}" /></div>
                     )}
-                    <div className="field"><label>Field map (JSON field → Jinja2)</label>
-                      <textarea rows={5} value={modal.form.field_map_text} onChange={(e) => setField('field_map_text', e.target.value)}
-                        style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12.5 }} /></div>
+                    {['update', 'upsert', 'lookup', 'delete'].includes(modal.form.operation) && (
+                      <div className="form-row-2">
+                        <div className="field"><label>Lookup field (SharePoint column)</label>
+                          <input value={modal.form.lookup_field || ''} onChange={(e) => setField('lookup_field', e.target.value)}
+                            placeholder="e.g. OpportunityId" /></div>
+                        <div className="field"><label>Lookup value (Jinja2)</label>
+                          <input value={modal.form.lookup_value_template || ''} onChange={(e) => setField('lookup_value_template', e.target.value)}
+                            placeholder="{{ payload.OpportunityId }}" /></div>
+                      </div>
+                    )}
+                    {modal.form.operation !== 'lookup' && modal.form.operation !== 'delete' && (
+                      <div className="field"><label>Field map (JSON field → Jinja2)</label>
+                        <textarea rows={5} value={modal.form.field_map_text} onChange={(e) => setField('field_map_text', e.target.value)}
+                          style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12.5 }} /></div>
+                    )}
                   </>
                 )}
               </div>

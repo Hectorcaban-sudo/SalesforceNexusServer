@@ -124,5 +124,47 @@ class SalesforceClient:
             )
         return resp.json()
 
+    async def _request(self, org: dict, method: str, path: str, *, params=None, json_body=None, raw: bool = False):
+        """Authenticated REST call against the org's instance URL. Retries once on 401."""
+        session = await self.get_session(org)
+        url = path if path.startswith("http") else f"{session.instance_url.rstrip('/')}/{path.lstrip('/')}"
+        headers = {"Authorization": f"Bearer {session.access_token}"}
+        if not raw:
+            headers["Content-Type"] = "application/json"
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT if not raw else 120.0) as client:
+            resp = await client.request(method, url, headers=headers, params=params, json=json_body)
+            if resp.status_code == 401:
+                session = await self.get_session(org, force_refresh=True)
+                headers["Authorization"] = f"Bearer {session.access_token}"
+                resp = await client.request(method, url, headers=headers, params=params, json=json_body)
+        return resp
+
+    async def soql_query(self, org: dict, soql: str) -> dict:
+        api = org.get("api_version", "60.0")
+        resp = await self._request(org, "GET", f"/services/data/v{api}/query", params={"q": soql})
+        if resp.status_code >= 400:
+            raise RuntimeError(f"SOQL query failed ({resp.status_code}): {resp.text[:400]}")
+        return resp.json()
+
+    async def get_sobject(self, org: dict, object_api_name: str, record_id: str) -> dict:
+        api = org.get("api_version", "60.0")
+        resp = await self._request(
+            org, "GET", f"/services/data/v{api}/sobjects/{object_api_name}/{record_id}"
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"sObject get {object_api_name}/{record_id} failed ({resp.status_code}): {resp.text[:300]}"
+            )
+        return resp.json()
+
+    async def download_content_version_bytes(self, org: dict, version_id: str) -> bytes:
+        api = org.get("api_version", "60.0")
+        path = f"/services/data/v{api}/sobjects/ContentVersion/{version_id}/VersionData"
+        resp = await self._request(org, "GET", path, raw=True)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"ContentVersion download failed ({resp.status_code})")
+        return resp.content
+
+
 
 sf_client = SalesforceClient()

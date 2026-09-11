@@ -104,34 +104,41 @@ def _render_map(mapping: dict, ctx: dict) -> dict:
     return out
 
 
-def _salesforce_client(org: dict):
-    from simple_salesforce import Salesforce
-    from urllib.parse import urlparse
+def _run_sf(coro):
+    """Run an async SalesforceClient coroutine from a worker thread.
 
-    login_url = org.get("login_url") or ""
-    host = urlparse(login_url).hostname or login_url
-    parts = host.replace("https://", "").split(".")
-    # baesystemsins--uat.sandbox.my.salesforce.com -> baesystemsins--uat.sandbox.my
-    if parts[-2:] == ["salesforce", "com"] or (len(parts) >= 2 and parts[-1] == "com"):
-        domain = ".".join(parts[:-2]) if parts[-2] == "salesforce" else ".".join(parts[:-1])
-    else:
-        domain = host.replace(".salesforce.com", "").replace("https://", "")
-    return Salesforce(
-        consumer_key=org.get("client_id"),
-        consumer_secret=org.get("client_secret"),
-        domain=domain,
-    )
+    SharePoint actions run under asyncio.to_thread; the shared sf_client is
+    async (httpx) and already caches sessions per org using the org's real
+    auth_type (password or client_credentials).
+    """
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        # Should not happen inside to_thread, but be safe
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, coro).result()
+    return asyncio.run(coro)
 
 
 def _download_salesforce_content(org: dict, content_document_id: str) -> tuple[bytes, str, str]:
-    """Return (file_bytes, title, extension)."""
-    sf = _salesforce_client(org)
+    """Return (file_bytes, title, extension) using Nexus's shared Salesforce session."""
+    from .salesforce_client import sf_client
+
+    # Escape single quotes for SOQL
+    doc_id = content_document_id.replace("'", "\'")
     q = (
-        "SELECT Id, Title, FileExtension, VersionData "
-        f"FROM ContentVersion WHERE ContentDocumentId = '{content_document_id}' "
+        "SELECT Id, Title, FileExtension "
+        f"FROM ContentVersion WHERE ContentDocumentId = '{doc_id}' "
         "ORDER BY VersionNumber DESC LIMIT 1"
     )
-    result = sf.query(q)
+    try:
+        result = _run_sf(sf_client.soql_query(org, q))
+    except Exception as exc:  # noqa: BLE001
+        raise SharePointError(f"Salesforce ContentVersion query failed: {exc}") from exc
     records = result.get("records") or []
     if not records:
         raise SharePointError(f"No ContentVersion found for ContentDocumentId={content_document_id}")
@@ -139,15 +146,19 @@ def _download_salesforce_content(org: dict, content_document_id: str) -> tuple[b
     version_id = cv["Id"]
     title = cv.get("Title") or version_id
     extension = (cv.get("FileExtension") or "").lstrip(".")
-    download_url = f"{sf.base_url}sobjects/ContentVersion/{version_id}/VersionData"
-    file_resp = requests.get(
-        download_url,
-        headers={"Authorization": f"Bearer {sf.session_id}"},
-        timeout=120,
-    )
-    if file_resp.status_code >= 400:
-        raise SharePointError(f"Salesforce file download failed ({file_resp.status_code})")
-    return file_resp.content, title, extension
+    try:
+        content = _run_sf(sf_client.download_content_version_bytes(org, version_id))
+    except Exception as exc:  # noqa: BLE001
+        raise SharePointError(f"Salesforce file download failed: {exc}") from exc
+    return content, title, extension
+
+
+def _salesforce_get_record(org: dict, object_api_name: str, record_id: str) -> dict:
+    from .salesforce_client import sf_client
+    try:
+        return _run_sf(sf_client.get_sobject(org, object_api_name, record_id))
+    except Exception as exc:  # noqa: BLE001
+        raise SharePointError(f"Salesforce {object_api_name} get failed: {exc}") from exc
 
 
 def _download_url(url: str) -> bytes:
@@ -269,12 +280,9 @@ def run_sharepoint_file(action_id: str, payload: dict, org_id: Optional[str] = N
     sf_object = (action.get("salesforce_object") or "").strip()
     if org and record_id and sf_object:
         try:
-            sf = _salesforce_client(org)
-            getter = getattr(sf, sf_object, None)
-            if getter is not None:
-                rec = getter.get(record_id)
-                ctx["sf_record"] = rec
-                ctx["business"] = rec.get("Business_Area__c") or ctx.get("business") or ""
+            rec = _salesforce_get_record(org, sf_object, record_id)
+            ctx["sf_record"] = rec
+            ctx["business"] = rec.get("Business_Area__c") or ctx.get("business") or ""
         except Exception as exc:  # noqa: BLE001
             log_event("warning", f"SharePoint SF enrichment failed: {exc}")
 
@@ -348,6 +356,45 @@ def run_sharepoint_file(action_id: str, payload: dict, org_id: Optional[str] = N
     }
 
 
+def _graph_list_items_filter(token: str, site_id: str, list_id: str, field: str, value: str) -> list:
+    """Find list items where fields/<field> equals value (OData filter)."""
+    # Escape single quotes in OData string literals
+    safe_val = (value or "").replace("'", "''")
+    safe_field = field.strip()
+    if not safe_field:
+        raise SharePointError("lookup_field is empty")
+    url = f"{GRAPH_ROOT}/sites/{site_id}/lists/{list_id}/items"
+    params = {
+        "$expand": "fields",
+        "$filter": f"fields/{safe_field} eq '{safe_val}'",
+        "$top": "5",
+    }
+    resp = requests.get(url, headers=_headers(token), params=params, timeout=60)
+    if resp.status_code >= 400:
+        raise SharePointError(f"SharePoint list lookup failed ({resp.status_code}): {resp.text[:500]}")
+    return (resp.json() or {}).get("value") or []
+
+
+def _create_list_item(token: str, site_id: str, list_id: str, fields: dict) -> dict:
+    url = f"{GRAPH_ROOT}/sites/{site_id}/lists/{list_id}/items"
+    resp = requests.post(
+        url,
+        headers={**_headers(token), "Content-Type": "application/json"},
+        json={"fields": fields},
+        timeout=60,
+    )
+    if resp.status_code >= 400:
+        raise SharePointError(f"SharePoint list create failed ({resp.status_code}): {resp.text[:500]}")
+    return resp.json()
+
+
+def _delete_list_item(token: str, site_id: str, list_id: str, item_id: str) -> None:
+    url = f"{GRAPH_ROOT}/sites/{site_id}/lists/{list_id}/items/{item_id}"
+    resp = requests.delete(url, headers=_headers(token), timeout=60)
+    if resp.status_code not in (200, 204):
+        raise SharePointError(f"SharePoint list delete failed ({resp.status_code}): {resp.text[:400]}")
+
+
 def run_sharepoint_list(action_id: str, payload: dict, org_id: Optional[str] = None) -> dict:
     action = sharepoint_list_actions_table.get(Q.id == action_id)
     if not action:
@@ -366,31 +413,83 @@ def run_sharepoint_list(action_id: str, payload: dict, org_id: Optional[str] = N
         raise SharePointError("SharePoint list action requires site_id and list_id")
 
     fields = _render_map(action.get("field_map") or {}, ctx)
-    operation = action.get("operation") or "create"
+    operation = (action.get("operation") or "create").lower()
+
+    lookup_field = (action.get("lookup_field") or "").strip()
+    lookup_value = _render(action.get("lookup_value_template") or "", ctx) if action.get("lookup_value_template") else ""
+
+    def _lookup_id() -> Optional[str]:
+        if not lookup_field or not lookup_value:
+            return None
+        matches = _graph_list_items_filter(token, site_id, list_id, lookup_field, lookup_value)
+        if not matches:
+            return None
+        return matches[0].get("id")
+
+    if operation == "lookup":
+        if not lookup_field or not lookup_value:
+            raise SharePointError("lookup requires lookup_field and lookup_value_template")
+        matches = _graph_list_items_filter(token, site_id, list_id, lookup_field, lookup_value)
+        item_id = matches[0].get("id") if matches else None
+        return {
+            "status": "ok",
+            "summary": f"Lookup found {len(matches)} item(s)" if matches else "Lookup found no items",
+            "sharepoint": {
+                "list_id": list_id,
+                "item_id": item_id,
+                "matches": len(matches),
+                "operation": "lookup",
+                "lookup_field": lookup_field,
+                "lookup_value": lookup_value,
+            },
+        }
+
+    if operation == "delete":
+        item_id = _render(action.get("item_id_template") or "", ctx) or _lookup_id()
+        if not item_id:
+            raise SharePointError("delete requires item_id_template or a successful lookup")
+        _delete_list_item(token, site_id, list_id, item_id)
+        return {
+            "status": "ok",
+            "summary": f"Deleted SharePoint list item {item_id}",
+            "sharepoint": {"list_id": list_id, "item_id": item_id, "operation": "delete"},
+        }
 
     if operation == "update":
-        item_id = _render(action.get("item_id_template") or "", ctx)
+        item_id = _render(action.get("item_id_template") or "", ctx) or _lookup_id()
         if not item_id:
-            raise SharePointError("item_id_template rendered empty for list update")
-        result_fields = _patch_list_item_fields(token, site_id, list_id, item_id, fields)
+            raise SharePointError("update requires item_id_template or lookup_field/value match")
+        _patch_list_item_fields(token, site_id, list_id, item_id, fields)
         return {
             "status": "ok",
             "summary": f"Updated SharePoint list item {item_id}",
             "sharepoint": {"list_id": list_id, "item_id": item_id, "fields": fields, "operation": "update"},
         }
 
-    # create
-    url = f"{GRAPH_ROOT}/sites/{site_id}/lists/{list_id}/items"
-    body = {"fields": fields}
-    resp = requests.post(
-        url,
-        headers={**_headers(token), "Content-Type": "application/json"},
-        json=body,
-        timeout=60,
-    )
-    if resp.status_code >= 400:
-        raise SharePointError(f"SharePoint list create failed ({resp.status_code}): {resp.text[:500]}")
-    created = resp.json()
+    if operation == "upsert":
+        item_id = _lookup_id()
+        if item_id:
+            _patch_list_item_fields(token, site_id, list_id, item_id, fields)
+            return {
+                "status": "ok",
+                "summary": f"Upsert updated SharePoint list item {item_id}",
+                "sharepoint": {
+                    "list_id": list_id, "item_id": item_id, "fields": fields,
+                    "operation": "upsert", "upsert_result": "updated",
+                },
+            }
+        created = _create_list_item(token, site_id, list_id, fields)
+        return {
+            "status": "ok",
+            "summary": f"Upsert created SharePoint list item {created.get('id')}",
+            "sharepoint": {
+                "list_id": list_id, "item_id": created.get("id"), "fields": fields,
+                "operation": "upsert", "upsert_result": "created",
+            },
+        }
+
+    # create (default)
+    created = _create_list_item(token, site_id, list_id, fields)
     return {
         "status": "ok",
         "summary": f"Created SharePoint list item {created.get('id')}",

@@ -298,6 +298,7 @@ export default function EventFlowDesigner() {
     processingMode: '',
     processorId: '',
     autoPublish: true,
+    resultTransform: '',
     publishIds: [],
     integrationIds: [],
     alertIds: [],
@@ -406,6 +407,7 @@ export default function EventFlowDesigner() {
           processingMode: ev.processing_mode || '',
           processorId: ev.processor_id || '',
           autoPublish: ev.auto_publish !== false,
+          resultTransform: ev.result_transform_template || '',
           publishIds: [...(ev.route_publish_channel_ids || [])],
           integrationIds: [...(ev.route_integration_ids || [])],
           alertIds: [...(ev.route_alert_ids || [])],
@@ -462,6 +464,7 @@ export default function EventFlowDesigner() {
         processor_id: ['custom_script','sharepoint_file','sharepoint_list'].includes(selected.processingMode) ? selected.processorId : '',
         rule_id: selected.ruleId || '',
         auto_publish: selected.autoPublish,
+        result_transform_template: selected.resultTransform || '',
       })
       setDirty(false)
     } catch (err) {
@@ -478,6 +481,7 @@ export default function EventFlowDesigner() {
       processingMode: event.processing_mode || '',
       processorId: event.processor_id || '',
       autoPublish: event.auto_publish !== false,
+      resultTransform: event.result_transform_template || '',
       publishIds: [...(event.route_publish_channel_ids || [])],
       integrationIds: [...(event.route_integration_ids || [])],
       alertIds: [...(event.route_alert_ids || [])],
@@ -625,6 +629,19 @@ export default function EventFlowDesigner() {
                 onChange={(e) => updateSelected({ autoPublish: e.target.checked })}
               />
               <label style={{ margin: 0 }}>Auto-publish to Salesforce</label>
+            </div>
+            <div className="field" style={{ marginTop: 12 }}>
+              <label>Phase 2 — Map / Transform (optional Jinja2 JSON)</label>
+              <textarea
+                rows={4}
+                value={selected.resultTransform || ''}
+                onChange={(e) => updateSelected({ resultTransform: e.target.value })}
+                placeholder={'{{ result | tojson }}'}
+                style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
+              />
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 0' }}>
+                Runs after the processor. Context: payload, result. Rule gate = Choice; uncheck auto-publish = Stop publish.
+              </p>
             </div>
           </div>
 

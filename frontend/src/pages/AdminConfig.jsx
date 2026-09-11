@@ -32,6 +32,9 @@ export default function AdminConfig() {
   // ---- DSSClient ----
   const [dssForm, setDssForm] = useState(EMPTY_DSS)
   const [dssConfigured, setDssConfigured] = useState(false)
+  const [dssChat, setDssChat] = useState([]) // {role, text}
+  const [dssChatInput, setDssChatInput] = useState('')
+  const [dssChatBusy, setDssChatBusy] = useState(false)
   const [savingDss, setSavingDss] = useState(false)
 
   // ---- Langflow ----
@@ -138,6 +141,34 @@ export default function AdminConfig() {
       setSavingDss(false)
     }
   }
+
+  async function sendDssChat(e) {
+    e?.preventDefault()
+    const msg = (dssChatInput || '').trim()
+    if (!msg || dssChatBusy) return
+    setDssChatBusy(true)
+    setDssChat((prev) => [...prev, { role: 'user', text: msg }])
+    setDssChatInput('')
+    try {
+      const { data } = await api.post('/execute/dss-client', {
+        payload: { User_Message__c: msg, Conversation_Id__c: 'admin-test' },
+      })
+      let reply = ''
+      try {
+        const pj = typeof data.Payload_Json__c === 'string' ? JSON.parse(data.Payload_Json__c) : data.Payload_Json__c
+        reply = pj?.replyText || data.Payload_Json__c || JSON.stringify(data)
+      } catch {
+        reply = data?.Payload_Json__c || JSON.stringify(data)
+      }
+      setDssChat((prev) => [...prev, { role: 'assistant', text: String(reply) }])
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err.message
+      setDssChat((prev) => [...prev, { role: 'assistant', text: `Error: ${detail}` }])
+    } finally {
+      setDssChatBusy(false)
+    }
+  }
+
 
   async function saveLangflow(e) {
     e.preventDefault()
@@ -470,39 +501,86 @@ export default function AdminConfig() {
           )}
 
           {tab === 'dss' && (
-            <div className="panel" style={{ maxWidth: 720 }}>
-              <div className="panel-header">
-                <h3><SlidersHorizontal size={15} /> DSSClient (Dataiku DSS)</h3>
-                {dssConfigured ? (
-                  <span className="badge badge-green"><CheckCircle2 size={12} /> Configured</span>
-                ) : (
-                  <span className="badge badge-gray"><CircleDashed size={12} /> Not configured</span>
-                )}
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 1fr) minmax(320px, 1fr)', gap: 16, alignItems: 'start' }}>
+              <div className="panel">
+                <div className="panel-header">
+                  <h3><SlidersHorizontal size={15} /> DSSClient (Dataiku DSS)</h3>
+                  {dssConfigured ? (
+                    <span className="badge badge-green"><CheckCircle2 size={12} /> Configured</span>
+                  ) : (
+                    <span className="badge badge-gray"><CircleDashed size={12} /> Not configured</span>
+                  )}
+                </div>
+                <div className="panel-body">
+                  <form onSubmit={saveDss}>
+                    <div className="field">
+                      <label>URL</label>
+                      <input placeholder="https://your-dataiku-dss.example.com" value={dssForm.url} onChange={(e) => setDssForm({ ...dssForm, url: e.target.value })} />
+                    </div>
+                    <div className="form-row-2">
+                      <div className="field">
+                        <label>Project name</label>
+                        <input value={dssForm.project_name} onChange={(e) => setDssForm({ ...dssForm, project_name: e.target.value })} />
+                      </div>
+                      <div className="field">
+                        <label>LLM connection id</label>
+                        <input value={dssForm.llm} onChange={(e) => setDssForm({ ...dssForm, llm: e.target.value })} />
+                      </div>
+                    </div>
+                    <div className="field">
+                      <label>API key</label>
+                      <input type="password" value={dssForm.api_key} onChange={(e) => setDssForm({ ...dssForm, api_key: e.target.value })} placeholder={dssConfigured ? '(unchanged) enter a new key to replace it' : ''} />
+                    </div>
+                    <button className="btn btn-primary" disabled={savingDss}>
+                      <Save size={14} /> {savingDss ? 'Saving…' : 'Save configuration'}
+                    </button>
+                  </form>
+                </div>
               </div>
-              <div className="panel-body">
-                <form onSubmit={saveDss}>
-                  <div className="field">
-                    <label>URL</label>
-                    <input placeholder="https://your-dataiku-dss.example.com" value={dssForm.url} onChange={(e) => setDssForm({ ...dssForm, url: e.target.value })} />
+
+              <div className="panel" style={{ display: 'flex', flexDirection: 'column', minHeight: 420 }}>
+                <div className="panel-header">
+                  <h3>Test chat</h3>
+                  <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>POST /api/execute/dss-client</span>
+                </div>
+                <div className="panel-body" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10, minHeight: 0 }}>
+                  <div style={{
+                    flex: 1, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 10,
+                    padding: 12, background: 'var(--bg-app, #0b1220)', minHeight: 260, maxHeight: 360,
+                  }}>
+                    {dssChat.length === 0 && (
+                      <div className="empty-state" style={{ fontSize: 12.5 }}>
+                        Send a message to exercise the configured Dataiku LLM. Save config first if you changed the API key.
+                      </div>
+                    )}
+                    {dssChat.map((m, i) => (
+                      <div key={i} style={{
+                        marginBottom: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, lineHeight: 1.4,
+                        background: m.role === 'user' ? 'rgba(99,102,241,0.15)' : 'rgba(148,163,184,0.12)',
+                        marginLeft: m.role === 'user' ? 24 : 0,
+                        marginRight: m.role === 'assistant' ? 24 : 0,
+                        whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                      }}>
+                        <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 4 }}>
+                          {m.role === 'user' ? 'You' : 'DSS'}
+                        </div>
+                        {m.text}
+                      </div>
+                    ))}
                   </div>
-                  <div className="form-row-2">
-                    <div className="field">
-                      <label>Project name</label>
-                      <input value={dssForm.project_name} onChange={(e) => setDssForm({ ...dssForm, project_name: e.target.value })} />
-                    </div>
-                    <div className="field">
-                      <label>LLM connection id</label>
-                      <input value={dssForm.llm} onChange={(e) => setDssForm({ ...dssForm, llm: e.target.value })} />
-                    </div>
-                  </div>
-                  <div className="field">
-                    <label>API key</label>
-                    <input type="password" value={dssForm.api_key} onChange={(e) => setDssForm({ ...dssForm, api_key: e.target.value })} placeholder={dssConfigured ? '(unchanged) enter a new key to replace it' : ''} />
-                  </div>
-                  <button className="btn btn-primary" disabled={savingDss}>
-                    <Save size={14} /> {savingDss ? 'Saving…' : 'Save configuration'}
-                  </button>
-                </form>
+                  <form onSubmit={sendDssChat} style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      value={dssChatInput}
+                      onChange={(e) => setDssChatInput(e.target.value)}
+                      placeholder="Ask the DSS agent…"
+                      disabled={dssChatBusy || !dssConfigured}
+                      style={{ flex: 1 }}
+                    />
+                    <button type="submit" className="btn btn-primary" disabled={dssChatBusy || !dssConfigured || !dssChatInput.trim()}>
+                      {dssChatBusy ? '…' : 'Send'}
+                    </button>
+                  </form>
+                </div>
               </div>
             </div>
           )}
