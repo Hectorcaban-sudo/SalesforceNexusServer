@@ -142,6 +142,54 @@ export default function AdminConfig() {
     }
   }
 
+  function extractDssReply(data) {
+    // API returns { detail: "ok", result: { Conversation_Id__c, Status__c, Payload_Json__c } }
+    const result = data?.result ?? data
+    let replyText = ''
+    let payloadObj = null
+    const pj = result?.Payload_Json__c
+    try {
+      payloadObj = typeof pj === 'string' ? JSON.parse(pj) : pj
+      if (payloadObj && typeof payloadObj === 'object') {
+        replyText = payloadObj.replyText ?? payloadObj.reply ?? payloadObj.text ?? ''
+      }
+    } catch {
+      payloadObj = null
+    }
+    if (!replyText && typeof pj === 'string') replyText = pj
+    if (!replyText && typeof result === 'string') replyText = result
+    return { replyText: String(replyText || ''), raw: data }
+  }
+
+  /** Render reply: allow safe HTML + auto-link plain URLs. Scripts stripped. */
+  function renderDssReplyHtml(text) {
+    if (!text) return ''
+    const looksHtml = /<[a-z][\s\S]*>/i.test(text)
+    let html = text
+    if (!looksHtml) {
+      // Escape then linkify
+      html = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+      html = html.replace(
+        /(https?:\/\/[^\s<]+)/g,
+        '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>',
+      )
+      html = html.replace(/\n/g, '<br/>')
+    } else {
+      // Strip dangerous tags/attrs; keep anchors and basic formatting
+      html = html
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+        .replace(/javascript:/gi, '')
+      // Ensure links open safely
+      html = html.replace(/<a\s+/gi, '<a target="_blank" rel="noopener noreferrer" ')
+    }
+    return html
+  }
+
   async function sendDssChat(e) {
     e?.preventDefault()
     const msg = (dssChatInput || '').trim()
@@ -153,17 +201,22 @@ export default function AdminConfig() {
       const { data } = await api.post('/execute/dss-client', {
         payload: { User_Message__c: msg, Conversation_Id__c: 'admin-test' },
       })
-      let reply = ''
-      try {
-        const pj = typeof data.Payload_Json__c === 'string' ? JSON.parse(data.Payload_Json__c) : data.Payload_Json__c
-        reply = pj?.replyText || data.Payload_Json__c || JSON.stringify(data)
-      } catch {
-        reply = data?.Payload_Json__c || JSON.stringify(data)
-      }
-      setDssChat((prev) => [...prev, { role: 'assistant', text: String(reply) }])
+      const { replyText, raw } = extractDssReply(data)
+      setDssChat((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          text: replyText || '(empty replyText)',
+          raw,
+          showRaw: false,
+        },
+      ])
     } catch (err) {
       const detail = err?.response?.data?.detail || err.message
-      setDssChat((prev) => [...prev, { role: 'assistant', text: `Error: ${detail}` }])
+      setDssChat((prev) => [
+        ...prev,
+        { role: 'assistant', text: `Error: ${detail}`, raw: err?.response?.data || { error: detail }, showRaw: false },
+      ])
     } finally {
       setDssChatBusy(false)
     }
@@ -555,16 +608,48 @@ export default function AdminConfig() {
                     )}
                     {dssChat.map((m, i) => (
                       <div key={i} style={{
-                        marginBottom: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, lineHeight: 1.4,
+                        marginBottom: 10, padding: '8px 10px', borderRadius: 8, fontSize: 13, lineHeight: 1.45,
                         background: m.role === 'user' ? 'rgba(99,102,241,0.15)' : 'rgba(148,163,184,0.12)',
                         marginLeft: m.role === 'user' ? 24 : 0,
                         marginRight: m.role === 'assistant' ? 24 : 0,
-                        whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                        wordBreak: 'break-word',
                       }}>
-                        <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 4 }}>
-                          {m.role === 'user' ? 'You' : 'DSS'}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                          <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-muted)' }}>
+                            {m.role === 'user' ? 'You' : 'DSS'}
+                          </div>
+                          {m.role === 'assistant' && m.raw && (
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              style={{ fontSize: 11, padding: '2px 8px', minHeight: 0 }}
+                              onClick={() => setDssChat((prev) => prev.map((x, j) => j === i ? { ...x, showRaw: !x.showRaw } : x))}
+                              title="Toggle full JSON response"
+                            >
+                              {m.showRaw ? '− JSON' : '+ JSON'}
+                            </button>
+                          )}
                         </div>
-                        {m.text}
+                        {m.role === 'user' ? (
+                          <div style={{ whiteSpace: 'pre-wrap' }}>{m.text}</div>
+                        ) : (
+                          <>
+                            <div
+                              className="dss-reply"
+                              style={{ whiteSpace: 'normal' }}
+                              dangerouslySetInnerHTML={{ __html: renderDssReplyHtml(m.text) }}
+                            />
+                            {m.showRaw && (
+                              <pre style={{
+                                marginTop: 8, padding: 8, borderRadius: 6, fontSize: 11,
+                                overflow: 'auto', maxHeight: 220,
+                                background: 'rgba(0,0,0,0.35)', border: '1px solid var(--border)',
+                              }}>
+                                {JSON.stringify(m.raw, null, 2)}
+                              </pre>
+                            )}
+                          </>
+                        )}
                       </div>
                     ))}
                   </div>
