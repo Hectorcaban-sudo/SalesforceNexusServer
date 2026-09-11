@@ -393,7 +393,12 @@ export default function AdminConfig() {
       const text = await file.text()
       const bundle = JSON.parse(text)
       const { data } = await api.post('/admin-config/import', bundle)
-      setImportResult({ ok: true, detail: `Imported ${data.counts.orgs} org(s), ${data.counts.event_configs} event config(s), ${data.counts.integrations} integration(s)` })
+      const c = data.counts || {}
+      const sp = (c.sharepoint_connections || 0) + (c.sharepoint_file_actions || 0) + (c.sharepoint_list_actions || 0)
+      setImportResult({
+        ok: true,
+        detail: `Imported ${c.orgs || 0} org(s), ${c.event_configs || 0} event(s), ${c.integrations || 0} integration(s), ${sp} SharePoint record(s), ${c.processors || 0} processor(s)`,
+      })
     } catch (err) {
       setImportResult({ ok: false, detail: err?.response?.data?.detail || err.message })
     } finally {
@@ -882,7 +887,7 @@ export default function AdminConfig() {
               <div className="panel-header"><h3><FileDown size={15} /> Configuration backup</h3></div>
               <div className="panel-body">
                 <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
-                  Export every Salesforce org, event channel, and integration as a single JSON file, and import it back
+                  Export orgs, event channels, integrations (incl. SharePoint sinks), SharePoint connections/actions, processors, alerts, rules, and admin settings as a single JSON file, and import it back
                   (here or on another instance). <strong>The export file contains credentials in plaintext</strong> (org
                   secrets, integration API keys/webhook secrets) — handle it exactly like a credentials backup.
                 </p>

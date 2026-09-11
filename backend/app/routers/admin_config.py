@@ -383,17 +383,18 @@ def set_broker_config(config: BrokerConfig):
 
 
 # ---------- Configuration export / import (orgs, events, integrations) ----------
-EXPORT_VERSION = 1
+EXPORT_VERSION = 2
 
 
 @router.get("/export")
 def export_configuration():
     """
     Exports the full admin configuration - Salesforce orgs, event configs,
-    integrations, alerts, rules, uploaded processor scripts (including their
-    actual code), and every Admin Configuration setting (DSSClient,
-    Langflow, Email/SMTP, message broker, processing mode) - as a single
-    JSON bundle for backup/migration to another instance.
+    integrations (including SharePoint File/List sinks), alerts, rules,
+    uploaded processor scripts (including their actual code), SharePoint
+    Online connections + file/list actions, and every Admin Configuration
+    setting (DSSClient, Langflow, Email/SMTP, message broker, processing
+    mode) - as a single JSON bundle for backup/migration to another instance.
 
     Deliberately NOT included: local user accounts/password hashes. User
     management is treated as a separate identity concern from application
@@ -403,13 +404,19 @@ def export_configuration():
 
     SECURITY NOTE: this bundle includes credentials in plaintext - org
     secrets (client secret, password, security token), integration secrets
-    (API keys, webhook signing secrets), DSSClient/Langflow API keys, SMTP
-    password, and RabbitMQ password - because an export that couldn't
-    restore working connections wouldn't be useful as a backup. Treat the
-    downloaded file exactly like a credentials backup: store it securely,
-    don't email it around, and delete it once it's no longer needed.
+    (API keys, webhook signing secrets), SharePoint client secrets,
+    DSSClient/Langflow API keys, SMTP password, and RabbitMQ password -
+    because an export that couldn't restore working connections wouldn't be
+    useful as a backup. Treat the downloaded file exactly like a credentials
+    backup: store it securely, don't email it around, and delete it once
+    it's no longer needed.
     """
-    from ..database import orgs_table, event_configs_table, integrations_table, alerts_table, rules_table, processors_table
+    from ..database import (
+        orgs_table, event_configs_table, integrations_table, alerts_table,
+        rules_table, processors_table,
+        sharepoint_connections_table, sharepoint_file_actions_table,
+        sharepoint_list_actions_table,
+    )
     from .. import processors as proc_module
     from ..models import now_ts
 
@@ -429,6 +436,9 @@ def export_configuration():
         "rules": rules_table.all(),
         "processors": processors_export,
         "admin_settings": admin_settings_table.all(),  # dss_client, langflow, email_settings, broker_config, processing_mode
+        "sharepoint_connections": sharepoint_connections_table.all(),
+        "sharepoint_file_actions": sharepoint_file_actions_table.all(),
+        "sharepoint_list_actions": sharepoint_list_actions_table.all(),
     }
 
 
@@ -446,13 +456,20 @@ async def import_configuration(bundle: dict):
     changes to that setting, it takes effect on the next restart (see Admin
     Configuration -> Message broker).
     """
-    from ..database import orgs_table, event_configs_table, integrations_table, alerts_table, rules_table, processors_table, Q as _Q
+    from ..database import (
+        orgs_table, event_configs_table, integrations_table, alerts_table,
+        rules_table, processors_table, Q as _Q,
+        sharepoint_connections_table, sharepoint_file_actions_table,
+        sharepoint_list_actions_table,
+    )
     from .. import processors as proc_module
     from ..cometd_client import cometd_manager
 
     def _upsert(table, rows):
         count = 0
-        for row in rows:
+        for row in rows or []:
+            if not row or not row.get("id"):
+                continue
             if table.get(_Q.id == row["id"]):
                 table.update(row, _Q.id == row["id"])
             else:
@@ -460,9 +477,13 @@ async def import_configuration(bundle: dict):
             count += 1
         return count
 
+    # SharePoint connections first so file/list actions can reference them after import
     counts = {
         "orgs": _upsert(orgs_table, bundle.get("orgs", [])),
         "event_configs": _upsert(event_configs_table, bundle.get("event_configs", [])),
+        "sharepoint_connections": _upsert(sharepoint_connections_table, bundle.get("sharepoint_connections", [])),
+        "sharepoint_file_actions": _upsert(sharepoint_file_actions_table, bundle.get("sharepoint_file_actions", [])),
+        "sharepoint_list_actions": _upsert(sharepoint_list_actions_table, bundle.get("sharepoint_list_actions", [])),
         "integrations": _upsert(integrations_table, bundle.get("integrations", [])),
         "alerts": _upsert(alerts_table, bundle.get("alerts", [])),
         "rules": _upsert(rules_table, bundle.get("rules", [])),

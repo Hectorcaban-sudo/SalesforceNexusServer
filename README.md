@@ -73,9 +73,10 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
 - **Alerts** — get notified (including by **email**) through any configured integration sink when a
   transaction, a Salesforce org's connection, an integration dispatch, or the message broker fails.
   See "Alerts" below.
-- **Configuration export/import** — back up every Salesforce org, event channel, and integration to
-  a single JSON file, and restore it (here or on another instance). See "Configuration backup"
-  below.
+- **Configuration export/import** — back up Salesforce orgs, event channels, integrations (including
+  SharePoint sinks), SharePoint connections/file/list actions, processors, alerts, rules, and admin
+  settings to a single JSON file, and restore it (here or on another instance). See "Configuration
+  backup" below.
 - **Role-based access control** — three roles (**admin**, **operator**, **viewer**) enforced on
   every mutating API route. Viewers get read-only access to the dashboard/transactions/logs;
   operators can manage orgs/events and reprocess transactions; admins additionally manage users,
@@ -755,9 +756,9 @@ Admin Configuration → **Configuration backup** exports the *entire* applicatio
 single JSON file (`GET /api/admin-config/export`), and imports it back (`POST /api/admin-config/import`)
 — here or on a different instance:
 
-- Salesforce orgs, event channels/routing, integrations, alerts, rules (including their JDM), and
-  every Admin Configuration setting (DSSClient, Langflow, Email/SMTP, message broker, processing
-  mode).
+- Salesforce orgs, event channels/routing, integrations (including SharePoint File/List sinks),
+  SharePoint connections + file/list actions, alerts, rules (including their JDM), and every Admin
+  Configuration setting (DSSClient, Langflow, Email/SMTP, message broker, processing mode).
 - **Uploaded processor scripts, including their actual code** — not just metadata, so a restored
   instance can run them immediately.
 - Records are upserted by their original id, which preserves the links between an event's routing
@@ -769,10 +770,10 @@ environments is a different kind of risk than restoring integration settings, so
 purpose.
 
 **The export file contains credentials in plaintext** — org client secrets/passwords/security
-tokens, integration API keys/webhook signing secrets, DSSClient/Langflow API keys, the SMTP
-password, and the RabbitMQ password — because a backup that couldn't restore working connections
-wouldn't be useful. Treat the downloaded file exactly like a credentials backup: store it securely,
-don't email it around, and delete it once it's no longer needed.
+tokens, SharePoint client secrets, integration API keys/webhook signing secrets, DSSClient/Langflow
+API keys, the SMTP password, and the RabbitMQ password — because a backup that couldn't restore
+working connections wouldn't be useful. Treat the downloaded file exactly like a credentials
+backup: store it securely, don't email it around, and delete it once it's no longer needed.
 
 ## Admin Configuration: DSSClient (Dataiku DSS)
 

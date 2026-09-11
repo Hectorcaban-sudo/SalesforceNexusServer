@@ -25,6 +25,8 @@ const DEFAULT_CONFIG = {
   snowflake: { account: '', user: '', password: '', warehouse: '', database: '', schema: '', table: '' },
   bigquery: { project: '', dataset: '', table: '' },
   custom_api: { url: '', method: 'POST', auth_header: '' },
+  sharepoint_file: { action_id: '' },
+  sharepoint_list: { action_id: '' },
 }
 
 const EXAMPLE_TEMPLATES = {
@@ -170,7 +172,7 @@ export default function Integrations() {
       alert_only: item.alert_only || false,
       body_mode: item.body_mode || 'default',
       body_template: item.body_template || '',
-      config: { ...DEFAULT_CONFIG[item.type], ...item.config },
+      config: { ...(DEFAULT_CONFIG[item.type] || {}), ...(item.config || {}) },
     })
     setTestResult(null)
     setPreview({ status: 'idle', rendered: null, error: null })
@@ -181,13 +183,14 @@ export default function Integrations() {
     setForm({
       ...form,
       type,
-      config: DEFAULT_CONFIG[type],
+      config: { ...(DEFAULT_CONFIG[type] || {}) },
       body_mode: TEMPLATE_SUPPORTED.has(type) ? form.body_mode : 'default',
+      body_template: TEMPLATE_SUPPORTED.has(type) ? form.body_template : '',
     })
   }
 
   function setConfigField(key, value) {
-    setForm({ ...form, config: { ...form.config, [key]: value } })
+    setForm({ ...form, config: { ...(form.config || {}), [key]: value } })
   }
 
   function loadExample() {

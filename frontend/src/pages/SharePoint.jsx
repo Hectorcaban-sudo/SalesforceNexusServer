@@ -117,17 +117,18 @@ export default function SharePoint() {
   async function loadSites(connectionId, q = '*') {
     if (!connectionId) { setSites([]); return }
     setLoadingSites(true)
-    setError(null)
     try {
       const { data } = await api.get(`/sharepoint/connections/${connectionId}/sites`, { params: { q } })
       setSites(data || [])
       setDiscoveryBlocked(false)
     } catch (err) {
       setSites([])
-      const detail = err?.response?.data?.detail || err.message
-      setError(detail)
-      if (String(detail).includes('403') || String(detail).toLowerCase().includes('forbidden')) {
+      const detail = String(err?.response?.data?.detail || err.message || '')
+      // 403 / forbidden: mark browse unavailable, do not surface as a blocking form error
+      if (detail.includes('403') || detail.toLowerCase().includes('forbidden')) {
         setDiscoveryBlocked(true)
+      } else {
+        setError(detail)
       }
     } finally {
       setLoadingSites(false)
@@ -137,7 +138,6 @@ export default function SharePoint() {
   async function resolveSiteByPath(connectionId) {
     if (!connectionId || !sitePathHostname) return
     setLoadingSites(true)
-    setError(null)
     try {
       const { data } = await api.get(`/sharepoint/connections/${connectionId}/sites-by-path`, {
         params: { hostname: sitePathHostname, path: sitePathRel || '' },
@@ -147,11 +147,18 @@ export default function SharePoint() {
         return exists ? prev : [data, ...prev]
       })
       setField('site_id', data.id)
-      // cascade
+      if (data.name) setField('site_name', data.name)
+      setDiscoveryBlocked(false)
+      // Optional cascade — only if browse is allowed
       if (modal?.kind === 'file') loadDrives(connectionId, data.id)
       if (modal?.kind === 'list') loadSpLists(connectionId, data.id)
     } catch (err) {
-      setError(err?.response?.data?.detail || err.message)
+      const detail = String(err?.response?.data?.detail || err.message || '')
+      if (detail.includes('403') || detail.toLowerCase().includes('forbidden')) {
+        setDiscoveryBlocked(true)
+      } else {
+        setError(detail)
+      }
     } finally {
       setLoadingSites(false)
     }
@@ -165,11 +172,11 @@ export default function SharePoint() {
       setDrives(data || [])
     } catch (err) {
       setDrives([])
-      const detail = err?.response?.data?.detail || err.message
-      setError(detail)
-      if (String(detail).includes('403') || String(detail).toLowerCase().includes('forbidden')) {
+      const detail = String(err?.response?.data?.detail || err.message || '')
+      if (detail.includes('403') || detail.toLowerCase().includes('forbidden')) {
         setDiscoveryBlocked(true)
       }
+      // do not setError — manual Drive ID is enough
     } finally {
       setLoadingDrives(false)
     }
@@ -183,11 +190,11 @@ export default function SharePoint() {
       setSpLists(data || [])
     } catch (err) {
       setSpLists([])
-      const detail = err?.response?.data?.detail || err.message
-      setError(detail)
-      if (String(detail).includes('403') || String(detail).toLowerCase().includes('forbidden')) {
+      const detail = String(err?.response?.data?.detail || err.message || '')
+      if (detail.includes('403') || detail.toLowerCase().includes('forbidden')) {
         setDiscoveryBlocked(true)
       }
+      // do not setError — manual List ID is enough
     } finally {
       setLoadingLists(false)
     }
@@ -202,7 +209,8 @@ export default function SharePoint() {
     setDiscoveryBlocked(false)
     setError(null)
     setTestMsg(null)
-    if (kind !== 'conn' && form.connection_id) loadSites(form.connection_id)
+    // Do not auto-call Graph site search — avoids 403 noise when admins block browse.
+    // User can click Search explicitly, or paste Site/Drive/List IDs manually.
   }
 
   function openEdit(kind, row) {
@@ -219,11 +227,7 @@ export default function SharePoint() {
         },
       })
       setSites([]); setDrives([]); setSpLists([])
-      if (row.connection_id) {
-        loadSites(row.connection_id).then(() => {
-          if (row.site_id) loadDrives(row.connection_id, row.site_id)
-        })
-      }
+      // Keep saved IDs; no automatic Graph browse (prevents repeated 403s)
     } else {
       setModal({
         kind, id: row.id,
@@ -234,13 +238,10 @@ export default function SharePoint() {
         },
       })
       setSites([]); setDrives([]); setSpLists([])
-      if (row.connection_id) {
-        loadSites(row.connection_id).then(() => {
-          if (row.site_id) loadSpLists(row.connection_id, row.site_id)
-        })
-      }
+      // Keep saved IDs; no automatic Graph browse (prevents repeated 403s)
     }
     setError(null)
+    setDiscoveryBlocked(false)
   }
 
   async function save(e) {
@@ -295,10 +296,14 @@ export default function SharePoint() {
   function onConnectionChange(connectionId) {
     setField('connection_id', connectionId)
     setField('site_id', '')
+    setField('site_name', '')
     setField('drive_id', '')
+    setField('drive_name', '')
     setField('list_id', '')
-    setDrives([]); setSpLists([])
-    loadSites(connectionId, siteSearch || '*')
+    setField('list_name', '')
+    setSites([]); setDrives([]); setSpLists([])
+    setDiscoveryBlocked(false)
+    // No auto Graph search — click Search only if you want browse
   }
 
   function onSiteChange(siteId) {
@@ -482,16 +487,15 @@ export default function SharePoint() {
                     </div>
 
                     {/* Resource pickers + manual ID fallback */}
-                    {discoveryBlocked && (
+                    {discoveryBlocked && !(modal.form.site_id && (modal.kind === 'file' ? modal.form.drive_id : modal.form.list_id)) && (
                       <div style={{
                         fontSize: 12.5, lineHeight: 1.45, marginBottom: 12, padding: '10px 12px',
                         borderRadius: 8, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
                         color: 'var(--text-secondary)',
                       }}>
                         <b style={{ color: 'var(--accent-red)' }}>Graph browse blocked (403).</b>
-                        {' '}Your tenant likely denies app-only site listing.
-                        Enter <b>Site / Drive / List IDs</b> manually below (names are optional labels only).
-                        Power Automate often works because it uses <b>delegated user OAuth</b>, not client credentials.
+                        {' '}Enter <b>Site / Drive / List IDs</b> manually below — Graph will not be queried again until you click Search.
+                        Runtime upload still uses your app credentials with those IDs.
                       </div>
                     )}
 
@@ -589,7 +593,11 @@ export default function SharePoint() {
                           <input
                             required
                             value={modal.form.site_id || ''}
-                            onChange={(e) => setField('site_id', e.target.value)}
+                            onChange={(e) => {
+                              setField('site_id', e.target.value)
+                              setDiscoveryBlocked(false)
+                              setError(null)
+                            }}
                             placeholder="Graph site id (guid or composite)"
                           />
                         </div>
@@ -609,7 +617,11 @@ export default function SharePoint() {
                             <input
                               required
                               value={modal.form.drive_id || ''}
-                              onChange={(e) => setField('drive_id', e.target.value)}
+                              onChange={(e) => {
+                                setField('drive_id', e.target.value)
+                                setDiscoveryBlocked(false)
+                                setError(null)
+                              }}
                               placeholder="b!...."
                             />
                           </div>
@@ -630,7 +642,11 @@ export default function SharePoint() {
                             <input
                               required
                               value={modal.form.list_id || ''}
-                              onChange={(e) => setField('list_id', e.target.value)}
+                              onChange={(e) => {
+                                setField('list_id', e.target.value)
+                                setDiscoveryBlocked(false)
+                                setError(null)
+                              }}
                               placeholder="List GUID"
                             />
                           </div>
