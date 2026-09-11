@@ -553,18 +553,21 @@ fire off of it.
 
 Open **Flow** on any subscribed channel (Event Configuration) to open `/events/:eventId/flow`.
 
-Phase 1 visualizes the existing pipeline as a React Flow graph:
+Visualizes the pipeline as a React Flow graph:
 
 ```
-Salesforce Event → Rule gate → Processor → ┬─ Publish channel(s)
-                                           ├─ Integration hook(s)  (incl. SharePoint / Teams / …)
-                                           └─ Alert(s)
+Salesforce Event → Rule gate → Processor → Map (optional) → ┬─ Publish channel(s)
+                                                             ├─ Integration hook(s)  (incl. SharePoint / Teams / …)
+                                                             └─ Alert(s)
 ```
 
 The left sidebar edits the same fields as the classic routing dialog (rule, processing mode,
-processor/action id, auto-publish, multi-select publish channels / integrations / alerts). **Save
-flow** writes those fields via `PUT /api/events/{id}` — no separate graph storage. Nodes are
-draggable for layout; removing a fan-out node unchecks that target.
+processor/action id, auto-publish, multi-select publish channels / integrations / alerts), plus
+one field the classic Routing modal doesn't expose yet: the optional Map step's
+`result_transform_template` (see "Result transform (Map step)" above) — the flow designer is
+currently the only place to configure it. **Save flow** writes those fields via
+`PUT /api/events/{id}` — no separate graph storage. Nodes are draggable for layout; removing a
+fan-out node unchecks that target.
 
 Requires the frontend dependency `@xyflow/react` (`npm install` in `frontend/`).
 
@@ -603,9 +606,21 @@ Reusable upload configurations:
 | Setting | Description |
 |---|---|
 | Connection, Site, List | Graph pickers |
-| Operation | `create` or `update` |
-| Item ID template | Required for update (Jinja2) |
+| Operation | `create`, `update`, `upsert`, `lookup`, or `delete` |
+| Item ID template | Direct path to a known item id (Jinja2) — used by `update`/`delete` when you already know the id |
+| Lookup field / value | `update`, `delete`, and `upsert` fall back to this when no item id template is set: finds an item where `fields/{lookup_field}` equals the rendered `lookup_value_template`, via a Graph OData filter |
 | Field map | Free-form JSON: list field → Jinja2 |
+
+**Operation behavior:**
+- **`create`** — always inserts a new item.
+- **`update`** / **`delete`** — resolve the target item from `item_id_template` if set, otherwise from the lookup; failing to resolve either way is an error (no silent no-op).
+- **`upsert`** — looks up by field match; updates the item if found, creates a new one if not.
+- **`lookup`** — read-only: returns how many items matched and the first match's id, without changing anything (useful for testing a lookup before wiring it into `update`/`upsert`).
+- Every lookup fetches **up to 5 matches** and **uses the first if more than one matches** — it does not error on ambiguous matches, so pick a `lookup_field` that's actually unique in practice (an external id column, not something like a status field).
+
+### Salesforce enrichment and file source
+
+Both the optional business-object enrichment (`salesforce_object` + `salesforce_record_id_template`) and the `salesforce_content_version` file source authenticate through the **same per-org session** (`app/salesforce_client.py`) the rest of the pipeline uses — respecting that org's real `auth_type` (password or client-credentials) — rather than opening a second, independent Salesforce login. There is no separate SharePoint-specific Salesforce credential to configure.
 
 ### Two ways to run an action
 
@@ -627,6 +642,23 @@ Jinja context for maps/paths includes `payload`, `org`, `year`, `month`, `day`, 
 | `GET /api/sharepoint/connections/{id}/sites-by-path?hostname=&path=` | Resolve site by path |
 | `GET /api/sharepoint/connections/{id}/sites/{siteId}/drives` | Document libraries |
 | `GET /api/sharepoint/connections/{id}/sites/{siteId}/lists` | Lists |
+
+## Result transform (Map step)
+
+A subscribed event channel can carry an optional `result_transform_template` — a Jinja2 template
+(the same sandboxed renderer used everywhere else: see "Custom body mapping") that reshapes
+whatever the processing mode returned **before** it goes on to publish/integration fan-out. This
+is the "Map" step in a Power Automate-style read: `Subscribe → Process → Map → Publish/route`.
+
+- **Context**: `payload` (the original inbound event) and `result` (whatever the processing mode —
+  local/DSSClient/Langflow/custom script/SharePoint — produced).
+- **Output**: the rendered text is parsed as JSON and becomes the new result. If it doesn't parse
+  as JSON, the original result is kept with the rendered text attached under
+  `transformed_text` instead of being discarded.
+- **Failure is non-fatal**: a broken template logs a warning and the untransformed result is used —
+  a typo here should never take down the whole event.
+- **Configured from the Event Flow Designer** (not yet in the classic Routing modal) — open an
+  event's flow and set it on the processor step.
 
 ## Alerts
 
