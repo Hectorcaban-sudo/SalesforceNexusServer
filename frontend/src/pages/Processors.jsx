@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react'
-import { Plus, Trash2, Code2 } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Plus, Trash2, Cpu } from 'lucide-react'
 import api from '../lib/api'
+import { useProject, belongsToProject } from '../lib/ProjectContext'
 
 export default function Processors() {
+  const { projectId, project } = useProject()
   const [items, setItems] = useState([])
   const [error, setError] = useState(null)
   const [uploading, setUploading] = useState(false)
@@ -18,6 +20,11 @@ export default function Processors() {
     load().catch((e) => setError(e.message))
   }, [])
 
+  const visible = useMemo(
+    () => (items || []).filter((p) => belongsToProject(p, projectId, project)),
+    [items, projectId, project],
+  )
+
   async function upload(e) {
     e.preventDefault()
     if (!file) return
@@ -27,6 +34,7 @@ export default function Processors() {
       const fd = new FormData()
       fd.append('name', name || file.name)
       fd.append('file', file)
+      if (projectId) fd.append('project_id', projectId)
       await api.post('/processors', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
       setName('')
       setFile(null)
@@ -48,7 +56,10 @@ export default function Processors() {
     <div>
       <div className="page-header">
         <h1>Payload processors</h1>
-        <p className="page-sub">Uploaded Python scripts used as custom processing modes on event channels.</p>
+        <p className="page-sub">
+          Uploaded Python scripts used as custom processing modes on event channels.
+          {project ? <> Showing project: <strong>{project.name}</strong></> : null}
+        </p>
       </div>
       {error && <div className="panel" style={{ color: 'var(--accent-red)', marginBottom: 12 }}>{String(error)}</div>}
 
@@ -75,11 +86,17 @@ export default function Processors() {
       </div>
 
       <div className="org-grid">
-        {items.length === 0 && <div className="panel"><div className="empty-state">No processors uploaded yet.</div></div>}
-        {items.map((p) => (
+        {visible.length === 0 && (
+          <div className="panel">
+            <div className="empty-state">
+              No processors for this project yet.
+            </div>
+          </div>
+        )}
+        {visible.map((p) => (
           <div key={p.id} className="org-card">
             <div className="org-card-header">
-              <Code2 size={18} />
+              <Cpu size={18} />
               <div>
                 <div className="name">{p.name}</div>
                 <div className="url">{p.id}</div>
@@ -94,4 +111,3 @@ export default function Processors() {
     </div>
   )
 }
-'''

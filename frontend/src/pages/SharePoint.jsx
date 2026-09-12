@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Plus, Trash2, Pencil, Cloud, RefreshCw, Search, FlaskConical } from 'lucide-react'
 import api from '../lib/api'
+import { useProject, belongsToProject } from '../lib/ProjectContext'
 
 const EMPTY_CONN = { name: '', tenant_id: '', client_id: '', client_secret: '', enabled: true }
 const EMPTY_FILE = {
@@ -34,10 +35,23 @@ function parseMap(text) {
 }
 
 export default function SharePoint() {
+  const { projectId, project } = useProject()
   const [tab, setTab] = useState('connections')
   const [conns, setConns] = useState([])
+  const visibleConns = useMemo(
+    () => (conns || []).filter((row) => belongsToProject(row, projectId, project)),
+    [conns, projectId, project],
+  )
   const [files, setFiles] = useState([])
+  const visibleFiles = useMemo(
+    () => (files || []).filter((row) => belongsToProject(row, projectId, project)),
+    [files, projectId, project],
+  )
   const [lists, setLists] = useState([])
+  const visibleLists = useMemo(
+    () => (lists || []).filter((row) => belongsToProject(row, projectId, project)),
+    [lists, projectId, project],
+  )
   const [modal, setModal] = useState(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -356,8 +370,8 @@ export default function SharePoint() {
             <button className="btn btn-primary" onClick={() => openCreate('conn')}><Plus size={15} /> Add connection</button>
           </div>
           <div className="org-grid">
-            {conns.length === 0 && <div className="panel"><div className="empty-state">No SharePoint connections yet.</div></div>}
-            {conns.map((c) => (
+            {visibleConns.length === 0 && <div className="panel"><div className="empty-state">No SharePoint connections yet.</div></div>}
+            {visibleConns.map((c) => (
               <div className="panel org-card" key={c.id}>
                 <div className="org-card-top">
                   <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -393,8 +407,8 @@ export default function SharePoint() {
             <button className="btn btn-primary" onClick={() => openCreate('file')} disabled={!conns.length}><Plus size={15} /> Add file action</button>
           </div>
           <div className="org-grid">
-            {files.length === 0 && <div className="panel"><div className="empty-state">No file actions yet.</div></div>}
-            {files.map((f) => (
+            {visibleFiles.length === 0 && <div className="panel"><div className="empty-state">No file actions yet.</div></div>}
+            {visibleFiles.map((f) => (
               <div className="panel org-card" key={f.id}>
                 <div className="org-card-top">
                   <div>
@@ -423,8 +437,8 @@ export default function SharePoint() {
             <button className="btn btn-primary" onClick={() => openCreate('list')} disabled={!conns.length}><Plus size={15} /> Add list action</button>
           </div>
           <div className="org-grid">
-            {lists.length === 0 && <div className="panel"><div className="empty-state">No list actions yet.</div></div>}
-            {lists.map((f) => (
+            {visibleLists.length === 0 && <div className="panel"><div className="empty-state">No list actions yet.</div></div>}
+            {visibleLists.map((f) => (
               <div className="panel org-card" key={f.id}>
                 <div className="org-card-top">
                   <div>
@@ -484,7 +498,7 @@ export default function SharePoint() {
                     <div className="field"><label>Connection</label>
                       <select required value={modal.form.connection_id} onChange={(e) => onConnectionChange(e.target.value)}>
                         <option value="">Select connection…</option>
-                        {conns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        {visibleConns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                       </select>
                     </div>
 

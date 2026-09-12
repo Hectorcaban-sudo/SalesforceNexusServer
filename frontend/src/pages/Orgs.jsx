@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Plus, Building2, Wifi, Pencil, Trash2, PlugZap } from 'lucide-react'
 import api from '../lib/api'
+import { useProject, belongsToProject } from '../lib/ProjectContext'
 import { StatusBadge } from '../components/UI'
 
 const EMPTY_ORG = {
@@ -10,7 +11,12 @@ const EMPTY_ORG = {
 }
 
 export default function Orgs() {
+  const { projectId, project } = useProject()
   const [orgs, setOrgs] = useState([])
+  const visibleOrgs = useMemo(
+    () => (orgs || []).filter((row) => belongsToProject(row, projectId, project)),
+    [orgs, projectId, project],
+  )
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState(null)
   const [form, setForm] = useState(EMPTY_ORG)
@@ -54,7 +60,7 @@ export default function Orgs() {
         })
         await api.put(`/orgs/${editing.id}`, payload)
       } else {
-        await api.post('/orgs', payload)
+        await api.post('/orgs', { ...payload, project_id: projectId || undefined })
       }
       setModalOpen(false)
       load()
@@ -89,12 +95,12 @@ export default function Orgs() {
         <button className="btn btn-primary" onClick={openCreate}><Plus size={15} /> Add org</button>
       </div>
 
-      {orgs.length === 0 && (
+      {visibleOrgs.length === 0 && (
         <div className="panel"><div className="empty-state">No orgs configured yet. Click "Add org" to connect your first Salesforce instance.</div></div>
       )}
 
       <div className="org-grid">
-        {orgs.map((org) => (
+        {visibleOrgs.map((org) => (
           <div className="panel org-card" key={org.id}>
             <div className="org-card-top">
               <div style={{ display: 'flex', gap: 10 }}>

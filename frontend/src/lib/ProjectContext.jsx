@@ -57,4 +57,13 @@ export function ProjectProvider({ children }) {
 export function useProject() {
   return useContext(ProjectContext)
 }
-'''
+
+/** Row belongs to active project (or unscoped rows visible only on Default Project). */
+export function belongsToProject(row, projectId, project) {
+  if (!projectId) return true
+  const pid = row?.project_id
+  if (pid === projectId) return true
+  // Legacy rows without project_id show under Default Project only
+  if (!pid && project?.name === 'Default Project') return true
+  return false
+}

@@ -1,6 +1,7 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import { Plus, Trash2, Send, Share2, Webhook, MessageSquare, Database, Cloud, Link2, BellOff, Mail, Pencil, Code2, Eye } from 'lucide-react'
 import api from '../lib/api'
+import { useProject, belongsToProject } from '../lib/ProjectContext'
 import { TruncatedWithPopup } from '../components/UI'
 
 const TYPE_META = {
@@ -90,8 +91,13 @@ const EMPTY = {
 }
 
 export default function Integrations() {
+  const { projectId, project } = useProject()
   const [orgs, setOrgs] = useState([])
   const [items, setItems] = useState([])
+  const visibleItems = useMemo(
+    () => (items || []).filter((row) => belongsToProject(row, projectId, project)),
+    [items, projectId, project],
+  )
   const [modalOpen, setModalOpen] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [form, setForm] = useState(EMPTY)
@@ -213,7 +219,7 @@ export default function Integrations() {
         const { type, ...updatable } = payload
         await api.put(`/integrations/${editingId}`, updatable)
       } else {
-        await api.post('/integrations', payload)
+        await api.post('/integrations', { ...payload, project_id: projectId || undefined })
       }
       setModalOpen(false)
       load()
@@ -272,10 +278,10 @@ export default function Integrations() {
         <button className="btn btn-primary" onClick={openCreate}><Plus size={15} /> Add integration</button>
       </div>
 
-      {items.length === 0 && <div className="panel"><div className="empty-state">No integrations configured yet.</div></div>}
+      {visibleItems.length === 0 && <div className="panel"><div className="empty-state">No integrations configured yet.</div></div>}
 
       <div className="org-grid">
-        {items.map((item) => {
+        {visibleItems.map((item) => {
           const Icon = TYPE_META[item.type]?.icon || Share2
           const hasTemplate = item.body_mode === 'template' && item.body_template
           return (

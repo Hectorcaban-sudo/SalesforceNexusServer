@@ -1,14 +1,20 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Radio, Trash2, Send, ArrowDownToLine, ArrowUpFromLine, Share2, GitBranch, Cpu, BellRing, Workflow } from 'lucide-react'
 import api from '../lib/api'
+import { useProject, belongsToProject } from '../lib/ProjectContext'
 
 const EMPTY = { org_id: '', channel: '', direction: 'subscribe', enabled: true, description: '', broker_topic: 'default' }
 
 export default function EventsConfig() {
   const navigate = useNavigate()
+  const { projectId, project } = useProject()
   const [orgs, setOrgs] = useState([])
   const [configs, setConfigs] = useState([])
+  const visibleConfigs = useMemo(
+    () => (configs || []).filter((c) => belongsToProject(c, projectId, project)),
+    [configs, projectId, project],
+  )
   const [integrations, setIntegrations] = useState([])
   const [alerts, setAlerts] = useState([])
   const [modalOpen, setModalOpen] = useState(false)
@@ -56,7 +62,7 @@ export default function EventsConfig() {
     e.preventDefault()
     setSaving(true)
     try {
-      await api.post('/events', form)
+      await api.post('/events', { ...form, project_id: projectId || undefined })
       setModalOpen(false)
       load()
     } finally {
@@ -122,8 +128,8 @@ export default function EventsConfig() {
     }
   }
 
-  const subs = configs.filter((c) => c.direction === 'subscribe')
-  const pubs = configs.filter((c) => c.direction === 'publish')
+  const subs = visibleConfigs.filter((c) => c.direction === 'subscribe')
+  const pubs = visibleConfigs.filter((c) => c.direction === 'publish')
   const orgPublishChannels = routingTarget ? pubs.filter((p) => p.org_id === routingTarget.org_id) : []
   const routableIntegrations = integrations.filter((i) => !i.alert_only)
 

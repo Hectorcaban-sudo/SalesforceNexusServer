@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Plus, FolderKanban, Trash2, Pencil, Users } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Plus, Trash2, Pencil, Users, Building2, Zap, MoreHorizontal } from 'lucide-react'
 import api from '../lib/api'
 import { useProject } from '../lib/ProjectContext'
 
@@ -9,19 +9,54 @@ export default function Projects() {
   const [form, setForm] = useState({ name: '', description: '', enabled: true })
   const [members, setMembers] = useState([])
   const [users, setUsers] = useState([])
+  const [counts, setCounts] = useState({})
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [menuId, setMenuId] = useState(null)
 
   useEffect(() => {
     api.get('/users').then((r) => setUsers(r.data || [])).catch(() => {})
   }, [])
 
-  async function openMembers(p) {
+  useEffect(() => {
+    let cancelled = false
+    async function loadCounts() {
+      try {
+        const [o, e] = await Promise.all([api.get('/orgs'), api.get('/events')])
+        if (cancelled) return
+        const map = {}
+        for (const pr of projects) map[pr.id] = { orgs: 0, events: 0 }
+        for (const row of o.data || []) {
+          const pid = row.project_id
+          if (pid && map[pid]) map[pid].orgs += 1
+        }
+        for (const row of e.data || []) {
+          const pid = row.project_id
+          if (pid && map[pid]) map[pid].events += 1
+        }
+        const def = projects.find((x) => x.name === 'Default Project')
+        if (def) {
+          map[def.id] = map[def.id] || { orgs: 0, events: 0 }
+          for (const row of o.data || []) {
+            if (!row.project_id) map[def.id].orgs += 1
+          }
+          for (const row of e.data || []) {
+            if (!row.project_id) map[def.id].events += 1
+          }
+        }
+        setCounts(map)
+      } catch {}
+    }
+    if (projects.length) loadCounts()
+    return () => { cancelled = true }
+  }, [projects])
+
+  async function openMembers(pr) {
     setError(null)
     try {
-      const { data } = await api.get(`/projects/${p.id}/members`)
+      const { data } = await api.get(`/projects/${pr.id}/members`)
       setMembers(data || [])
-      setModal({ kind: 'members', project: p })
+      setModal({ kind: 'members', project: pr })
     } catch (err) {
       setError(err?.response?.data?.detail || err.message)
     }
@@ -32,11 +67,8 @@ export default function Projects() {
     setSaving(true)
     setError(null)
     try {
-      if (modal?.id) {
-        await api.put(`/projects/${modal.id}`, form)
-      } else {
-        await api.post('/projects', form)
-      }
+      if (modal?.id) await api.put(`/projects/${modal.id}`, form)
+      else await api.post('/projects', form)
       setModal(null)
       await reload()
     } catch (err) {
@@ -46,10 +78,10 @@ export default function Projects() {
     }
   }
 
-  async function remove(p) {
-    if (!confirm(`Delete project "${p.name}"?`)) return
+  async function remove(pr) {
+    if (!confirm(`Delete project "${pr.name}"?`)) return
     try {
-      await api.delete(`/projects/${p.id}`)
+      await api.delete(`/projects/${pr.id}`)
       await reload()
     } catch (err) {
       setError(err?.response?.data?.detail || err.message)
@@ -74,48 +106,118 @@ export default function Projects() {
     setMembers(data || [])
   }
 
+  const sorted = useMemo(
+    () => [...projects].sort((a, b) => (a.name || '').localeCompare(b.name || '')),
+    [projects],
+  )
+
   return (
     <div>
-      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
         <div>
           <h1>Projects</h1>
-          <p className="page-sub">Organize Salesforce customers and solutions. Active project filters orgs, events, and integrations.</p>
+          <p className="page-sub">Manage and organize your Salesforce integration projects.</p>
         </div>
         <button
           className="btn btn-primary"
           onClick={() => { setForm({ name: '', description: '', enabled: true }); setModal({ kind: 'edit' }) }}
         >
-          <Plus size={15} /> Create project
+          <Plus size={15} /> Create Project
         </button>
       </div>
 
-      {error && <div className="panel" style={{ color: 'var(--accent-red)', marginBottom: 12 }}>{String(error)}</div>}
+      {error && (
+        <div className="panel" style={{ color: 'var(--accent-red)', marginBottom: 12 }}>
+          {String(error)}
+        </div>
+      )}
 
-      <div className="org-grid">
-        {projects.map((p) => (
-          <div key={p.id} className={`org-card ${projectId === p.id ? 'selected' : ''}`} style={projectId === p.id ? { outline: '2px solid var(--accent-blue, #6366f1)' } : undefined}>
-            <div className="org-card-header">
-              <FolderKanban size={18} />
-              <div>
-                <div className="name">{p.name}</div>
-                <div className="url">{p.description || 'No description'}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
+        {sorted.map((pr) => {
+          const c = counts[pr.id] || { orgs: 0, events: 0 }
+          const active = projectId === pr.id
+          return (
+            <div
+              key={pr.id}
+              className="org-card"
+              style={{ position: 'relative', outline: active ? '2px solid var(--accent-blue, #6366f1)' : undefined, cursor: 'pointer' }}
+              onClick={() => setProjectId(pr.id)}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <div className="name" style={{ fontSize: 16, fontWeight: 600 }}>{pr.name}</div>
+                  <div style={{ height: 3, width: 36, borderRadius: 2, background: 'var(--accent-blue, #6366f1)', marginTop: 8 }} />
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ padding: '4px 6px' }}
+                  onClick={(e) => { e.stopPropagation(); setMenuId(menuId === pr.id ? null : pr.id) }}
+                >
+                  <MoreHorizontal size={14} />
+                </button>
+              </div>
+
+              {menuId === pr.id && (
+                <div
+                  style={{
+                    position: 'absolute', right: 12, top: 44, zIndex: 5,
+                    background: 'var(--bg-panel)', border: '1px solid var(--border)',
+                    borderRadius: 8, padding: 6, minWidth: 140, boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button className="btn btn-sm" style={{ width: '100%', justifyContent: 'flex-start', marginBottom: 4 }}
+                    onClick={() => { setForm({ name: pr.name, description: pr.description || '', enabled: pr.enabled !== false }); setModal({ kind: 'edit', id: pr.id }); setMenuId(null) }}>
+                    <Pencil size={13} /> Edit
+                  </button>
+                  <button className="btn btn-sm" style={{ width: '100%', justifyContent: 'flex-start', marginBottom: 4 }}
+                    onClick={() => { openMembers(pr); setMenuId(null) }}>
+                    <Users size={13} /> Admins
+                  </button>
+                  {pr.name !== 'Default Project' && (
+                    <button className="btn btn-sm btn-danger" style={{ width: '100%', justifyContent: 'flex-start' }}
+                      onClick={() => { remove(pr); setMenuId(null) }}>
+                      <Trash2 size={13} /> Delete
+                    </button>
+                  )}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 24, marginTop: 18 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-muted)' }}>
+                  <Building2 size={16} />
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text)' }}>{c.orgs}</div>
+                    <div style={{ fontSize: 11.5 }}>Orgs</div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-muted)' }}>
+                  <Zap size={16} />
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text)' }}>{c.events}</div>
+                    <div style={{ fontSize: 11.5 }}>Events</div>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ marginTop: 18, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: 12.5, color: 'var(--text-muted)' }}>
+                {pr.description ? <div style={{ marginBottom: 6 }}>{pr.description}</div> : null}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>{active ? 'Active project' : 'Click to switch'}</span>
+                  <button type="button" className="btn btn-sm" onClick={(e) => { e.stopPropagation(); openMembers(pr) }}>
+                    <Users size={12} /> Admins
+                  </button>
+                </div>
               </div>
             </div>
-            <div className="org-card-actions">
-              <button className="btn btn-sm" onClick={() => setProjectId(p.id)}>
-                {projectId === p.id ? 'Active' : 'Switch'}
-              </button>
-              <button className="btn btn-sm" onClick={() => openMembers(p)}><Users size={13} /> Admins</button>
-              <button className="btn btn-sm" onClick={() => { setForm({ name: p.name, description: p.description || '', enabled: p.enabled !== false }); setModal({ kind: 'edit', id: p.id }) }}>
-                <Pencil size={13} />
-              </button>
-              {p.name !== 'Default Project' && (
-                <button className="btn btn-sm btn-danger" onClick={() => remove(p)}><Trash2 size={13} /></button>
-              )}
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
+
+      {sorted.length === 0 && (
+        <div className="panel"><div className="empty-state">No projects yet. Create one to organize orgs and events.</div></div>
+      )}
 
       {modal?.kind === 'edit' && (
         <div className="modal-overlay" onClick={() => setModal(null)}>
@@ -170,4 +272,3 @@ export default function Projects() {
     </div>
   )
 }
-'''

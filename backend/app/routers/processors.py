@@ -50,7 +50,7 @@ def download_processor(processor_id: str):
 
 
 @router.post("", response_model=ProcessorOut)
-async def upload_processor(name: str = Form(...), file: UploadFile = File(...)):
+async def upload_processor(name: str = Form(...), file: UploadFile = File(...), project_id: Optional[str] = Form(None)):
     if not file.filename.endswith(".py"):
         raise HTTPException(400, "Only .py files are accepted")
 
@@ -74,6 +74,7 @@ async def upload_processor(name: str = Form(...), file: UploadFile = File(...)):
         "last_status": None,
         "last_run_at": None,
         "last_error": None,
+        "project_id": project_id,
     }
     processors_table.insert(record)
     log_event("info", f"Processor script '{name}' uploaded", processor_id=processor_id, filename=file.filename)

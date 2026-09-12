@@ -1,8 +1,8 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, Radio, ListTree, ScrollText, Search, LogOut, Settings,
-  SlidersHorizontal, Users as UsersIcon, Share2, BellRing, ShieldCheck, Cloud,
-  FolderKanban, Code2, GitBranch,
+  Users as UsersIcon, Share2, BellRing, ShieldCheck, Cloud,
+  FolderKanban, Cpu, GitBranch,
 } from 'lucide-react'
 import { logout } from '../lib/api'
 import { useAuth, hasRole } from '../lib/AuthContext'
@@ -14,17 +14,18 @@ const MONITOR_NAV = [
   { to: '/logs', label: 'System Logs', icon: ScrollText },
 ]
 
+// Scoped to the active project (switcher in top bar)
 const PROJECT_NAV = [
-  { to: '/projects', label: 'Projects', icon: FolderKanban },
   { to: '/orgs', label: 'Salesforce Orgs', icon: Building2 },
   { to: '/events', label: 'Events & flows', icon: Radio },
   { to: '/integrations', label: 'Integrations', icon: Share2, admin: true },
   { to: '/sharepoint', label: 'SharePoint', icon: Cloud, admin: true },
-  { to: '/processors', label: 'Processors', icon: Code2, admin: true },
+  { to: '/processors', label: 'Processors', icon: Cpu, admin: true },
   { to: '/rules', label: 'Rules', icon: GitBranch, admin: true },
 ]
 
 const ADMIN_NAV = [
+  { to: '/projects', label: 'Projects', icon: FolderKanban },
   { to: '/alerts', label: 'Alerts', icon: BellRing },
   { to: '/users', label: 'Users', icon: UsersIcon },
   { to: '/security', label: 'Security', icon: ShieldCheck },
@@ -124,9 +125,9 @@ export default function Layout({ children }) {
                 onChange={(e) => setProjectId(e.target.value || null)}
                 style={{
                   background: 'transparent', border: 'none', color: 'inherit',
-                  fontSize: 12.5, maxWidth: 180, cursor: 'pointer',
+                  fontSize: 12.5, maxWidth: 200, cursor: 'pointer',
                 }}
-                title="Active project"
+                title="Filter workspace by project"
               >
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>{p.name}</option>
@@ -149,4 +150,3 @@ export default function Layout({ children }) {
     </div>
   )
 }
-'''

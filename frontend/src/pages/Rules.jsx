@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Plus, Trash2, ShieldCheck, Pencil } from 'lucide-react'
 import api from '../lib/api'
+import { useProject, belongsToProject } from '../lib/ProjectContext'
 
 export default function Rules() {
+  const { projectId, project } = useProject()
   const [items, setItems] = useState([])
   const [error, setError] = useState(null)
   const [modal, setModal] = useState(null)
@@ -49,6 +51,11 @@ export default function Rules() {
     await load()
   }
 
+  const visible = useMemo(
+    () => (items || []).filter((r) => belongsToProject(r, projectId, project)),
+    [items, projectId, project],
+  )
+
   return (
     <div>
       <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -63,8 +70,8 @@ export default function Rules() {
       {error && <div className="panel" style={{ color: 'var(--accent-red)', marginBottom: 12 }}>{String(error)}</div>}
 
       <div className="org-grid">
-        {items.length === 0 && <div className="panel"><div className="empty-state">No rules yet. Create one or import JDM from Admin Configuration.</div></div>}
-        {items.map((r) => (
+        {visible.length === 0 && <div className="panel"><div className="empty-state">No rules yet. Create one or import JDM from Admin Configuration.</div></div>}
+        {visible.map((r) => (
           <div key={r.id} className="org-card">
             <div className="org-card-header">
               <ShieldCheck size={18} />
@@ -111,4 +118,3 @@ export default function Rules() {
     </div>
   )
 }
-'''
