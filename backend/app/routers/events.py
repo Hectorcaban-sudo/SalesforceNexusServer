@@ -69,3 +69,33 @@ async def publish_event(req: PublishEventRequest):
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, str(exc))
     return {"detail": "published", "transaction_id": record["id"]}
+
+
+@router.post("/schema/infer", dependencies=[Depends(require_role("operator"))])
+def infer_schema_from_sample(body: dict):
+    """Body: { "sample": { ... } } → JSON Schema draft-07 style object."""
+    from ..worker import infer_json_schema
+    sample = body.get("sample")
+    if not isinstance(sample, dict):
+        raise HTTPException(400, "sample must be a JSON object")
+    return {"schema": infer_json_schema(sample)}
+
+
+@router.post("/schema/validate", dependencies=[Depends(require_role("operator"))])
+def validate_payload_against_schema(body: dict):
+    """Body: { "payload": {...}, "schema": {...} } or use event's stored schema via event_id."""
+    from ..worker import validate_payload_schema
+    payload = body.get("payload")
+    schema = body.get("schema")
+    event_id = body.get("event_id")
+    if event_id and not schema:
+        ev = event_configs_table.get(Q.id == event_id)
+        if not ev:
+            raise HTTPException(404, "Event config not found")
+        schema = ev.get("payload_schema")
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "payload must be a JSON object")
+    if not schema:
+        return {"ok": True, "errors": [], "detail": "No schema provided"}
+    ok, errors = validate_payload_schema(payload, schema)
+    return {"ok": ok, "errors": errors}

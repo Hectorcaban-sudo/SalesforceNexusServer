@@ -216,6 +216,81 @@ def apply_result_transform(result: dict, payload: dict, template: str) -> dict:
     except Exception:
         return {**(result or {}), "transformed_text": rendered}
 
+
+def validate_payload_schema(payload: dict, schema: dict) -> tuple:
+    """Return (ok: bool, errors: list[str])."""
+    if not schema:
+        return True, []
+    try:
+        import jsonschema
+        from jsonschema import Draft7Validator
+        validator = Draft7Validator(schema)
+        errors = sorted(validator.iter_errors(payload or {}), key=lambda e: list(e.path))
+        msgs = []
+        for e in errors:
+            path = ".".join(str(x) for x in e.absolute_path) or "(root)"
+            msgs.append(f"{path}: {e.message}")
+        return (len(msgs) == 0), msgs
+    except Exception as exc:  # noqa: BLE001
+        return False, [f"schema validation error: {exc}"]
+
+
+def infer_json_schema(sample: dict) -> dict:
+    """Best-effort Draft-07 schema from a sample object (no external deps)."""
+    def _type_of(v):
+        if v is None:
+            return ["null", "string"]
+        if isinstance(v, bool):
+            return "boolean"
+        if isinstance(v, int) and not isinstance(v, bool):
+            return "integer"
+        if isinstance(v, float):
+            return "number"
+        if isinstance(v, str):
+            return "string"
+        if isinstance(v, list):
+            return "array"
+        if isinstance(v, dict):
+            return "object"
+        return "string"
+
+    def _schema(v):
+        t = _type_of(v)
+        if t == "object":
+            props = {k: _schema(val) for k, val in (v or {}).items()}
+            return {
+                "type": "object",
+                "properties": props,
+                "required": list(props.keys()),
+                "additionalProperties": True,
+            }
+        if t == "array":
+            if v:
+                return {"type": "array", "items": _schema(v[0])}
+            return {"type": "array", "items": {}}
+        return {"type": t}
+
+    if not isinstance(sample, dict):
+        return {"type": "object"}
+    return _schema(sample)
+
+
+def apply_publish_field_map(result: dict, payload: dict, field_map: dict) -> dict:
+    """Build Salesforce publish body from Jinja map; merges over result if map empty keys only."""
+    if not field_map:
+        return result
+    from .template_renderer import render_template
+    out = {}
+    ctx = {"payload": payload or {}, "result": result or {}}
+    for key, expr in field_map.items():
+        try:
+            out[str(key)] = render_template(str(expr), ctx)
+        except Exception as exc:  # noqa: BLE001
+            log_event("warning", f"publish_field_map failed for {key}: {exc}")
+            out[str(key)] = None
+    return out
+
+
 async def process_payload(payload: dict, mode_override: Optional[str] = None, processor_id_override: Optional[str] = None, org_id: Optional[str] = None, transaction_id: Optional[str] = None) -> dict:
     """
     Business / AI processing logic for every inbound event.
@@ -456,6 +531,23 @@ async def inbound_worker():
 
         _, _, routed_alert_ids = _resolve_routes(org_id, source_channel)
 
+        # ---- Schema validation (before rule gate / processor) ----
+        src_cfg = _source_event_config(org_id, source_channel)
+        schema = (src_cfg or {}).get("payload_schema") or None
+        mode = ((src_cfg or {}).get("schema_validation_mode") or "off").lower()
+        if schema and mode in ("reject", "warn"):
+            ok, errs = validate_payload_schema(payload if isinstance(payload, dict) else {}, schema)
+            if not ok:
+                msg = "Payload schema validation failed: " + "; ".join(errs[:12])
+                if mode == "reject":
+                    tx.update_transaction(transaction_id, status="failed", error=msg)
+                    log_event("error", f"Worker: {msg}", transaction_id=transaction_id)
+                    failed_tx = tx.get_transaction(transaction_id)
+                    await asyncio.to_thread(dispatch_integrations, failed_tx, None, parent_carrier)
+                    await asyncio.to_thread(fire_alert_for_transaction, failed_tx, routed_alert_ids)
+                    return
+                log_event("warning", f"Worker: schema warn — {msg}", transaction_id=transaction_id)
+
         rule_id = _resolve_rule_gate(org_id, source_channel)
         if rule_id:
             with start_span("worker.rule_gate", carrier=parent_carrier, transaction_id=transaction_id, org_id=org_id, rule_id=rule_id) as gate_span:
@@ -535,6 +627,18 @@ async def inbound_worker():
 
         routed_channels, routed_integration_ids, _ = _resolve_routes(org_id, source_channel)
 
+        # Publish field mapping (processor result -> Salesforce event fields)
+        publish_payload = result
+        try:
+            src_cfg = _source_event_config(org_id, source_channel) or {}
+            fmap = src_cfg.get("publish_field_map") or {}
+            if fmap:
+                publish_payload = apply_publish_field_map(result, payload, fmap)
+                log_event("info", "Worker: applied publish_field_map", transaction_id=transaction_id)
+        except Exception as exc:  # noqa: BLE001
+            log_event("warning", f"publish_field_map failed: {exc}")
+            publish_payload = result
+
         if not _resolve_auto_publish(org_id, source_channel):
             # This channel is configured to process events without
             # automatically publishing the result back to Salesforce.
@@ -558,7 +662,7 @@ async def inbound_worker():
             for channel in routed_channels:
                 fanout_record = tx.record_transaction(
                     org_id=org_id, org_name=None, direction="publish", channel=channel,
-                    status="queued", payload=result, parent_transaction_id=transaction_id,
+                    status="queued", payload=publish_payload, parent_transaction_id=transaction_id,
                 )
                 await broker.publish(
                     "outbound",
@@ -566,7 +670,7 @@ async def inbound_worker():
                         "transaction_id": fanout_record["id"],
                         "org_id": org_id,
                         "channel": channel,
-                        "payload": result,
+                        "payload": publish_payload,
                         "routed_integration_ids": routed_integration_ids,
                         "routed_alert_ids": routed_alert_ids,
                         "_trace": next_carrier,
@@ -582,7 +686,7 @@ async def inbound_worker():
                         "transaction_id": transaction_id,
                         "org_id": org_id,
                         "channel": publish_channel,
-                        "payload": result,
+                        "payload": publish_payload,
                         "routed_integration_ids": routed_integration_ids,
                         "routed_alert_ids": routed_alert_ids,
                         "_trace": next_carrier,

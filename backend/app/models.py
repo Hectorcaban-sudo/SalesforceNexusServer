@@ -146,6 +146,12 @@ class EventConfigBase(BaseModel):
     # publish path. Defaults to True (existing behavior).
     auto_publish: bool = True
     result_transform_template: Optional[str] = None  # Jinja2 transform of result before publish
+    # Schema validation (subscribe): JSON Schema + optional sample payload
+    sample_payload: Optional[dict] = None
+    payload_schema: Optional[dict] = None  # JSON Schema object
+    schema_validation_mode: str = "off"  # off | warn | reject
+    # Publish mapping: Salesforce field name -> Jinja2 over {payload, result}
+    publish_field_map: Optional[dict] = None
 
 
 class EventConfigCreate(EventConfigBase):
@@ -165,6 +171,10 @@ class EventConfigUpdate(BaseModel):
     processor_id: Optional[str] = None
     rule_id: Optional[str] = None
     auto_publish: Optional[bool] = None
+    sample_payload: Optional[dict] = None
+    payload_schema: Optional[dict] = None
+    schema_validation_mode: Optional[str] = None
+    publish_field_map: Optional[dict] = None
 
 
 class EventConfigOut(EventConfigBase):

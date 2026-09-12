@@ -14,7 +14,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import {
   ArrowLeft, Save, RotateCcw, Radio, ShieldCheck, Cpu, ArrowUpFromLine,
-  Share2, BellRing, Plus, X,
+  Share2, BellRing, Plus, X, FileJson, GitBranch, Map, Ban, Wand2,
 } from 'lucide-react'
 import api from '../lib/api'
 
@@ -128,10 +128,35 @@ function AlertNode({ data, selected }) {
   )
 }
 
+function SchemaNode({ data, selected }) {
+  return (
+    <NodeShell accent="#06b6d4" icon={FileJson} title={data.label} subtitle={data.subtitle} badge={data.badge} selected={selected} />
+  )
+}
+function TransformNode({ data, selected }) {
+  return (
+    <NodeShell accent="#eab308" icon={Wand2} title={data.label} subtitle={data.subtitle} badge={data.badge} selected={selected} />
+  )
+}
+function PublishMapNode({ data, selected }) {
+  return (
+    <NodeShell accent="#14b8a6" icon={Map} title={data.label} subtitle={data.subtitle} badge={data.badge} selected={selected} />
+  )
+}
+function StopNode({ data, selected }) {
+  return (
+    <NodeShell accent="#f43f5e" icon={Ban} title={data.label} subtitle={data.subtitle} badge={data.badge} selected={selected} />
+  )
+}
+
 const nodeTypes = {
   source: SourceNode,
+  schema: SchemaNode,
   rule: RuleNode,
   processor: ProcessorNode,
+  transform: TransformNode,
+  publishMap: PublishMapNode,
+  stop: StopNode,
   publish: PublishNode,
   integration: IntegrationNode,
   alert: AlertNode,
@@ -160,19 +185,35 @@ function buildGraph({ event, orgName, rules, processors, pubs, integrations, ale
     draggable: true,
   })
 
+  // Schema validation node
+  const schemaMode = selected.schemaMode || 'off'
+  const hasSchema = !!(selected.payloadSchemaText && selected.payloadSchemaText.trim() && selected.payloadSchemaText.trim() !== '{}')
+  nodes.push({
+    id: 'schema',
+    type: 'schema',
+    position: { x: 280, y: 180 },
+    data: {
+      label: schemaMode === 'off' ? 'Schema off' : schemaMode === 'reject' ? 'Validate (reject)' : 'Validate (warn)',
+      subtitle: hasSchema ? 'JSON Schema active' : 'No schema set',
+      badge: schemaMode === 'reject' ? 'Reject' : schemaMode === 'warn' ? 'Warn' : 'Off',
+    },
+    draggable: true,
+  })
+  edges.push({ id: 'e-source-schema', source: 'source', target: 'schema', ...defaultEdgeOptions })
+
   const rule = rules.find((r) => r.id === selected.ruleId)
   nodes.push({
     id: 'rule',
     type: 'rule',
-    position: { x: 320, y: 180 },
+    position: { x: 520, y: 180 },
     data: {
-      label: rule ? rule.name : 'No rule',
-      subtitle: rule ? 'GoRules gate' : 'Always process',
-      badge: rule ? 'Optional' : 'Bypass',
+      label: rule ? rule.name : 'Choice / always',
+      subtitle: rule ? 'GoRules if/else gate' : 'Always process',
+      badge: rule ? 'Choice' : 'Bypass',
     },
     draggable: true,
   })
-  edges.push({ id: 'e-source-rule', source: 'source', target: 'rule', ...defaultEdgeOptions })
+  edges.push({ id: 'e-schema-rule', source: 'schema', target: 'rule', ...defaultEdgeOptions })
 
   const mode = selected.processingMode || ''
   const proc = processors.find((p) => p.id === selected.processorId)
@@ -199,15 +240,65 @@ function buildGraph({ event, orgName, rules, processors, pubs, integrations, ale
   nodes.push({
     id: 'processor',
     type: 'processor',
-    position: { x: 600, y: 180 },
+    position: { x: 760, y: 180 },
     data: { label: procLabel, subtitle: procSub, badge: procBadge },
     draggable: true,
   })
   edges.push({ id: 'e-rule-proc', source: 'rule', target: 'processor', ...defaultEdgeOptions })
 
-  const fanX = 920
+  const hasTransform = !!(selected.resultTransform && selected.resultTransform.trim())
+  nodes.push({
+    id: 'transform',
+    type: 'transform',
+    position: { x: 1000, y: 180 },
+    data: {
+      label: hasTransform ? 'Map / Transform' : 'Transform (off)',
+      subtitle: hasTransform ? 'Jinja2 on result' : 'Pass-through',
+      badge: hasTransform ? 'On' : 'Off',
+    },
+    draggable: true,
+  })
+  edges.push({ id: 'e-proc-transform', source: 'processor', target: 'transform', ...defaultEdgeOptions })
+
+  let hasPubMap = false
+  try {
+    const m = JSON.parse(selected.publishMapText || '{}')
+    hasPubMap = m && typeof m === 'object' && Object.keys(m).length > 0
+  } catch { hasPubMap = false }
+
+  nodes.push({
+    id: 'publishMap',
+    type: 'publishMap',
+    position: { x: 1240, y: 180 },
+    data: {
+      label: hasPubMap ? 'Publish field map' : 'Publish map (off)',
+      subtitle: hasPubMap ? 'SF fields ← Jinja' : 'Send result as-is',
+      badge: hasPubMap ? 'Mapped' : 'Raw',
+    },
+    draggable: true,
+  })
+  edges.push({ id: 'e-transform-map', source: 'transform', target: 'publishMap', ...defaultEdgeOptions })
+
+  const fanSource = 'publishMap'
+  const fanX = 1520
   let fanY = 40
   const gap = 100
+
+  if (!selected.autoPublish) {
+    nodes.push({
+      id: 'stop',
+      type: 'stop',
+      position: { x: fanX, y: fanY },
+      data: {
+        label: 'Stop publish',
+        subtitle: 'No Salesforce publish',
+        badge: 'Skip',
+      },
+      draggable: true,
+    })
+    edges.push({ id: 'e-map-stop', source: fanSource, target: 'stop', ...defaultEdgeOptions })
+    fanY += gap
+  }
 
   if (selected.autoPublish) {
     selected.publishIds.forEach((id) => {
@@ -226,7 +317,7 @@ function buildGraph({ event, orgName, rules, processors, pubs, integrations, ale
         },
         draggable: true,
       })
-      edges.push({ id: `e-proc-${nid}`, source: 'processor', target: nid, ...defaultEdgeOptions })
+      edges.push({ id: `e-map-${nid}`, source: fanSource, target: nid, ...defaultEdgeOptions })
       fanY += gap
     })
   }
@@ -247,7 +338,7 @@ function buildGraph({ event, orgName, rules, processors, pubs, integrations, ale
       },
       draggable: true,
     })
-    edges.push({ id: `e-proc-${nid}`, source: 'processor', target: nid, ...defaultEdgeOptions })
+    edges.push({ id: `e-map-${nid}`, source: fanSource, target: nid, ...defaultEdgeOptions })
     fanY += gap
   })
 
@@ -267,7 +358,7 @@ function buildGraph({ event, orgName, rules, processors, pubs, integrations, ale
       },
       draggable: true,
     })
-    edges.push({ id: `e-proc-${nid}`, source: 'processor', target: nid, ...defaultEdgeOptions })
+    edges.push({ id: `e-map-${nid}`, source: fanSource, target: nid, ...defaultEdgeOptions })
     fanY += gap
   })
 
@@ -299,6 +390,11 @@ export default function EventFlowDesigner() {
     processorId: '',
     autoPublish: true,
     resultTransform: '',
+    schemaMode: 'off',
+    samplePayloadText: '',
+    payloadSchemaText: '',
+    publishMapText: '{}',
+    schemaTestMsg: null,
     publishIds: [],
     integrationIds: [],
     alertIds: [],
@@ -408,6 +504,11 @@ export default function EventFlowDesigner() {
           processorId: ev.processor_id || '',
           autoPublish: ev.auto_publish !== false,
           resultTransform: ev.result_transform_template || '',
+          schemaMode: ev.schema_validation_mode || 'off',
+          samplePayloadText: ev.sample_payload ? JSON.stringify(ev.sample_payload, null, 2) : '',
+          payloadSchemaText: ev.payload_schema ? JSON.stringify(ev.payload_schema, null, 2) : '',
+          publishMapText: ev.publish_field_map ? JSON.stringify(ev.publish_field_map, null, 2) : '{}',
+          schemaTestMsg: null,
           publishIds: [...(ev.route_publish_channel_ids || [])],
           integrationIds: [...(ev.route_integration_ids || [])],
           alertIds: [...(ev.route_alert_ids || [])],
@@ -456,6 +557,30 @@ export default function EventFlowDesigner() {
     setSaving(true)
     setError(null)
     try {
+      let sample_payload = null
+      let payload_schema = null
+      let publish_field_map = null
+      try {
+        if (selected.samplePayloadText.trim()) sample_payload = JSON.parse(selected.samplePayloadText)
+      } catch (e) {
+        setError('Sample payload is not valid JSON')
+        setSaving(false)
+        return
+      }
+      try {
+        if (selected.payloadSchemaText.trim()) payload_schema = JSON.parse(selected.payloadSchemaText)
+      } catch (e) {
+        setError('Payload schema is not valid JSON')
+        setSaving(false)
+        return
+      }
+      try {
+        publish_field_map = selected.publishMapText.trim() ? JSON.parse(selected.publishMapText) : {}
+      } catch (e) {
+        setError('Publish field map is not valid JSON')
+        setSaving(false)
+        return
+      }
       await api.put(`/events/${event.id}`, {
         route_publish_channel_ids: selected.autoPublish ? selected.publishIds : [],
         route_integration_ids: selected.integrationIds,
@@ -465,6 +590,10 @@ export default function EventFlowDesigner() {
         rule_id: selected.ruleId || '',
         auto_publish: selected.autoPublish,
         result_transform_template: selected.resultTransform || '',
+        sample_payload,
+        payload_schema,
+        schema_validation_mode: selected.schemaMode || 'off',
+        publish_field_map,
       })
       setDirty(false)
     } catch (err) {
@@ -482,6 +611,11 @@ export default function EventFlowDesigner() {
       processorId: event.processor_id || '',
       autoPublish: event.auto_publish !== false,
       resultTransform: event.result_transform_template || '',
+      schemaMode: event.schema_validation_mode || 'off',
+      samplePayloadText: event.sample_payload ? JSON.stringify(event.sample_payload, null, 2) : '',
+      payloadSchemaText: event.payload_schema ? JSON.stringify(event.payload_schema, null, 2) : '',
+      publishMapText: event.publish_field_map ? JSON.stringify(event.publish_field_map, null, 2) : '{}',
+      schemaTestMsg: null,
       publishIds: [...(event.route_publish_channel_ids || [])],
       integrationIds: [...(event.route_integration_ids || [])],
       alertIds: [...(event.route_alert_ids || [])],
@@ -631,18 +765,105 @@ export default function EventFlowDesigner() {
               <label style={{ margin: 0 }}>Auto-publish to Salesforce</label>
             </div>
             <div className="field" style={{ marginTop: 12 }}>
-              <label>Phase 2 — Map / Transform (optional Jinja2 JSON)</label>
+              <label>Phase 2 — Schema validation</label>
+              <select value={selected.schemaMode || 'off'} onChange={(e) => updateSelected({ schemaMode: e.target.value })}>
+                <option value="off">Off</option>
+                <option value="warn">Warn (log only)</option>
+                <option value="reject">Reject on fail (recommended)</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Sample payload (JSON)</label>
               <textarea
                 rows={4}
+                value={selected.samplePayloadText || ''}
+                onChange={(e) => updateSelected({ samplePayloadText: e.target.value })}
+                placeholder={'{\n  "OpportunityId": "006..."\n}'}
+                style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5 }}
+              />
+              <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={async () => {
+                    try {
+                      const sample = JSON.parse(selected.samplePayloadText || '{}')
+                      const { data } = await api.post('/events/schema/infer', { sample })
+                      updateSelected({ payloadSchemaText: JSON.stringify(data.schema, null, 2) })
+                    } catch (err) {
+                      updateSelected({ schemaTestMsg: { ok: false, text: err?.response?.data?.detail || err.message } })
+                    }
+                  }}
+                >
+                  Infer schema from sample
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={async () => {
+                    try {
+                      const payload = JSON.parse(selected.samplePayloadText || '{}')
+                      const schema = selected.payloadSchemaText.trim() ? JSON.parse(selected.payloadSchemaText) : null
+                      const { data } = await api.post('/events/schema/validate', { payload, schema })
+                      updateSelected({
+                        schemaTestMsg: {
+                          ok: data.ok,
+                          text: data.ok ? 'Sample validates against schema' : (data.errors || []).join('; '),
+                        },
+                      })
+                    } catch (err) {
+                      updateSelected({ schemaTestMsg: { ok: false, text: err?.response?.data?.detail || err.message } })
+                    }
+                  }}
+                >
+                  Validate sample
+                </button>
+              </div>
+              {selected.schemaTestMsg && (
+                <p style={{ fontSize: 11.5, marginTop: 6, color: selected.schemaTestMsg.ok ? 'var(--accent-green, #22c55e)' : 'var(--accent-red)' }}>
+                  {selected.schemaTestMsg.text}
+                </p>
+              )}
+            </div>
+            <div className="field">
+              <label>JSON Schema</label>
+              <textarea
+                rows={5}
+                value={selected.payloadSchemaText || ''}
+                onChange={(e) => updateSelected({ payloadSchemaText: e.target.value })}
+                placeholder={'{\n  "type": "object",\n  "required": ["OpportunityId"]\n}'}
+                style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5 }}
+              />
+            </div>
+            <div className="field">
+              <label>Map / Transform result (Jinja2 → JSON)</label>
+              <textarea
+                rows={3}
                 value={selected.resultTransform || ''}
                 onChange={(e) => updateSelected({ resultTransform: e.target.value })}
                 placeholder={'{{ result | tojson }}'}
-                style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
+                style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5 }}
               />
               <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 0' }}>
-                Runs after the processor. Context: payload, result. Rule gate = Choice; uncheck auto-publish = Stop publish.
+                After processor. Context: payload, result.
               </p>
             </div>
+            <div className="field">
+              <label>Publish field map (JSON field → Jinja2)</label>
+              <textarea
+                rows={4}
+                value={selected.publishMapText || '{}'}
+                onChange={(e) => updateSelected({ publishMapText: e.target.value })}
+                placeholder={'{\n  "Status__c": "{{ result.Status__c }}",\n  "Reply__c": "{{ result.Payload_Json__c }}"\n}'}
+                style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11.5 }}
+              />
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 0' }}>
+                Maps processor result → Salesforce Platform Event fields. Empty = publish raw result.
+              </p>
+            </div>
+            <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              <b>Choice</b> = rule gate · <b>Stop publish</b> = uncheck Auto-publish
+            </p>
           </div>
 
           <div className="flow-sidebar-section">
@@ -703,7 +924,7 @@ export default function EventFlowDesigner() {
           </div>
 
           <div className="flow-sidebar-hint">
-            Phase 1 nodes map to existing event config fields. Saving writes the same routing API as the classic form.
+            Phase 2: schema → choice (rule) → processor → transform → publish map → fan-out. Saving writes event config fields.
           </div>
         </aside>
 
