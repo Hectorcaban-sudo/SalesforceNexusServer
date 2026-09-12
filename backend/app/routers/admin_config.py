@@ -382,40 +382,36 @@ def set_broker_config(config: BrokerConfig):
     return result
 
 
-# ---------- Configuration export / import (orgs, events, integrations) ----------
-EXPORT_VERSION = 2
+# ---------- Configuration export / import ----------
+EXPORT_VERSION = 3
 
 
 @router.get("/export")
 def export_configuration():
     """
-    Exports the full admin configuration - Salesforce orgs, event configs,
-    integrations (including SharePoint File/List sinks), alerts, rules,
-    uploaded processor scripts (including their actual code), SharePoint
-    Online connections + file/list actions, and every Admin Configuration
-    setting (DSSClient, Langflow, Email/SMTP, message broker, processing
-    mode) - as a single JSON bundle for backup/migration to another instance.
+    Exports the full configuration bundle for backup/migration:
 
-    Deliberately NOT included: local user accounts/password hashes. User
-    management is treated as a separate identity concern from application
-    configuration - re-importing accounts across environments (especially
-    password hashes) is a different kind of risk than restoring integration
-    settings, so it's left out of this bundle on purpose.
+      - projects + project_members (customer boundaries and admins)
+      - Salesforce orgs, event configs (with project_id and routing)
+      - integrations, alerts
+      - rules (global + project-scoped, including JDM)
+      - processors (global + project-scoped, including script code)
+      - SharePoint connections + file/list actions
+      - Admin Configuration settings (DSS, Langflow, SMTP, broker, processing mode)
 
-    SECURITY NOTE: this bundle includes credentials in plaintext - org
-    secrets (client secret, password, security token), integration secrets
-    (API keys, webhook signing secrets), SharePoint client secrets,
-    DSSClient/Langflow API keys, SMTP password, and RabbitMQ password -
-    because an export that couldn't restore working connections wouldn't be
-    useful as a backup. Treat the downloaded file exactly like a credentials
-    backup: store it securely, don't email it around, and delete it once
-    it's no longer needed.
+    Deliberately NOT included: local user accounts/password hashes (identity
+    is separate from app config). project_members reference user_id values;
+    after import, re-link members if user ids differ on the target instance.
+
+    SECURITY NOTE: credentials are included in plaintext so restores work.
+    Treat the file like a secrets backup.
     """
     from ..database import (
         orgs_table, event_configs_table, integrations_table, alerts_table,
         rules_table, processors_table,
         sharepoint_connections_table, sharepoint_file_actions_table,
         sharepoint_list_actions_table,
+        projects_table, project_members_table,
     )
     from .. import processors as proc_module
     from ..models import now_ts
@@ -423,19 +419,27 @@ def export_configuration():
     processors_export = []
     for p in processors_table.all():
         record = dict(p)
-        record["code"] = proc_module.read_processor_code(p["id"])
+        try:
+            record["code"] = proc_module.read_processor_code(p["id"])
+        except Exception:
+            record["code"] = ""
         processors_export.append(record)
+
+    # Rules already store jdm on the row; export full records for restore
+    rules_export = [dict(r) for r in rules_table.all()]
 
     return {
         "version": EXPORT_VERSION,
         "exported_at": now_ts(),
+        "projects": projects_table.all(),
+        "project_members": project_members_table.all(),
         "orgs": orgs_table.all(),
         "event_configs": event_configs_table.all(),
         "integrations": integrations_table.all(),
         "alerts": alerts_table.all(),
-        "rules": rules_table.all(),
+        "rules": rules_export,
         "processors": processors_export,
-        "admin_settings": admin_settings_table.all(),  # dss_client, langflow, email_settings, broker_config, processing_mode
+        "admin_settings": admin_settings_table.all(),
         "sharepoint_connections": sharepoint_connections_table.all(),
         "sharepoint_file_actions": sharepoint_file_actions_table.all(),
         "sharepoint_list_actions": sharepoint_list_actions_table.all(),
@@ -445,22 +449,18 @@ def export_configuration():
 @router.post("/import")
 async def import_configuration(bundle: dict):
     """
-    Imports a bundle produced by /export. Records are upserted by their
-    original `id` (overwriting any existing record with the same id), which
-    preserves cross-references between event configs, their routed publish
-    channels/integrations/alerts, and alert->integration links. Triggers a
-    CometD resync afterward so imported orgs/channels connect immediately.
+    Imports a bundle produced by /export. Upserts by original `id` so
+    cross-references (project_id, route_* ids, SharePoint action ids, etc.)
+    stay intact. Order: projects → members → resources → processors.
 
-    Message broker and uvicorn/server settings are NOT applied live even
-    though `admin_settings` includes the broker config record - like manual
-    changes to that setting, it takes effect on the next restart (see Admin
-    Configuration -> Message broker).
+    CometD resync runs after import. Broker settings apply on next restart.
     """
     from ..database import (
         orgs_table, event_configs_table, integrations_table, alerts_table,
         rules_table, processors_table, Q as _Q,
         sharepoint_connections_table, sharepoint_file_actions_table,
         sharepoint_list_actions_table,
+        projects_table, project_members_table,
     )
     from .. import processors as proc_module
     from ..cometd_client import cometd_manager
@@ -470,15 +470,19 @@ async def import_configuration(bundle: dict):
         for row in rows or []:
             if not row or not row.get("id"):
                 continue
-            if table.get(_Q.id == row["id"]):
-                table.update(row, _Q.id == row["id"])
+            # Work on a plain dict copy so we never mutate the request body oddly
+            data = dict(row)
+            if table.get(_Q.id == data["id"]):
+                table.update(data, _Q.id == data["id"])
             else:
-                table.insert(row)
+                table.insert(data)
             count += 1
         return count
 
-    # SharePoint connections first so file/list actions can reference them after import
+    # Projects first so project_id associations resolve on the target instance
     counts = {
+        "projects": _upsert(projects_table, bundle.get("projects", [])),
+        "project_members": _upsert(project_members_table, bundle.get("project_members", [])),
         "orgs": _upsert(orgs_table, bundle.get("orgs", [])),
         "event_configs": _upsert(event_configs_table, bundle.get("event_configs", [])),
         "sharepoint_connections": _upsert(sharepoint_connections_table, bundle.get("sharepoint_connections", [])),
@@ -492,17 +496,18 @@ async def import_configuration(bundle: dict):
 
     processor_count = 0
     for p in bundle.get("processors", []):
-        code = p.pop("code", "")
+        row = dict(p)
+        code = row.pop("code", "") or ""
         error = proc_module.validate_syntax(code) if code else None
         if error:
-            log_event("warning", f"Skipped importing processor '{p.get('name')}': invalid Python ({error})")
+            log_event("warning", f"Skipped importing processor '{row.get('name')}': invalid Python ({error})")
             continue
         if code:
-            proc_module.save_processor_file(p["id"], code)
-        if processors_table.get(_Q.id == p["id"]):
-            processors_table.update(p, _Q.id == p["id"])
+            proc_module.save_processor_file(row["id"], code)
+        if processors_table.get(_Q.id == row["id"]):
+            processors_table.update(row, _Q.id == row["id"])
         else:
-            processors_table.insert(p)
+            processors_table.insert(row)
         processor_count += 1
     counts["processors"] = processor_count
 

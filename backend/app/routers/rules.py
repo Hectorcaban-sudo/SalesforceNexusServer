@@ -36,7 +36,7 @@ def create_rule(rule: RuleCreate):
     if error:
         raise HTTPException(400, f"Invalid decision graph: {error}")
     rule_id = new_id()
-    record = rules_module.save_rule(rule_id, rule.name, rule.description or "", rule.jdm)
+    record = rules_module.save_rule(rule_id, rule.name, rule.description or "", rule.jdm, project_id=getattr(rule, "project_id", None))
     log_event("info", f"Rule '{rule.name}' created", rule_id=rule_id)
     return record
 

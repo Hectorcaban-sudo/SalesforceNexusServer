@@ -58,12 +58,12 @@ def ensure_default_project() -> dict:
         except Exception as exc:
             log_event("warning", f"Project attach scan failed: {exc}")
 
+    # Processors & rules are a shared library: null project_id = global.
+    # Do not auto-attach them to the default project.
     for tbl in (
         orgs_table,
         event_configs_table,
         integrations_table,
-        processors_table,
-        rules_table,
         alerts_table,
         sharepoint_connections_table,
         sharepoint_file_actions_table,

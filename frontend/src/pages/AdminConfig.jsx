@@ -16,8 +16,8 @@ const TABS = [
   { key: 'processing', label: 'Processing mode', icon: Radio },
   { key: 'dss', label: 'DSSClient', icon: SlidersHorizontal },
   { key: 'langflow', label: 'Langflow', icon: Workflow },
-  { key: 'processors', label: 'Payload processors', icon: FileCode2 },
-  { key: 'rules', label: 'Rules', icon: GitFork },
+  { key: 'processors', label: 'Global processors', icon: FileCode2 },
+  { key: 'rules', label: 'Global rules', icon: GitFork },
   { key: 'broker', label: 'Message broker', icon: Network },
   { key: 'database', label: 'Database', icon: Database },
   { key: 'email', label: 'Email', icon: Mail },
@@ -86,6 +86,14 @@ export default function AdminConfig() {
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState(null)
   const importInputRef = useRef(null)
+
+
+  function isGlobalRow(row) {
+    const pid = row?.project_id
+    return pid == null || pid === ''
+  }
+  const globalProcessors = processors.filter(isGlobalRow)
+  const globalRules = rules.filter(isGlobalRow)
 
   async function load() {
     const [dss, lf, pm, procs, brk, email, rls, db] = await Promise.all([
@@ -721,15 +729,14 @@ export default function AdminConfig() {
           {tab === 'processors' && (
             <div className="panel" style={{ maxWidth: 720 }}>
               <div className="panel-header">
-                <h3><FileCode2 size={15} /> Payload processors</h3>
+                <h3><FileCode2 size={15} /> Global processors</h3>
                 <button className="btn btn-sm" onClick={downloadExample}><Download size={13} /> Download example</button>
               </div>
               <div className="panel-body">
                 <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
-                  Upload a Python script to use as a custom processor. Contract: read one JSON object from stdin, print one
-                  JSON object to stdout, and print any log messages to stderr — those show up in System Logs automatically.
-                  It runs in an isolated subprocess with a 20s timeout — treat uploads like deploying
-                  server code (admin-only, trusted sources only).
+                  <strong>Global</strong> processors are shared across all projects (project screens show them read-only).
+                  Upload a Python script: read one JSON from stdin, print one JSON to stdout; stderr goes to System Logs.
+                  Isolated subprocess, 20s timeout — admin-only, trusted sources only.
                 </p>
 
                 <form onSubmit={upload} style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 18, flexWrap: 'wrap' }}>
@@ -746,13 +753,13 @@ export default function AdminConfig() {
                   </button>
                 </form>
 
-                {processors.length === 0 ? (
-                  <div className="empty-state">No processors uploaded yet.</div>
+                {globalProcessors.length === 0 ? (
+                  <div className="empty-state">No global processors yet.</div>
                 ) : (
                   <table>
                     <thead><tr><th>Name</th><th>File</th><th>Last test</th><th></th></tr></thead>
                     <tbody>
-                      {processors.map((p) => (
+                      {globalProcessors.map((p) => (
                         <tr key={p.id}>
                           <td>
                             {p.name}
@@ -816,7 +823,7 @@ export default function AdminConfig() {
                   <table>
                     <thead><tr><th>Name</th><th>Description</th><th>Last test</th><th></th></tr></thead>
                     <tbody>
-                      {rules.map((r) => (
+                      {globalRules.map((r) => (
                         <tr key={r.id}>
                           <td>{r.name}</td>
                           <td style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{r.description || '—'}</td>
@@ -1050,8 +1057,8 @@ export default function AdminConfig() {
               <div className="panel-header"><h3><FileDown size={15} /> Configuration backup</h3></div>
               <div className="panel-body">
                 <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
-                  Export orgs, event channels, integrations (incl. SharePoint sinks), SharePoint connections/actions, processors, alerts, rules, and admin settings as a single JSON file, and import it back
-                  (here or on another instance). <strong>The export file contains credentials in plaintext</strong> (org
+                  Export everything: projects and memberships, orgs, event channels (with routing), integrations (incl. SharePoint sinks), SharePoint connections/actions, global and project processors/rules, alerts, and admin settings as one JSON file. Import restores associations by id.
+                  <strong>The export file contains credentials in plaintext</strong> (org
                   secrets, integration API keys/webhook secrets) — handle it exactly like a credentials backup.
                 </p>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>

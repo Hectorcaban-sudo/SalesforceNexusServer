@@ -541,13 +541,15 @@ class ProcessorTestRequest(BaseModel):
 class RuleCreate(BaseModel):
     name: str
     description: Optional[str] = ""
-    jdm: dict     # the JSON Decision Model decision graph (nodes/edges), e.g. exported from https://editor.gorules.io
+    jdm: dict
+    project_id: Optional[str] = None     # the JSON Decision Model decision graph (nodes/edges), e.g. exported from https://editor.gorules.io
 
 
 class RuleUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     jdm: Optional[dict] = None
+    project_id: Optional[str] = None
 
 
 class RuleOut(BaseModel):

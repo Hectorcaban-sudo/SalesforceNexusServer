@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, ShieldCheck, Pencil } from 'lucide-react'
+import { Plus, Trash2, ShieldCheck, Pencil, Globe2 } from 'lucide-react'
 import api from '../lib/api'
-import { useProject, belongsToProject } from '../lib/ProjectContext'
+import { useProject, isGlobalResource, visibleLibraryItem } from '../lib/ProjectContext'
 
 export default function Rules() {
   const { projectId, project } = useProject()
@@ -20,8 +20,19 @@ export default function Rules() {
     load().catch((e) => setError(e.message))
   }, [])
 
+  const visible = useMemo(
+    () => (items || []).filter((r) => visibleLibraryItem(r, projectId, { includeGlobal: true })),
+    [items, projectId],
+  )
+  const projectOwned = visible.filter((r) => !isGlobalResource(r))
+  const globals = visible.filter((r) => isGlobalResource(r))
+
   async function save(e) {
     e.preventDefault()
+    if (!projectId) {
+      setError('Select a project before creating a project rule')
+      return
+    }
     setSaving(true)
     setError(null)
     try {
@@ -33,9 +44,13 @@ export default function Rules() {
         setSaving(false)
         return
       }
-      const payload = { name: form.name, description: form.description, jdm }
-      if (modal?.id) await api.put(`/rules/${modal.id}`, payload)
-      else await api.post('/rules', payload)
+      const payload = { name: form.name, description: form.description, jdm, project_id: projectId }
+      if (modal?.id) {
+        // only project-owned editable here
+        await api.put(`/rules/${modal.id}`, payload)
+      } else {
+        await api.post('/rules', payload)
+      }
       setModal(null)
       await load()
     } catch (err) {
@@ -46,57 +61,88 @@ export default function Rules() {
   }
 
   async function remove(id) {
-    if (!confirm('Delete this rule?')) return
+    if (!confirm('Delete this project rule?')) return
     await api.delete(`/rules/${id}`)
     await load()
   }
 
-  const visible = useMemo(
-    () => (items || []).filter((r) => belongsToProject(r, projectId, project)),
-    [items, projectId, project],
-  )
+  function Card({ r, global: isGlobal }) {
+    return (
+      <div
+        key={r.id}
+        className="org-card"
+        style={isGlobal ? {
+          borderColor: 'rgba(56, 189, 248, 0.45)',
+          background: 'rgba(14, 165, 233, 0.06)',
+        } : undefined}
+      >
+        <div className="org-card-header">
+          {isGlobal ? <Globe2 size={18} style={{ color: '#38bdf8' }} /> : <ShieldCheck size={18} />}
+          <div>
+            <div className="name" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {r.name}
+              {isGlobal && <span className="badge badge-blue" style={{ fontSize: 10 }}>Global</span>}
+              {!isGlobal && <span className="badge badge-gray" style={{ fontSize: 10 }}>Project</span>}
+            </div>
+            <div className="url">{r.description || r.id}</div>
+          </div>
+        </div>
+        <div className="org-card-actions">
+          {isGlobal ? (
+            <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>Read-only · edit in Admin</span>
+          ) : (
+            <>
+              <button className="btn btn-sm" onClick={() => {
+                setForm({ name: r.name, description: r.description || '', jdm_json: JSON.stringify(r.jdm || {}, null, 2) })
+                setModal({ id: r.id })
+              }}><Pencil size={13} /></button>
+              <button className="btn btn-sm btn-danger" onClick={() => remove(r.id)}><Trash2 size={13} /></button>
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div>
       <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1>Rules</h1>
-          <p className="page-sub">GoRules / Zen decision graphs used as choice gates on event flows.</p>
+          <p className="page-sub">
+            Project rules plus shared <strong>global</strong> rules (read-only; managed under Admin Configuration).
+            {project ? <> Active: <strong>{project.name}</strong></> : null}
+          </p>
         </div>
-        <button className="btn btn-primary" onClick={() => { setForm({ name: '', description: '', jdm_json: '{\n  "nodes": [],\n  "edges": []\n}' }); setModal({}) }}>
-          <Plus size={15} /> Add rule
+        <button className="btn btn-primary" disabled={!projectId} onClick={() => {
+          setForm({ name: '', description: '', jdm_json: '{\n  "nodes": [],\n  "edges": []\n}' })
+          setModal({})
+        }}>
+          <Plus size={15} /> Add project rule
         </button>
       </div>
       {error && <div className="panel" style={{ color: 'var(--accent-red)', marginBottom: 12 }}>{String(error)}</div>}
 
+      <h3 style={{ fontSize: 14, margin: '8px 0 10px', color: 'var(--text-muted)' }}>This project</h3>
+      <div className="org-grid" style={{ marginBottom: 20 }}>
+        {projectOwned.length === 0 && (
+          <div className="panel"><div className="empty-state">No project-specific rules yet.</div></div>
+        )}
+        {projectOwned.map((r) => <Card key={r.id} r={r} global={false} />)}
+      </div>
+
+      <h3 style={{ fontSize: 14, margin: '8px 0 10px', color: 'var(--text-muted)' }}>Global library (read-only)</h3>
       <div className="org-grid">
-        {visible.length === 0 && <div className="panel"><div className="empty-state">No rules yet. Create one or import JDM from Admin Configuration.</div></div>}
-        {visible.map((r) => (
-          <div key={r.id} className="org-card">
-            <div className="org-card-header">
-              <ShieldCheck size={18} />
-              <div>
-                <div className="name">{r.name}</div>
-                <div className="url">{r.description || r.id}</div>
-              </div>
-            </div>
-            <div className="org-card-actions">
-              <button className="btn btn-sm" onClick={() => {
-                setForm({ name: r.name, description: r.description || '', jdm_json: JSON.stringify(r.jdm || r.decision_graph || {}, null, 2) })
-                setModal({ id: r.id })
-              }}>
-                <Pencil size={13} />
-              </button>
-              <button className="btn btn-sm btn-danger" onClick={() => remove(r.id)}><Trash2 size={13} /></button>
-            </div>
-          </div>
-        ))}
+        {globals.length === 0 && (
+          <div className="panel"><div className="empty-state">No global rules. Create them under Admin Configuration.</div></div>
+        )}
+        {globals.map((r) => <Card key={r.id} r={r} global />)}
       </div>
 
       {modal && (
         <div className="modal-overlay" onClick={() => setModal(null)}>
           <div className="modal-box" style={{ maxWidth: 640 }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header"><h2>{modal.id ? 'Edit rule' : 'Add rule'}</h2></div>
+            <div className="modal-header"><h2>{modal.id ? 'Edit project rule' : 'Add project rule'}</h2></div>
             <form onSubmit={save}>
               <div className="modal-body">
                 <div className="field"><label>Name</label>

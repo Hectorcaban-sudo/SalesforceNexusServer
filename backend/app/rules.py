@@ -29,10 +29,11 @@ from .database import rules_table, Q
 from .logging_config import log_event
 
 
-def save_rule(rule_id: str, name: str, description: str, jdm: dict):
+def save_rule(rule_id: str, name: str, description: str, jdm: dict, project_id=None):
     record = {
         "id": rule_id, "name": name, "description": description, "jdm": jdm,
         "uploaded_at": time.time(), "last_status": None, "last_run_at": None, "last_error": None,
+        "project_id": project_id,
     }
     rules_table.insert(record)
     return record

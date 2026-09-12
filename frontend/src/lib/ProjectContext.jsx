@@ -58,12 +58,31 @@ export function useProject() {
   return useContext(ProjectContext)
 }
 
-/** Row belongs to active project (or unscoped rows visible only on Default Project). */
+/** No project_id (or empty) = global library resource. */
+export function isGlobalResource(row) {
+  const pid = row?.project_id
+  return pid == null || pid === ''
+}
+
+/**
+ * Project-owned rows (orgs, events, integrations, sharepoint).
+ * Unscoped legacy rows only appear under Default Project.
+ */
 export function belongsToProject(row, projectId, project) {
   if (!projectId) return true
   const pid = row?.project_id
-  if (pid === projectId) return true
-  // Legacy rows without project_id show under Default Project only
-  if (!pid && project?.name === 'Default Project') return true
+  if (pid && pid === projectId) return true
+  if (isGlobalResource(row) && project?.name === 'Default Project') return true
+  return false
+}
+
+/**
+ * Processors / rules: project-owned + optional globals (shared library).
+ */
+export function visibleLibraryItem(row, projectId, { includeGlobal = true } = {}) {
+  if (!projectId) return true
+  const pid = row?.project_id
+  if (pid && pid === projectId) return true
+  if (includeGlobal && isGlobalResource(row)) return true
   return false
 }

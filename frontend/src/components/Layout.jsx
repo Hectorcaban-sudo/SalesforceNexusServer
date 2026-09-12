@@ -1,8 +1,9 @@
+import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, Radio, ListTree, ScrollText, Search, LogOut, Settings,
   Users as UsersIcon, Share2, BellRing, ShieldCheck, Cloud,
-  FolderKanban, Cpu, GitBranch,
+  FolderKanban, Cpu, GitBranch, Plus, Minus,
 } from 'lucide-react'
 import { logout } from '../lib/api'
 import { useAuth, hasRole } from '../lib/AuthContext'
@@ -14,7 +15,6 @@ const MONITOR_NAV = [
   { to: '/logs', label: 'System Logs', icon: ScrollText },
 ]
 
-// Scoped to the active project (switcher in top bar)
 const PROJECT_NAV = [
   { to: '/orgs', label: 'Salesforce Orgs', icon: Building2 },
   { to: '/events', label: 'Events & flows', icon: Radio },
@@ -33,17 +33,71 @@ const ADMIN_NAV = [
 ]
 
 const ROLE_LABELS = { admin: 'Admin', operator: 'Operator', viewer: 'Viewer' }
+const COLLAPSE_KEY = 'nexus_nav_collapsed'
+
+function loadCollapsed() {
+  try {
+    return JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}')
+  } catch {
+    return {}
+  }
+}
+
+function NavSection({ id, label, items, collapsed, onToggle }) {
+  return (
+    <div className="nav-group">
+      <button
+        type="button"
+        className="nav-label"
+        onClick={() => onToggle(id)}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          width: '100%', background: 'none', border: 'none', cursor: 'pointer',
+          color: 'inherit', padding: 0, font: 'inherit', textAlign: 'left',
+        }}
+        title={collapsed[id] ? 'Expand' : 'Collapse'}
+      >
+        <span>{label}</span>
+        <span style={{ opacity: 0.7, display: 'inline-flex' }}>
+          {collapsed[id] ? <Plus size={12} /> : <Minus size={12} />}
+        </span>
+      </button>
+      {!collapsed[id] && items.map((item) => (
+        <NavLink
+          key={item.to}
+          to={item.to}
+          end={item.end}
+          className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}
+        >
+          <item.icon />
+          {item.label}
+        </NavLink>
+      ))}
+    </div>
+  )
+}
 
 export default function Layout({ children }) {
   const navigate = useNavigate()
   const { user } = useAuth()
   const isAdmin = hasRole(user, 'admin')
   const { projects, projectId, project, setProjectId } = useProject()
+  const [collapsed, setCollapsed] = useState(loadCollapsed)
+
+  function toggleSection(id) {
+    setCollapsed((prev) => {
+      const next = { ...prev, [id]: !prev[id] }
+      localStorage.setItem(COLLAPSE_KEY, JSON.stringify(next))
+      return next
+    })
+  }
 
   function handleLogout() {
     logout()
     navigate('/login')
   }
+
+  const projectItems = PROJECT_NAV.filter((i) => !i.admin || isAdmin)
 
   return (
     <div className="app-shell">
@@ -56,51 +110,16 @@ export default function Layout({ children }) {
           </div>
         </div>
 
-        <div className="nav-group">
-          <div className="nav-label">Monitor</div>
-          {MONITOR_NAV.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}
-            >
-              <item.icon />
-              {item.label}
-            </NavLink>
-          ))}
-        </div>
-
-        <div className="nav-group">
-          <div className="nav-label">
-            Project{project ? ` · ${project.name}` : ''}
-          </div>
-          {PROJECT_NAV.filter((i) => !i.admin || isAdmin).map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}
-            >
-              <item.icon />
-              {item.label}
-            </NavLink>
-          ))}
-        </div>
-
+        <NavSection id="monitor" label="Monitor" items={MONITOR_NAV} collapsed={collapsed} onToggle={toggleSection} />
+        <NavSection
+          id="project"
+          label={project ? ('Project - ' + project.name) : 'Project'}
+          items={projectItems}
+          collapsed={collapsed}
+          onToggle={toggleSection}
+        />
         {isAdmin && (
-          <div className="nav-group">
-            <div className="nav-label">Administration</div>
-            {ADMIN_NAV.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}
-              >
-                <item.icon />
-                {item.label}
-              </NavLink>
-            ))}
-          </div>
+          <NavSection id="admin" label="Administration" items={ADMIN_NAV} collapsed={collapsed} onToggle={toggleSection} />
         )}
 
         <div className="sidebar-footer">
@@ -134,10 +153,10 @@ export default function Layout({ children }) {
                 ))}
               </select>
             </div>
-            <div className="user-chip" title={user ? `${user.username} · ${ROLE_LABELS[user.role] || user.role}` : ''}>
+            <div className="user-chip" title={user ? (user.username + ' - ' + (ROLE_LABELS[user.role] || user.role)) : ''}>
               <div className="avatar">{(user?.username || 'A').slice(0, 1).toUpperCase()}</div>
               {user && (
-                <span className={`badge badge-${user.role === 'admin' ? 'blue' : user.role === 'operator' ? 'orange' : 'gray'}`}>
+                <span className={'badge badge-' + (user.role === 'admin' ? 'blue' : user.role === 'operator' ? 'orange' : 'gray')}>
                   {ROLE_LABELS[user.role] || user.role}
                 </span>
               )}
