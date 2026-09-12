@@ -81,6 +81,9 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   every mutating API route. Viewers get read-only access to the dashboard/transactions/logs;
   operators can manage orgs/events and reprocess transactions; admins additionally manage users,
   integrations, and global admin configuration.
+- **Projects** — an organizational grouping (a sidebar switcher + management page) for orgs,
+  events, integrations, and more under a named customer/solution. **Not yet an access-control
+  boundary** — see "Projects" below for exactly what that means today.
 - **Single sign-on (optional)** — generic OpenID Connect support that works with Okta, Azure AD /
   Entra ID, Auth0, Google Workspace, Keycloak, or any other OIDC-compliant IdP. Disabled by default
   (falls back to local username/password); enable by setting `SSO_ISSUER`/`SSO_CLIENT_ID`. New SSO
@@ -275,6 +278,37 @@ Three roles, enforced server-side on every route (not just hidden in the UI):
 Manage users from **Users** in the admin console (admin role required), or via the API
 (`GET/POST/PUT/DELETE /api/users`). You can't delete or demote your own account — have another
 admin do it if needed.
+
+## Projects — an organizational label, not yet an access-control boundary
+
+**Projects** group orgs, event channels, integrations, processors, rules, alerts, and SharePoint
+connections under a named "customer or solution" (a `project_id` field on each). A sidebar switcher
+(persisted in the browser's `localStorage`, not server-side session state) sets which project's
+resources the UI filters to; a dedicated **Projects** page manages projects and their membership
+(`project_admin` / `operator` / `viewer` per member).
+
+**Read this carefully before relying on Projects for isolation between customers or teams: as
+built today, project membership is stored but not enforced.** Every mutating endpoint under
+`/api/projects` requires the existing *global* `admin` role — there is no dependency anywhere in
+the codebase that checks a user's *project* role to grant or restrict access to that project's
+orgs/events/etc. A global `operator` or `admin` can see and modify every project's resources
+regardless of whether they're a listed member of that project at all; a global `viewer` remains
+read-only everywhere, project membership or not. In its current state, Projects is a **filtering
+and organizing convenience** — "show me just this customer's orgs in the sidebar" — not a tenant
+boundary. If you need real per-project data isolation (e.g. genuinely separate customers who
+shouldn't see each other's Salesforce orgs at all), that enforcement doesn't exist yet and would
+need to be added to every relevant router.
+
+**One known filtering bug, not just a design gap:** `GET /api/orgs` accepts a `project_id` query
+parameter but the parameter is currently unused in the handler — the org list always returns every
+org regardless of the active project. `GET /api/events` *does* filter correctly, but inclusively:
+it returns a project's own events **plus** any event with no `project_id` set at all, rather than
+strictly that project's events.
+
+**Migration**: a "Default Project" is created automatically every time the server starts (if it
+doesn't exist yet — idempotent, not something you need to run manually), and on that same startup
+*every* currently-unscoped org, event, integration, processor, rule, alert, and SharePoint
+connection is retroactively attached to it.
 
 ## Database backends
 
@@ -518,7 +552,10 @@ Because a rule is data rather than code, it runs directly in-process (no subproc
 needed the way uploaded scripts require) and can't execute arbitrary code or make network calls —
 it only evaluates the decision logic you defined.
 
-- Use the **Test** button (from the Rules tab, or per-rule) to evaluate a rule against a sample
+- Use the **Test** button (from the Rules tab or the standalone Rules page — both exist and manage
+  the same data; `/rules` and `/processors` were pulled out as standalone top-level pages in the
+  same change that added Projects, but neither is actually project-scoped yet — they show every
+  rule/processor regardless of the active project) to evaluate a rule against a sample
   payload before assigning it to a live channel.
 - An invalid decision graph is rejected at save time with a descriptive error.
 - Leaving a channel's validation rule unset preserves the original behavior: every event is

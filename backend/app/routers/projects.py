@@ -148,4 +148,3 @@ def remove_member(project_id: str, member_id: str):
         raise HTTPException(404, "Member not found")
     project_members_table.remove(Q.id == member_id)
     return {"detail": "deleted"}
-'''
