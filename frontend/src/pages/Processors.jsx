@@ -12,13 +12,15 @@ export default function Processors() {
   const [file, setFile] = useState(null)
 
   async function load() {
-    const { data } = await api.get('/processors')
+    const { data } = await api.get('/processors', {
+      params: projectId ? { project_id: projectId, include_global: true } : {},
+    })
     setItems(data || [])
   }
 
   useEffect(() => {
     load().catch((e) => setError(e.message))
-  }, [])
+  }, [projectId])
 
   const visible = useMemo(
     () => (items || []).filter((p) => visibleLibraryItem(p, projectId, { includeGlobal: true })),

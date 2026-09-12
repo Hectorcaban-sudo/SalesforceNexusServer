@@ -36,8 +36,10 @@ def _mask(cfg: dict) -> dict:
 
 
 @router.get("", response_model=List[IntegrationOut])
-def list_integrations():
-    return [_mask(i) for i in integrations_table.all()]
+def list_integrations(project_id: Optional[str] = None):
+    from ..project_scope import filter_by_project
+    rows = filter_by_project(integrations_table.all(), project_id, include_global=False)
+    return [_mask(i) for i in rows]
 
 
 @router.post("", response_model=IntegrationOut, dependencies=[Depends(require_role("admin"))])

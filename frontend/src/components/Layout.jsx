@@ -8,6 +8,7 @@ import {
 import { logout } from '../lib/api'
 import { useAuth, hasRole } from '../lib/AuthContext'
 import { useProject } from '../lib/ProjectContext'
+import ProjectSwitcher from './ProjectSwitcher'
 
 const MONITOR_NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -137,22 +138,7 @@ export default function Layout({ children }) {
             Search transactions, orgs, channels…
           </div>
           <div className="topbar-right">
-            <div className="env-pill" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <FolderKanban size={13} />
-              <select
-                value={projectId || ''}
-                onChange={(e) => setProjectId(e.target.value || null)}
-                style={{
-                  background: 'transparent', border: 'none', color: 'inherit',
-                  fontSize: 12.5, maxWidth: 200, cursor: 'pointer',
-                }}
-                title="Filter workspace by project"
-              >
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </div>
+            <ProjectSwitcher />
             <div className="user-chip" title={user ? (user.username + ' - ' + (ROLE_LABELS[user.role] || user.role)) : ''}>
               <div className="avatar">{(user?.username || 'A').slice(0, 1).toUpperCase()}</div>
               {user && (

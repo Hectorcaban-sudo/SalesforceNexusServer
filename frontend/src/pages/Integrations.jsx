@@ -110,11 +110,12 @@ export default function Integrations() {
   const previewTimer = useRef(null)
 
   async function load() {
+    const pid = projectId ? { project_id: projectId } : {}
     const [o, i, sf, sl] = await Promise.all([
-      api.get('/orgs'),
-      api.get('/integrations'),
-      api.get('/sharepoint/file-actions').catch(() => ({ data: [] })),
-      api.get('/sharepoint/list-actions').catch(() => ({ data: [] })),
+      api.get('/orgs', { params: pid }),
+      api.get('/integrations', { params: pid }),
+      api.get('/sharepoint/file-actions', { params: pid }).catch(() => ({ data: [] })),
+      api.get('/sharepoint/list-actions', { params: pid }).catch(() => ({ data: [] })),
     ])
     setOrgs(o.data)
     setItems(i.data)
@@ -122,7 +123,7 @@ export default function Integrations() {
     setSpListActions(sl.data || [])
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [projectId])
 
   const runPreview = useCallback(async (template) => {
     if (!template || !template.trim()) {

@@ -20,8 +20,9 @@ def _mask(org: dict) -> dict:
 
 
 @router.get("", response_model=List[OrgOut])
-def list_orgs(project_id: Optional[str] = None, ):
-    orgs = orgs_table.all()
+def list_orgs(project_id: Optional[str] = None):
+    from ..project_scope import filter_by_project
+    orgs = filter_by_project(orgs_table.all(), project_id, include_global=False)
     for o in orgs:
         o["status"] = cometd_manager.status_for(o["id"]) if o.get("active") else "disconnected"
     return [_mask(o) for o in orgs]

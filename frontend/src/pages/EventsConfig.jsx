@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Radio, Trash2, Send, ArrowDownToLine, ArrowUpFromLine, Share2, GitBranch, Cpu, BellRing, Workflow } from 'lucide-react'
 import api from '../lib/api'
-import { useProject, belongsToProject } from '../lib/ProjectContext'
+import { useProject, belongsToProject, isGlobalResource, visibleLibraryItem } from '../lib/ProjectContext'
 
 const EMPTY = { org_id: '', channel: '', direction: 'subscribe', enabled: true, description: '', broker_topic: 'default' }
 
@@ -14,6 +14,15 @@ export default function EventsConfig() {
   const visibleConfigs = useMemo(
     () => (configs || []).filter((c) => belongsToProject(c, projectId, project)),
     [configs, projectId, project],
+  )
+
+  const visibleRules = useMemo(
+    () => (rules || []).filter((r) => visibleLibraryItem(r, projectId, { includeGlobal: true })),
+    [rules, projectId],
+  )
+  const visibleProcessors = useMemo(
+    () => (processors || []).filter((p) => visibleLibraryItem(p, projectId, { includeGlobal: true })),
+    [processors, projectId],
   )
   const [integrations, setIntegrations] = useState([])
   const [alerts, setAlerts] = useState([])
@@ -38,7 +47,16 @@ export default function EventsConfig() {
   const [savingRouting, setSavingRouting] = useState(false)
 
   async function load() {
-    const [o, c, i, p, a, r] = await Promise.all([api.get('/orgs'), api.get('/events'), api.get('/integrations'), api.get('/processors'), api.get('/alerts'), api.get('/rules')])
+    const pid = projectId ? { project_id: projectId } : {}
+    const lib = projectId ? { project_id: projectId, include_global: true } : {}
+    const [o, c, i, p, a, r] = await Promise.all([
+      api.get('/orgs', { params: pid }),
+      api.get('/events', { params: pid }),
+      api.get('/integrations', { params: pid }),
+      api.get('/processors', { params: lib }),
+      api.get('/alerts', { params: pid }),
+      api.get('/rules', { params: lib }),
+    ])
     setOrgs(o.data)
     setConfigs(c.data)
     setIntegrations(i.data)
@@ -47,7 +65,7 @@ export default function EventsConfig() {
     setRules(r.data)
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [projectId])
 
   function orgName(id) {
     return orgs.find((o) => o.id === id)?.name || id
@@ -322,7 +340,16 @@ export default function EventsConfig() {
                 </p>
                 <select value={routingRuleId} onChange={(e) => setRoutingRuleId(e.target.value)} style={{ marginBottom: 18 }}>
                   <option value="">No rule — always process</option>
-                  {rules.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                  <optgroup label="This project">
+                    {visibleRules.filter((r) => !isGlobalResource(r)).map((r) => (
+                      <option key={r.id} value={r.id}>{r.name}</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Global library">
+                    {visibleRules.filter((r) => isGlobalResource(r)).map((r) => (
+                      <option key={r.id} value={r.id}>🌐 {r.name}</option>
+                    ))}
+                  </optgroup>
                 </select>
 
                 <label style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8, display: 'block' }}>
@@ -349,7 +376,16 @@ export default function EventsConfig() {
                 {routingProcessingMode === 'custom_script' && (
                   <select value={routingProcessorId} onChange={(e) => setRoutingProcessorId(e.target.value)} style={{ marginBottom: 18 }}>
                     <option value="">Select an uploaded processor…</option>
-                    {processors.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    <optgroup label="This project">
+                      {visibleProcessors.filter((p) => !isGlobalResource(p)).map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Global library">
+                      {visibleProcessors.filter((p) => isGlobalResource(p)).map((p) => (
+                        <option key={p.id} value={p.id}>🌐 {p.name}</option>
+                      ))}
+                    </optgroup>
                   </select>
                 )}
                 {routingProcessingMode === 'sharepoint_file' && (

@@ -13,10 +13,9 @@ router = APIRouter(prefix="/api/events", tags=["events"], dependencies=[Depends(
 
 @router.get("", response_model=List[EventConfigOut])
 def list_event_configs(org_id: Optional[str] = None, project_id: Optional[str] = None):
+    from ..project_scope import filter_by_project
     rows = event_configs_table.search(Q.org_id == org_id) if org_id else event_configs_table.all()
-    if project_id:
-        rows = [r for r in rows if r.get("project_id") == project_id or not r.get("project_id")]
-    return rows
+    return filter_by_project(rows, project_id, include_global=False)
 
 
 @router.post("", response_model=EventConfigOut, dependencies=[Depends(require_role("operator"))])

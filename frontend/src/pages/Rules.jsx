@@ -12,13 +12,15 @@ export default function Rules() {
   const [saving, setSaving] = useState(false)
 
   async function load() {
-    const { data } = await api.get('/rules')
+    const { data } = await api.get('/rules', {
+      params: projectId ? { project_id: projectId, include_global: true } : {},
+    })
     setItems(data || [])
   }
 
   useEffect(() => {
     load().catch((e) => setError(e.message))
-  }, [])
+  }, [projectId])
 
   const visible = useMemo(
     () => (items || []).filter((r) => visibleLibraryItem(r, projectId, { includeGlobal: true })),

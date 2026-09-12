@@ -1,6 +1,6 @@
 """SharePoint Online (GCC High) connections and file/list action configs."""
 from fastapi import APIRouter, Depends, HTTPException
-from typing import List
+from typing import List, Optional
 
 from ..auth import get_current_user, require_role
 from ..database import (
@@ -83,8 +83,10 @@ def test_credentials(body: SharePointConnectionCreate):
 
 
 @router.get("/connections", response_model=List[SharePointConnectionOut])
-def list_connections():
-    return [_mask_conn(r) for r in sharepoint_connections_table.all()]
+def list_connections(project_id: Optional[str] = None):
+    from ..project_scope import filter_by_project
+    rows = filter_by_project(sharepoint_connections_table.all(), project_id, include_global=False)
+    return [_mask_conn(r) for r in rows]
 
 
 @router.post("/connections", response_model=SharePointConnectionOut, dependencies=[Depends(require_role("admin"))])
@@ -173,8 +175,9 @@ def test_connection(connection_id: str):
     return probe
 
 @router.get("/file-actions", response_model=List[SharePointFileActionOut])
-def list_file_actions():
-    return sharepoint_file_actions_table.all()
+def list_file_actions(project_id: Optional[str] = None):
+    from ..project_scope import filter_by_project
+    return filter_by_project(sharepoint_file_actions_table.all(), project_id, include_global=False)
 
 
 @router.post("/file-actions", response_model=SharePointFileActionOut, dependencies=[Depends(require_role("admin"))])
@@ -213,8 +216,9 @@ def delete_file_action(action_id: str):
 # ── List actions ─────────────────────────────────────────────
 
 @router.get("/list-actions", response_model=List[SharePointListActionOut])
-def list_list_actions():
-    return sharepoint_list_actions_table.all()
+def list_list_actions(project_id: Optional[str] = None):
+    from ..project_scope import filter_by_project
+    return filter_by_project(sharepoint_list_actions_table.all(), project_id, include_global=False)
 
 
 @router.post("/list-actions", response_model=SharePointListActionOut, dependencies=[Depends(require_role("admin"))])

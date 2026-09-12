@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from typing import List
+from typing import List, Optional
 
 from ..auth import get_current_user, require_role
 from ..database import rules_table, Q
@@ -11,8 +11,9 @@ router = APIRouter(prefix="/api/rules", tags=["rules"], dependencies=[Depends(ge
 
 
 @router.get("", response_model=List[RuleOut])
-def list_rules():
-    return rules_table.all()
+def list_rules(project_id: Optional[str] = None, include_global: bool = True):
+    from ..project_scope import filter_by_project
+    return filter_by_project(rules_table.all(), project_id, include_global=include_global)
 
 
 @router.get("/example")

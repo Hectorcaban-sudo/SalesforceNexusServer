@@ -24,7 +24,7 @@ export default function Orgs() {
   const [testResult, setTestResult] = useState(null)
 
   async function load() {
-    const { data } = await api.get('/orgs')
+    const { data } = await api.get('/orgs', { params: projectId ? { project_id: projectId } : {} })
     setOrgs(data)
   }
 

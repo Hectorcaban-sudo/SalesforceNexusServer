@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from typing import List
+from typing import List, Optional
 
 from ..auth import get_current_user, require_role
 from ..database import alerts_table, integrations_table, Q
@@ -10,8 +10,9 @@ router = APIRouter(prefix="/api/alerts", tags=["alerts"], dependencies=[Depends(
 
 
 @router.get("", response_model=List[AlertOut])
-def list_alerts():
-    return alerts_table.all()
+def list_alerts(project_id: Optional[str] = None):
+    from ..project_scope import filter_by_project
+    return filter_by_project(alerts_table.all(), project_id, include_global=False)
 
 
 @router.post("", response_model=AlertOut, dependencies=[Depends(require_role("admin"))])

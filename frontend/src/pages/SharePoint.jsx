@@ -71,17 +71,18 @@ export default function SharePoint() {
   const [testMsg, setTestMsg] = useState(null)
 
   async function load() {
+    const pid = projectId ? { project_id: projectId } : {}
     const [c, f, l] = await Promise.all([
-      api.get('/sharepoint/connections'),
-      api.get('/sharepoint/file-actions'),
-      api.get('/sharepoint/list-actions'),
+      api.get('/sharepoint/connections', { params: pid }),
+      api.get('/sharepoint/file-actions', { params: pid }),
+      api.get('/sharepoint/list-actions', { params: pid }),
     ])
     setConns(c.data)
     setFiles(f.data)
     setLists(l.data)
   }
 
-  useEffect(() => { load().catch((e) => setError(e.message)) }, [])
+  useEffect(() => { load().catch((e) => setError(e.message)) }, [projectId])
 
   async function testSavedConnection(id) {
     setTestingConn(id)

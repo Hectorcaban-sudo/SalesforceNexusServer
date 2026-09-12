@@ -10,6 +10,12 @@ import {
   Share2, BellRing, X, FileJson, Wand2, Map, Ban, GripVertical,
 } from 'lucide-react'
 import api from '../lib/api'
+import { isGlobalResource, useProject } from '../lib/ProjectContext'
+
+function libraryOptionLabel(row) {
+  if (!row) return ''
+  return isGlobalResource(row) ? `🌐 ${row.name}` : row.name
+}
 
 const PALETTE = [
   { type: 'schema', label: 'Schema', icon: FileJson, accent: '#06b6d4', once: true },
@@ -279,7 +285,7 @@ function NodeConfigModal({ node, refs, onClose, onSave }) {
               <label>Rule (choice gate)</label>
               <select value={data.ruleId || ''} onChange={(e) => setData({ ...data, ruleId: e.target.value, label: refs.rules.find((r) => r.id === e.target.value)?.name || 'Choice' })}>
                 <option value="">Always process</option>
-                {refs.rules.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                {refs.rules.map((r) => <option key={r.id} value={r.id}>{libraryOptionLabel(r)}</option>)}
               </select>
             </div>
           )}
@@ -302,7 +308,7 @@ function NodeConfigModal({ node, refs, onClose, onSave }) {
                   <label>Processor</label>
                   <select value={data.processorId || ''} onChange={(e) => setData({ ...data, processorId: e.target.value })}>
                     <option value="">Select…</option>
-                    {refs.processors.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    {refs.processors.map((p) => <option key={p.id} value={p.id}>{libraryOptionLabel(p)}</option>)}
                   </select>
                 </div>
               )}
@@ -545,6 +551,7 @@ export default function EventFlowDesigner() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [event, setEvent] = useState(null)
+  const { projectId } = useProject()
   const [refs, setRefs] = useState({
     rules: [], processors: [], pubs: [], integrations: [], alerts: [],
     spFileActions: [], spListActions: [],
@@ -555,14 +562,16 @@ export default function EventFlowDesigner() {
     async function load() {
       setLoading(true)
       try {
+        const pid = projectId ? { project_id: projectId } : {}
+        const lib = projectId ? { project_id: projectId, include_global: true } : {}
         const [c, r, p, i, a, sf, sl] = await Promise.all([
-          api.get('/events'),
-          api.get('/rules'),
-          api.get('/processors'),
-          api.get('/integrations'),
-          api.get('/alerts'),
-          api.get('/sharepoint/file-actions').catch(() => ({ data: [] })),
-          api.get('/sharepoint/list-actions').catch(() => ({ data: [] })),
+          api.get('/events', { params: pid }),
+          api.get('/rules', { params: lib }),
+          api.get('/processors', { params: lib }),
+          api.get('/integrations', { params: pid }),
+          api.get('/alerts', { params: pid }),
+          api.get('/sharepoint/file-actions', { params: pid }).catch(() => ({ data: [] })),
+          api.get('/sharepoint/list-actions', { params: pid }).catch(() => ({ data: [] })),
         ])
         if (cancelled) return
         const ev = c.data.find((x) => x.id === eventId)
@@ -586,7 +595,7 @@ export default function EventFlowDesigner() {
     }
     load()
     return () => { cancelled = true }
-  }, [eventId])
+  }, [eventId, projectId])
 
   if (loading) return <div className="empty-state">Loading flow…</div>
   if (error && !event) {

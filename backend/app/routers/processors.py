@@ -14,8 +14,13 @@ MAX_UPLOAD_BYTES = 512 * 1024  # 512KB is plenty for a processing script
 
 
 @router.get("", response_model=List[ProcessorOut])
-def list_processors():
-    return processors_table.all()
+def list_processors(project_id: Optional[str] = None, include_global: bool = True):
+    """
+    project_id set: this project's processors (+ globals when include_global=true).
+    No project_id: full list (Admin Configuration).
+    """
+    from ..project_scope import filter_by_project
+    return filter_by_project(processors_table.all(), project_id, include_global=include_global)
 
 
 @router.get("/example")
