@@ -1,4 +1,54 @@
+# Salesforce Nexus AI Server — full stack (app + PostgreSQL + RabbitMQ)
+# Network: Nexus  |  All published ports bind to 0.0.0.0
+
+name: nexus
+
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: nexus-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus}
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+    ports:
+      - "0.0.0.0:5432:5432"
+    volumes:
+      - nexus-postgres-data:/var/lib/postgresql/data
+    networks:
+      - Nexus
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nexus} -d ${POSTGRES_DB:-nexus}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: nexus-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-nexus}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-nexus}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-/}
+    ports:
+      # AMQP
+      - "0.0.0.0:5672:5672"
+      # Management UI
+      - "0.0.0.0:15672:15672"
+    volumes:
+      - nexus-rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - Nexus
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
   nexus:
     build:
       context: .
@@ -6,13 +56,37 @@ services:
     image: salesforce-nexus-ai-server:latest
     container_name: salesforce-nexus-ai-server
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     ports:
-      - "8000:8000"
+      - "0.0.0.0:8000:8000"
     environment:
-      # Override in a .env file (see .env.example) or here directly.
       SECRET_KEY: ${SECRET_KEY:-change_me_to_a_long_random_value}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-480}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      UVICORN_HOST: "0.0.0.0"
+      UVICORN_PORT: "8000"
+      UVICORN_WORKERS: "1"
+
+      # PostgreSQL (Tinydb still used for app config store unless migrated —
+      # these vars configure the optional SQL backend / admin settings)
+      DATABASE_TYPE: ${DATABASE_TYPE:-postgres}
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: ${POSTGRES_DB:-nexus}
+      DATABASE_USER: ${POSTGRES_USER:-nexus}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-nexus}
+
+      # Hints for RabbitMQ (configure broker in Admin UI to host "rabbitmq")
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: ${RABBITMQ_USER:-nexus}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-nexus}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/}
+
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_CONSOLE_EXPORTER: ${OTEL_CONSOLE_EXPORTER:-false}
       SSO_ISSUER: ${SSO_ISSUER:-}
@@ -22,16 +96,24 @@ services:
       SSO_DEFAULT_ROLE: ${SSO_DEFAULT_ROLE:-viewer}
       FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:8000}
     volumes:
-      # Persist the SQLite database and log files across container restarts/rebuilds
       - nexus-data:/app/data
       - nexus-logs:/app/logs
+    networks:
+      - Nexus
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
       interval: 30s
       timeout: 5s
-      retries: 3
-      start_period: 10s
+      retries: 5
+      start_period: 40s
+
+networks:
+  Nexus:
+    name: Nexus
+    driver: bridge
 
 volumes:
   nexus-data:
   nexus-logs:
+  nexus-postgres-data:
+  nexus-rabbitmq-data:
