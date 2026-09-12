@@ -11,19 +11,6 @@ export default function EventsConfig() {
   const { projectId, project } = useProject()
   const [orgs, setOrgs] = useState([])
   const [configs, setConfigs] = useState([])
-  const visibleConfigs = useMemo(
-    () => (configs || []).filter((c) => belongsToProject(c, projectId, project)),
-    [configs, projectId, project],
-  )
-
-  const visibleRules = useMemo(
-    () => (rules || []).filter((r) => visibleLibraryItem(r, projectId, { includeGlobal: true })),
-    [rules, projectId],
-  )
-  const visibleProcessors = useMemo(
-    () => (processors || []).filter((p) => visibleLibraryItem(p, projectId, { includeGlobal: true })),
-    [processors, projectId],
-  )
   const [integrations, setIntegrations] = useState([])
   const [alerts, setAlerts] = useState([])
   const [modalOpen, setModalOpen] = useState(false)
@@ -45,6 +32,19 @@ export default function EventsConfig() {
   const [processors, setProcessors] = useState([])
   const [rules, setRules] = useState([])
   const [savingRouting, setSavingRouting] = useState(false)
+
+  const visibleConfigs = useMemo(
+    () => (configs || []).filter((c) => belongsToProject(c, projectId, project)),
+    [configs, projectId, project],
+  )
+  const visibleRules = useMemo(
+    () => (rules || []).filter((r) => visibleLibraryItem(r, projectId, { includeGlobal: true })),
+    [rules, projectId],
+  )
+  const visibleProcessors = useMemo(
+    () => (processors || []).filter((p) => visibleLibraryItem(p, projectId, { includeGlobal: true })),
+    [processors, projectId],
+  )
 
   async function load() {
     const pid = projectId ? { project_id: projectId } : {}
