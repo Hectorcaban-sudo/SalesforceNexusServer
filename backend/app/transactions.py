@@ -1,8 +1,22 @@
 """Helpers for creating/updating transaction records (the audit trail the
 admin dashboard displays for every event that flows through the system)."""
 from typing import Optional
-from .database import transactions_table, Q
+from .database import transactions_table, orgs_table, projects_table, Q
 from .models import new_id, now_ts
+
+
+def _resolve_project(org_id: Optional[str]) -> tuple:
+    """Return (project_id, project_name) from the org, if available."""
+    if not org_id:
+        return None, None
+    org = orgs_table.get(Q.id == org_id)
+    if not org:
+        return None, None
+    pid = org.get("project_id")
+    if not pid:
+        return None, None
+    proj = projects_table.get(Q.id == pid)
+    return pid, (proj or {}).get("name")
 
 
 def record_transaction(
@@ -16,10 +30,13 @@ def record_transaction(
     error: Optional[str] = None,
     parent_transaction_id: Optional[str] = None,
 ) -> dict:
+    project_id, project_name = _resolve_project(org_id)
     record = {
         "id": new_id(),
         "org_id": org_id,
         "org_name": org_name,
+        "project_id": project_id,
+        "project_name": project_name,
         "direction": direction,
         "channel": channel,
         "status": status,

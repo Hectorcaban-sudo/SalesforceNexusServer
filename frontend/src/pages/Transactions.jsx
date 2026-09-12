@@ -149,10 +149,10 @@ export default function Transactions() {
         <div className="panel">
           <table>
             <thead>
-              <tr><th>Time</th><th>Org</th><th>Direction</th><th>Channel</th><th>Status</th><th>Attempts</th><th></th></tr>
+              <tr><th>Time</th><th>Project</th><th>Org</th><th>Direction</th><th>Channel</th><th>Status</th><th>Attempts</th><th></th></tr>
             </thead>
             <tbody>
-              {rows.length === 0 && <tr><td colSpan={7} className="empty-state">No transactions match these filters</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={8} className="empty-state">No transactions match these filters</td></tr>}
               {rows.map((t) => (
                 <TransactionRow key={t.id} t={t} onView={setSelected} onReprocess={reprocess} reprocessingId={reprocessingId} onCancel={cancel} cancellingId={cancellingId} />
               ))}
@@ -179,7 +179,7 @@ export default function Transactions() {
               {!collapsed[key] && (
                 <table>
                   <thead>
-                    <tr><th>Time</th><th>Org</th><th>Direction</th><th>Channel</th><th>Status</th><th>Attempts</th><th></th></tr>
+                    <tr><th>Time</th><th>Project</th><th>Org</th><th>Direction</th><th>Channel</th><th>Status</th><th>Attempts</th><th></th></tr>
                   </thead>
                   <tbody>
                     {groupRows.map((t) => (
@@ -203,6 +203,7 @@ export default function Transactions() {
             <div className="panel-body">
               <div className="field"><label>ID</label><code className="pill">{selected.id}</code></div>
               <div className="form-row-2">
+                <div className="field"><label>Project</label><div>{selected.project_name || '-'}</div></div>
                 <div className="field"><label>Org</label><div>{selected.org_name}</div></div>
                 <div className="field"><label>Status</label><StatusBadge status={selected.status} /></div>
               </div>
@@ -266,6 +267,7 @@ function TransactionRow({ t, onView, onReprocess, reprocessingId, onCancel, canc
   return (
     <tr>
       <td className="mono" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{fmtTime(t.created_at)}</td>
+      <td>{t.project_name || '-'}</td>
       <td>{t.org_name}</td>
       <td style={{ textTransform: 'capitalize' }}>{t.direction}</td>
       <td><code className="pill">{t.channel}</code></td>

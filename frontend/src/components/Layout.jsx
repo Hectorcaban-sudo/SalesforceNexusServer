@@ -71,7 +71,9 @@ export default function Layout({ children }) {
         </div>
 
         <div className="nav-group">
-          <div className="nav-label">Project</div>
+          <div className="nav-label">
+            Project{project ? ` · ${project.name}` : ''}
+          </div>
           {PROJECT_NAV.filter((i) => !i.admin || isAdmin).map((item) => (
             <NavLink
               key={item.to}

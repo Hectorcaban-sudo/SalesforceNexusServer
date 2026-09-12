@@ -73,7 +73,12 @@ export default function Logs() {
               <div className="log-time">{new Date(l.timestamp * 1000).toLocaleTimeString()}</div>
               <div className={`log-level-${l.level}`}>{l.level}</div>
               <div className="log-logger">{l.logger}</div>
-              <div className="log-msg log-msg-clip">{l.message}</div>
+              <div className="log-msg log-msg-clip">
+                {(l.context?.project_name || l.project_name) ? (
+                  <span className="badge badge-gray" style={{ marginRight: 8 }}>{l.context?.project_name || l.project_name}</span>
+                ) : null}
+                {l.message}
+              </div>
             </div>
           ))}
         </div>
@@ -93,7 +98,8 @@ export default function Logs() {
               </div>
               <div className="field">
                 <label>Message</label>
-                <pre className="mono log-detail-block">{selected.message}</pre>
+                <div className="field"><label>Project</label><div>{selected.context?.project_name || selected.project_name || '-'}</div></div>
+              <pre className="mono log-detail-block">{selected.message}</pre>
               </div>
               {selected.context && Object.keys(selected.context).length > 0 && (
                 <div className="field">

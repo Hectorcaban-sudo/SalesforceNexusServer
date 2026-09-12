@@ -7,7 +7,8 @@ from ..database import (
     projects_table, project_members_table, users_table,
     orgs_table, event_configs_table, integrations_table,
     processors_table, rules_table, alerts_table,
-    sharepoint_connections_table, Q,
+    sharepoint_connections_table, sharepoint_file_actions_table,
+    sharepoint_list_actions_table, Q,
 )
 from ..models import (
     ProjectCreate, ProjectUpdate, ProjectOut, ProjectMemberCreate, ProjectMemberOut, new_id, now_ts,
@@ -21,30 +22,52 @@ DEFAULT_PROJECT_NAME = "Default Project"
 
 def ensure_default_project() -> dict:
     """Create a default project and attach unscoped resources once."""
-    existing = projects_table.search(Q.name == DEFAULT_PROJECT_NAME)
+    try:
+        existing = projects_table.search(Q.name == DEFAULT_PROJECT_NAME)
+    except Exception:
+        existing = []
     if existing:
         default = existing[0]
     else:
-        default = {
-            "id": new_id(),
-            "name": DEFAULT_PROJECT_NAME,
-            "description": "Auto-created for existing configuration",
-            "enabled": True,
-            "created_at": now_ts(),
-        }
-        projects_table.insert(default)
-        log_event("info", f"Created default project {default['id']}")
+        # Prefer first project if any exists under a different name
+        all_projects = projects_table.all()
+        if all_projects:
+            default = all_projects[0]
+        else:
+            default = {
+                "id": new_id(),
+                "name": DEFAULT_PROJECT_NAME,
+                "description": "Auto-created for existing configuration",
+                "enabled": True,
+                "created_at": str(now_ts()),
+            }
+            projects_table.insert(default)
+            log_event("info", f"Created default project {default['id']}")
 
     pid = default["id"]
 
     def _attach(table):
-        for row in table.all():
-            if not row.get("project_id"):
-                table.update({"project_id": pid}, Q.id == row["id"])
+        try:
+            for row in table.all():
+                rid = row.get("id")
+                if rid and not row.get("project_id"):
+                    try:
+                        table.update({"project_id": pid}, Q.id == rid)
+                    except Exception as exc:
+                        log_event("warning", f"Could not attach project_id to {rid}: {exc}")
+        except Exception as exc:
+            log_event("warning", f"Project attach scan failed: {exc}")
 
     for tbl in (
-        orgs_table, event_configs_table, integrations_table, processors_table,
-        rules_table, alerts_table, sharepoint_connections_table,
+        orgs_table,
+        event_configs_table,
+        integrations_table,
+        processors_table,
+        rules_table,
+        alerts_table,
+        sharepoint_connections_table,
+        sharepoint_file_actions_table,
+        sharepoint_list_actions_table,
     ):
         _attach(tbl)
     return default
@@ -53,14 +76,22 @@ def ensure_default_project() -> dict:
 @router.get("", response_model=List[ProjectOut])
 def list_projects():
     ensure_default_project()
-    return projects_table.all()
+    rows = projects_table.all()
+    # Normalize created_at for response model (str | None)
+    out = []
+    for r in rows:
+        item = dict(r)
+        if item.get("created_at") is not None:
+            item["created_at"] = str(item["created_at"])
+        out.append(item)
+    return out
 
 
 @router.post("", response_model=ProjectOut, dependencies=[Depends(require_role("admin"))])
 def create_project(body: ProjectCreate):
     record = body.model_dump()
     record["id"] = new_id()
-    record["created_at"] = now_ts()
+    record["created_at"] = str(now_ts())
     projects_table.insert(record)
     log_event("info", f"Project created: {record['name']}", project_id=record["id"])
     return record
@@ -72,7 +103,10 @@ def get_project(project_id: str):
     p = projects_table.get(Q.id == project_id)
     if not p:
         raise HTTPException(404, "Project not found")
-    return p
+    item = dict(p)
+    if item.get("created_at") is not None:
+        item["created_at"] = str(item["created_at"])
+    return item
 
 
 @router.put("/{project_id}", response_model=ProjectOut, dependencies=[Depends(require_role("admin"))])
@@ -82,7 +116,10 @@ def update_project(project_id: str, body: ProjectUpdate):
         raise HTTPException(404, "Project not found")
     data = {k: v for k, v in body.model_dump().items() if v is not None}
     projects_table.update(data, Q.id == project_id)
-    return projects_table.get(Q.id == project_id)
+    item = dict(projects_table.get(Q.id == project_id))
+    if item.get("created_at") is not None:
+        item["created_at"] = str(item["created_at"])
+    return item
 
 
 @router.delete("/{project_id}", dependencies=[Depends(require_role("admin"))])
@@ -92,7 +129,6 @@ def delete_project(project_id: str):
         raise HTTPException(404, "Project not found")
     if p.get("name") == DEFAULT_PROJECT_NAME:
         raise HTTPException(400, "Cannot delete the default project")
-    # Block delete if resources still attached
     for label, table in (
         ("orgs", orgs_table),
         ("events", event_configs_table),

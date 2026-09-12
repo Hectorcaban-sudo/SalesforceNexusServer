@@ -55,16 +55,21 @@ export default function Processors() {
       <div className="panel" style={{ marginBottom: 16 }}>
         <div className="panel-header"><h3><Plus size={15} /> Upload processor</h3></div>
         <div className="panel-body">
-          <form onSubmit={upload} style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'end' }}>
-            <div className="field" style={{ margin: 0, flex: 1, minWidth: 160 }}>
-              <label>Name</label>
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Optional display name" />
+          <form onSubmit={upload}>
+            <div className="form-row-2">
+              <div className="field">
+                <label>Name</label>
+                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Optional display name" />
+              </div>
+              <div className="field">
+                <label>Python file (.py)</label>
+                <input type="file" accept=".py,text/x-python" onChange={(e) => setFile(e.target.files?.[0] || null)} required />
+                {file && <div style={{ fontSize: 12, marginTop: 4, color: 'var(--text-muted)' }}>Selected: {file.name}</div>}
+              </div>
             </div>
-            <div className="field" style={{ margin: 0, flex: 1, minWidth: 200 }}>
-              <label>Python file</label>
-              <input type="file" accept=".py" onChange={(e) => setFile(e.target.files?.[0] || null)} required />
-            </div>
-            <button className="btn btn-primary" disabled={uploading || !file}>{uploading ? 'Uploading…' : 'Upload'}</button>
+            <button className="btn btn-primary" disabled={uploading || !file} style={{ marginTop: 8 }}>
+              {uploading ? 'Uploading…' : 'Upload processor'}
+            </button>
           </form>
         </div>
       </div>

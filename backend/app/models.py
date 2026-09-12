@@ -237,6 +237,8 @@ class TransactionOut(BaseModel):
     id: str
     org_id: str
     org_name: Optional[str] = None
+    project_id: Optional[str] = None
+    project_name: Optional[str] = None
     direction: EventDirection
     channel: str
     status: TransactionStatus
