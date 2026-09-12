@@ -37,6 +37,12 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
 - **Validation rules (GoRules JDM / Zen Engine)** — a *gate*, not a processing mode: assign a
   no-code decision graph to a subscribed event channel to decide whether an event gets processed at
   all before any processing mode runs. See "Rule engine" below.
+- **JSON Schema validation** — an independent, earlier gate: check every inbound payload against an
+  optional Draft-07 schema (off / warn / reject), with a "generate a starter schema from a sample
+  payload" helper so you don't have to hand-write one. See "Schema validation" below.
+- **Result transform and publish field mapping** — reshape a processor's output (Jinja, whole-result)
+  and/or build the exact outbound Salesforce field set (Jinja, field-by-field) before publish. See
+  "Result transform (Map step)" below.
 - **Graphical event routing** — for any subscribed event channel, visually select (checkboxes) which
   publish channels, integration hooks, *and* alert rules the processed result should fan out to,
   instead of one implicit default channel. See "Event routing" below.
@@ -82,8 +88,9 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   operators can manage orgs/events and reprocess transactions; admins additionally manage users,
   integrations, and global admin configuration.
 - **Projects** — an organizational grouping (a sidebar switcher + management page) for orgs,
-  events, integrations, and more under a named customer/solution. **Not yet an access-control
-  boundary** — see "Projects" below for exactly what that means today.
+  events, integrations, and more under a named customer/solution, with real server-side data
+  filtering. **Membership doesn't grant or restrict permissions yet** — see "Projects" below for
+  exactly what that means today.
 - **Single sign-on (optional)** — generic OpenID Connect support that works with Okta, Azure AD /
   Entra ID, Auth0, Google Workspace, Keycloak, or any other OIDC-compliant IdP. Disabled by default
   (falls back to local username/password); enable by setting `SSO_ISSUER`/`SSO_CLIENT_ID`. New SSO
@@ -279,31 +286,42 @@ Manage users from **Users** in the admin console (admin role required), or via t
 (`GET/POST/PUT/DELETE /api/users`). You can't delete or demote your own account — have another
 admin do it if needed.
 
-## Projects — an organizational label, not yet an access-control boundary
+## Projects — data filtering is real; permission enforcement isn't yet
 
 **Projects** group orgs, event channels, integrations, processors, rules, alerts, and SharePoint
-connections under a named "customer or solution" (a `project_id` field on each). A sidebar switcher
-(persisted in the browser's `localStorage`, not server-side session state) sets which project's
-resources the UI filters to; a dedicated **Projects** page manages projects and their membership
-(`project_admin` / `operator` / `viewer` per member).
+connections under a named "customer or solution" (a `project_id` field on each — `null`/absent
+means "global," which processors and rules can deliberately use for a shared library available
+under every project). A sidebar switcher (`ProjectSwitcher.jsx`, persisted in the browser's
+`localStorage`, not server-side session state) sets the active project; a dedicated **Projects**
+page manages projects and their membership (`project_admin` / `operator` / `viewer` per member).
+Transactions and System Logs also carry `project_id`/`project_name` (resolved from the triggering
+org when each record is created), so both are filterable by project too.
 
-**Read this carefully before relying on Projects for isolation between customers or teams: as
-built today, project membership is stored but not enforced.** Every mutating endpoint under
-`/api/projects` requires the existing *global* `admin` role — there is no dependency anywhere in
-the codebase that checks a user's *project* role to grant or restrict access to that project's
-orgs/events/etc. A global `operator` or `admin` can see and modify every project's resources
-regardless of whether they're a listed member of that project at all; a global `viewer` remains
-read-only everywhere, project membership or not. In its current state, Projects is a **filtering
-and organizing convenience** — "show me just this customer's orgs in the sidebar" — not a tenant
-boundary. If you need real per-project data isolation (e.g. genuinely separate customers who
-shouldn't see each other's Salesforce orgs at all), that enforcement doesn't exist yet and would
-need to be added to every relevant router.
+**Server-side filtering is real** — every list endpoint (`orgs`, `events`, `integrations`, `rules`,
+`processors`, `alerts`, `sharepoint`) filters through one shared helper,
+`app/project_scope.py:filter_by_project()`, applied consistently:
 
-**One known filtering bug, not just a design gap:** `GET /api/orgs` accepts a `project_id` query
-parameter but the parameter is currently unused in the handler — the org list always returns every
-org regardless of the active project. `GET /api/events` *does* filter correctly, but inclusively:
-it returns a project's own events **plus** any event with no `project_id` set at all, rather than
-strictly that project's events.
+- **Strict** (orgs, events, integrations, SharePoint connections/actions): only rows matching the
+  requested `project_id` — a resource with no project at all is excluded, not shown everywhere.
+- **Library-style** (rules, processors): rows matching the requested `project_id` **or** with no
+  `project_id` at all (the shared/global library), toggleable per-request via `include_global`.
+
+This means the org-list bug from earlier ("`project_id` accepted but ignored") is genuinely fixed,
+and so is the inconsistency where the old inline filter in `events.py` treated unscoped events
+differently from how the frontend treated unscoped orgs — both now go through the same function
+with an explicit, documented rule instead of two different ad-hoc ones.
+
+**What's still not there: permission enforcement based on project membership.** Every mutating
+endpoint under `/api/projects`, and every create/update/delete on orgs/events/integrations/etc.,
+still gates purely on the existing *global* role (`require_role("operator")`/`require_role("admin")`)
+— nothing checks whether the calling user is actually a member of the specific project they're
+modifying, let alone what role they hold within it. A global `operator` can still create, edit, or
+delete any project's orgs regardless of `project_members`; a `project_admin` membership record
+doesn't currently grant any capability a global `viewer` wouldn't already lack. So: **the data each
+project shows is now correctly scoped, but who's allowed to change what is still governed entirely
+by the pre-existing global roles, not by project membership.** If you need "this person can manage
+Project A but not Project B," that authorization layer doesn't exist yet — `project_members` is
+recorded but not yet consulted by any permission check.
 
 **Migration**: a "Default Project" is created automatically every time the server starts (if it
 doesn't exist yet — idempotent, not something you need to run manually), and on that same startup
@@ -525,6 +543,29 @@ This is consistent with the existing trust model (a processor upload is already 
 equivalent to deploying server code), but it raises the stakes: only upload processors you trust
 as much as your own server code.
 
+## Schema validation (subscribe) — a second, independent gate
+
+Alongside the rule engine gate, a subscribed event channel can carry an optional **JSON Schema**
+(`payload_schema`, Draft-07) checked against every inbound payload, **before the rule gate runs** —
+so a rule referencing a field that no longer exists because Salesforce's schema drifted fails
+loudly at the schema step instead of behaving strangely inside the rule itself.
+
+- **`schema_validation_mode`**: `off` (default) / `warn` (log every mismatch, then continue
+  processing anyway — the escape hatch for a schema migration window) / `reject` (fail the
+  transaction immediately, with every violation listed, not just the first).
+- **Don't want to hand-write JSON Schema?** Paste a `sample_payload` and call
+  `POST /api/events/schema/infer` — it returns a best-effort Draft-07 schema inferred from the
+  sample's actual shape (types, nested objects/arrays), which you then edit down rather than
+  starting from a blank schema. The Event Flow Designer's Schema node wires this up as a one-click
+  "generate from sample" button.
+- **`POST /api/events/schema/validate`** — test a payload against either an inline schema or an
+  existing event's stored one (`event_id`), without touching the live pipeline. Useful for
+  confirming a schema is right before flipping `schema_validation_mode` to `reject`.
+- A `reject`-mode failure currently lands as an ordinary `failed` transaction (with the full list
+  of schema violations in the error message) — it isn't yet distinguished from a processing
+  failure by its own status, so filtering the Transactions page specifically for "schema rejected"
+  events means reading the error text rather than filtering by status.
+
 ## Rule engine (GoRules JDM / Zen Engine) — a validation gate, not a processing mode
 
 **Rules** are evaluated by GoRules' open-source [Zen Engine](https://gorules.io) against the JSON
@@ -593,18 +634,20 @@ Open **Flow** on any subscribed channel (Event Configuration) to open `/events/:
 Visualizes the pipeline as a React Flow graph:
 
 ```
-Salesforce Event → Rule gate → Processor → Map (optional) → ┬─ Publish channel(s)
-                                                             ├─ Integration hook(s)  (incl. SharePoint / Teams / …)
-                                                             └─ Alert(s)
+Salesforce Event → Schema gate (optional) → Rule gate → Processor → Map (optional) → Publish field map (optional) → ┬─ Publish channel(s)
+                                                                                                                     ├─ Integration hook(s)  (incl. SharePoint / Teams / …)
+                                                                                                                     └─ Alert(s)
 ```
 
 The left sidebar edits the same fields as the classic routing dialog (rule, processing mode,
 processor/action id, auto-publish, multi-select publish channels / integrations / alerts), plus
-one field the classic Routing modal doesn't expose yet: the optional Map step's
-`result_transform_template` (see "Result transform (Map step)" above) — the flow designer is
-currently the only place to configure it. **Save flow** writes those fields via
-`PUT /api/events/{id}` — no separate graph storage. Nodes are draggable for layout; removing a
-fan-out node unchecks that target.
+four fields the classic Routing modal doesn't expose yet: `payload_schema` /
+`schema_validation_mode` (with a one-click "generate schema from sample payload" action calling
+`/api/events/schema/infer`), `result_transform_template` (see "Result transform (Map step)"), and
+`publish_field_map` (see "Publish field mapping") — the flow designer is currently the only place
+to configure any of these. **Save flow** writes those fields via `PUT /api/events/{id}` — no
+separate graph storage. Nodes are draggable for layout; removing a fan-out node unchecks that
+target.
 
 Requires the frontend dependency `@xyflow/react` (`npm install` in `frontend/`).
 
@@ -696,6 +739,19 @@ is the "Map" step in a Power Automate-style read: `Subscribe → Process → Map
   a typo here should never take down the whole event.
 - **Configured from the Event Flow Designer** (not yet in the classic Routing modal) — open an
   event's flow and set it on the processor step.
+
+### Publish field mapping — a second, later mapping step
+
+A channel can *also* carry `publish_field_map` — a flat `{"SalesforceFieldName": "{{ jinja over payload/result }}"}`
+dict applied **after** the Map/Transform step above, immediately before the result is handed to the
+publish/fan-out stage. Where Result transform reshapes the *whole* result as one Jinja template
+(useful when a processor's output doesn't look anything like what you want to publish), Publish
+field mapping builds the *exact* outbound Salesforce field set one field at a time — the more
+direct tool when you know precisely which target fields you're populating and don't need to
+restructure everything else. Pipeline order: `Process → Map/Transform → Publish field map → Publish`.
+Leaving it empty (the default) publishes the (possibly Map-transformed) result unchanged, exactly
+as before this feature existed. A single field's expression failing logs a warning and that field
+comes through as `null` rather than aborting the whole publish.
 
 ## Alerts
 
@@ -826,8 +882,9 @@ single JSON file (`GET /api/admin-config/export`), and imports it back (`POST /a
 — here or on a different instance:
 
 - Salesforce orgs, event channels/routing, integrations (including SharePoint File/List sinks),
-  SharePoint connections + file/list actions, alerts, rules (including their JDM), and every Admin
-  Configuration setting (DSSClient, Langflow, Email/SMTP, message broker, processing mode).
+  SharePoint connections + file/list actions, alerts, rules (including their JDM), **projects and
+  project members**, and every Admin Configuration setting (DSSClient, Langflow, Email/SMTP,
+  message broker, processing mode).
 - **Uploaded processor scripts, including their actual code** — not just metadata, so a restored
   instance can run them immediately.
 - Records are upserted by their original id, which preserves the links between an event's routing
@@ -836,7 +893,9 @@ single JSON file (`GET /api/admin-config/export`), and imports it back (`POST /a
 **Deliberately excluded: local user accounts.** User management is treated as a separate identity
 concern from application configuration — re-importing accounts (especially password hashes) across
 environments is a different kind of risk than restoring integration settings, so it's left out on
-purpose.
+purpose. One consequence, since `project_members` *is* exported: a member record references a
+`user_id` that won't exist on a target instance with different accounts — re-link project
+membership by hand after importing into a fresh instance rather than assuming it carries over.
 
 **The export file contains credentials in plaintext** — org client secrets/passwords/security
 tokens, SharePoint client secrets, integration API keys/webhook signing secrets, DSSClient/Langflow
