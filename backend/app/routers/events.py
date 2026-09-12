@@ -12,10 +12,11 @@ router = APIRouter(prefix="/api/events", tags=["events"], dependencies=[Depends(
 
 
 @router.get("", response_model=List[EventConfigOut])
-def list_event_configs(org_id: Optional[str] = None):
-    if org_id:
-        return event_configs_table.search(Q.org_id == org_id)
-    return event_configs_table.all()
+def list_event_configs(org_id: Optional[str] = None, project_id: Optional[str] = None):
+    rows = event_configs_table.search(Q.org_id == org_id) if org_id else event_configs_table.all()
+    if project_id:
+        rows = [r for r in rows if r.get("project_id") == project_id or not r.get("project_id")]
+    return rows
 
 
 @router.post("", response_model=EventConfigOut, dependencies=[Depends(require_role("operator"))])

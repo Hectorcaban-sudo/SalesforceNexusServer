@@ -30,6 +30,8 @@ from .routers import execute as execute_router
 from .routers import rules as rules_router
 from .routers import audit as audit_router
 from .routers import sharepoint as sharepoint_router
+from .routers import projects as projects_router
+from .routers.projects import ensure_default_project
 from .audit import AuditMiddleware
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -42,6 +44,8 @@ background_tasks = []
 async def lifespan(app: FastAPI):
     logger = setup_logging()
     bootstrap_default_admin()
+    from .routers.projects import ensure_default_project
+    ensure_default_project()
     log_event("info", f"{settings.app_name} starting up")
 
     await broker.configure_from_settings()
@@ -95,6 +99,7 @@ app.include_router(execute_router.router)
 app.include_router(rules_router.router)
 app.include_router(audit_router.router)
 app.include_router(sharepoint_router.router)
+app.include_router(projects_router.router)
 
 
 @app.get("/api/health")

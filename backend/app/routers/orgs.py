@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from typing import List
+from typing import Optional, List
 
 from ..auth import get_current_user, require_role
 from ..database import orgs_table, Q
@@ -20,7 +20,7 @@ def _mask(org: dict) -> dict:
 
 
 @router.get("", response_model=List[OrgOut])
-def list_orgs():
+def list_orgs(project_id: Optional[str] = None, ):
     orgs = orgs_table.all()
     for o in orgs:
         o["status"] = cometd_manager.status_for(o["id"]) if o.get("active") else "disconnected"

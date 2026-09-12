@@ -14,9 +14,13 @@ import Security from './pages/Security'
 import Integrations from './pages/Integrations'
 import Alerts from './pages/Alerts'
 import SharePoint from './pages/SharePoint'
+import Projects from './pages/Projects'
+import Processors from './pages/Processors'
+import Rules from './pages/Rules'
 import Layout from './components/Layout'
 import { isAuthed } from './lib/api'
 import { AuthProvider, useAuth, hasRole } from './lib/AuthContext'
+import { ProjectProvider } from './lib/ProjectContext'
 
 function RequireAuth({ children }) {
   const navigate = useNavigate()
@@ -30,7 +34,9 @@ function RequireAuth({ children }) {
   if (!isAuthed()) return <Navigate to="/login" replace />
   return (
     <AuthProvider>
-      <Layout>{children}</Layout>
+      <ProjectProvider>
+        <Layout>{children}</Layout>
+      </ProjectProvider>
     </AuthProvider>
   )
 }
@@ -57,9 +63,12 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/sso-callback" element={<SsoCallback />} />
         <Route path="/" element={<RequireAuth><Dashboard /></RequireAuth>} />
+        <Route path="/projects" element={<RequireAuth><RequireRole role="admin"><Projects /></RequireRole></RequireAuth>} />
         <Route path="/orgs" element={<RequireAuth><Orgs /></RequireAuth>} />
         <Route path="/events" element={<RequireAuth><EventsConfig /></RequireAuth>} />
         <Route path="/events/:eventId/flow" element={<RequireAuth><EventFlowDesigner /></RequireAuth>} />
+        <Route path="/processors" element={<RequireAuth><RequireRole role="admin"><Processors /></RequireRole></RequireAuth>} />
+        <Route path="/rules" element={<RequireAuth><RequireRole role="admin"><Rules /></RequireRole></RequireAuth>} />
         <Route path="/transactions" element={<RequireAuth><Transactions /></RequireAuth>} />
         <Route path="/logs" element={<RequireAuth><Logs /></RequireAuth>} />
         <Route path="/admin-config" element={<RequireAuth><RequireRole role="admin"><AdminConfig /></RequireRole></RequireAuth>} />
@@ -73,3 +82,4 @@ export default function App() {
     </BrowserRouter>
   )
 }
+'''

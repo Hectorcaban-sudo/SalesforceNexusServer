@@ -9,6 +9,43 @@ def new_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+# ---------- Projects (customer / solution boundary) ----------
+class ProjectBase(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    enabled: bool = True
+
+
+class ProjectCreate(ProjectBase):
+    pass
+
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+class ProjectOut(ProjectBase):
+    id: str
+    created_at: Optional[str] = None
+
+
+class ProjectMemberOut(BaseModel):
+    id: str
+    project_id: str
+    user_id: str
+    username: Optional[str] = None
+    role: str = "project_admin"  # project_admin | operator | viewer
+
+
+class ProjectMemberCreate(BaseModel):
+    user_id: str
+    role: str = "project_admin"
+
+
+
+
 def now_ts() -> float:
     return time.time()
 
@@ -63,6 +100,7 @@ class AuthType(str, Enum):
 
 
 class OrgBase(BaseModel):
+    project_id: Optional[str] = None
     name: str
     description: Optional[str] = ""
     login_url: str = "https://login.salesforce.com"
@@ -109,6 +147,7 @@ class EventDirection(str, Enum):
 
 class EventConfigBase(BaseModel):
     org_id: str
+    project_id: Optional[str] = None
     channel: str                       # e.g. /event/My_Custom_Event__e
     direction: EventDirection
     enabled: bool = True

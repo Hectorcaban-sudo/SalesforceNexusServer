@@ -24,7 +24,8 @@ UPDATE / DELETE syntax differences between those four engines.
 
 Tables:
   - users, orgs, event_configs, transactions, logs, admin_settings,
-    integrations, processors, alerts, rules, audit_log, auth_events
+    integrations, processors, alerts, rules, audit_log, auth_events,
+    projects, project_members
   (see each module for what's actually stored in it)
 """
 import json
@@ -245,6 +246,8 @@ auth_events_table = _db.table("auth_events")
 sharepoint_connections_table = _db.table("sharepoint_connections")
 sharepoint_file_actions_table = _db.table("sharepoint_file_actions")
 sharepoint_list_actions_table = _db.table("sharepoint_list_actions")
+projects_table = _db.table("projects")
+project_members_table = _db.table("project_members")
 
 
 def db_lock():
