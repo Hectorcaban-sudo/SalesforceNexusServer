@@ -37,6 +37,7 @@ import json
 import os
 import sys
 import uuid
+from typing import Any, Iterator, Optional
 
 import requests
 
