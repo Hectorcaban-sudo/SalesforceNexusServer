@@ -36,9 +36,11 @@ def _mask(cfg: dict) -> dict:
 
 
 @router.get("", response_model=List[IntegrationOut])
-def list_integrations(project_id: Optional[str] = None):
+def list_integrations(project_id: Optional[str] = None, include_global: bool = True):
+    """Unscoped (legacy) integrations are treated as shared hooks so they
+    appear both on the Integrations tab and in event routing."""
     from ..project_scope import filter_by_project
-    rows = filter_by_project(integrations_table.all(), project_id, include_global=False)
+    rows = filter_by_project(integrations_table.all(), project_id, include_global=include_global)
     return [_mask(i) for i in rows]
 
 

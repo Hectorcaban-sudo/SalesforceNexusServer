@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react'
 import { Plus, Trash2, Send, Share2, Webhook, MessageSquare, Database, Cloud, Link2, BellOff, Mail, Pencil, Code2, Eye } from 'lucide-react'
 import api from '../lib/api'
-import { useProject, belongsToProject } from '../lib/ProjectContext'
+import { useProject, belongsToProject, isGlobalResource, visibleLibraryItem } from '../lib/ProjectContext'
 import { TruncatedWithPopup } from '../components/UI'
 
 const TYPE_META = {
@@ -95,8 +95,8 @@ export default function Integrations() {
   const [orgs, setOrgs] = useState([])
   const [items, setItems] = useState([])
   const visibleItems = useMemo(
-    () => (items || []).filter((row) => belongsToProject(row, projectId, project)),
-    [items, projectId, project],
+    () => (items || []).filter((row) => visibleLibraryItem(row, projectId, { includeGlobal: true })),
+    [items, projectId],
   )
   const [modalOpen, setModalOpen] = useState(false)
   const [editingId, setEditingId] = useState(null)
@@ -110,7 +110,7 @@ export default function Integrations() {
   const previewTimer = useRef(null)
 
   async function load() {
-    const pid = projectId ? { project_id: projectId } : {}
+    const pid = projectId ? { project_id: projectId, include_global: true } : {}
     const [o, i, sf, sl] = await Promise.all([
       api.get('/orgs', { params: pid }),
       api.get('/integrations', { params: pid }),
@@ -293,7 +293,12 @@ export default function Integrations() {
                     <Icon size={16} color="var(--accent-purple)" />
                   </div>
                   <div>
-                    <h4>{item.name}</h4>
+                    <h4 style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      {item.name}
+                      {isGlobalResource(item)
+                        ? <span className="badge badge-blue" style={{ fontSize: 10 }}>Shared</span>
+                        : <span className="badge badge-gray" style={{ fontSize: 10 }}>Project</span>}
+                    </h4>
                     <div className="url">{TYPE_META[item.type]?.label || item.type}</div>
                   </div>
                 </div>

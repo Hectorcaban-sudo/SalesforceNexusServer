@@ -52,7 +52,7 @@ export default function EventsConfig() {
     const [o, c, i, p, a, r] = await Promise.all([
       api.get('/orgs', { params: pid }),
       api.get('/events', { params: pid }),
-      api.get('/integrations', { params: pid }),
+      api.get('/integrations', { params: lib }),
       api.get('/processors', { params: lib }),
       api.get('/alerts', { params: pid }),
       api.get('/rules', { params: lib }),
