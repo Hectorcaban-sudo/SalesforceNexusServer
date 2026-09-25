@@ -7,7 +7,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import {
   ArrowLeft, Save, Radio, ShieldCheck, Cpu, ArrowUpFromLine,
-  Share2, BellRing, X, FileJson, Wand2, Map, Ban, GripVertical,
+  Share2, BellRing, X, FileJson, Wand2, Map, Ban, GripVertical, GitBranch,
 } from 'lucide-react'
 import api from '../lib/api'
 import { isGlobalResource, useProject } from '../lib/ProjectContext'
@@ -26,7 +26,9 @@ const PALETTE = [
   { type: 'publish', label: 'Publish', icon: ArrowUpFromLine, accent: '#22c55e', once: false },
   { type: 'integration', label: 'Integration', icon: Share2, accent: '#8b5cf6', once: false },
   { type: 'alert', label: 'Alert', icon: BellRing, accent: '#ef4444', once: false },
-  { type: 'stop', label: 'Stop publish', icon: Ban, accent: '#f43f5e', once: true },
+  { type: 'stop', label: 'Stop', icon: Ban, accent: '#f43f5e', once: false },
+  { type: 'if', label: 'If / else', icon: GitBranch, accent: '#f59e0b', once: false },
+  { type: 'switch', label: 'Switch', icon: GitBranch, accent: '#fb7185', once: false },
 ]
 
 const defaultEdgeOptions = {
@@ -69,8 +71,38 @@ function makeNodeComponent(meta) {
   }
 }
 
-const nodeTypes = Object.fromEntries(PALETTE.map((p) => [p.type, makeNodeComponent(p)]))
+function BranchNode({ data, selected, accent, icon: Icon, handles }) {
+  return (
+    <div className={`flow-node ${selected ? 'selected' : ''}`} style={{ '--node-accent': accent }}>
+      <Handle type="target" position={Position.Left} className="flow-handle" />
+      <div className="flow-node-head">
+        <div className="flow-node-icon" style={{ background: `${accent}22`, color: accent }}>
+          <Icon size={14} />
+        </div>
+        <div className="flow-node-titles">
+          <div className="flow-node-title">{data.label}</div>
+          {data.subtitle && <div className="flow-node-sub">{data.subtitle}</div>}
+        </div>
+      </div>
+      {handles.map((h, i) => (
+        <Handle key={h.id} type="source" position={Position.Right} id={h.id} className="flow-handle"
+          style={{ top: 24 + i * 16 }} title={h.label} />
+      ))}
+    </div>
+  )
+}
+
+const nodeTypes = Object.fromEntries(PALETTE.filter((p) => !['if', 'switch'].includes(p.type)).map((p) => [p.type, makeNodeComponent(p)]))
 nodeTypes.source = makeNodeComponent({ accent: '#f97316', icon: Radio, label: 'Source' })
+nodeTypes.if = function IfFlowNode({ data, selected }) {
+  return <BranchNode data={data} selected={selected} accent="#f59e0b" icon={GitBranch}
+    handles={[{ id: 'true', label: 'true' }, { id: 'false', label: 'false' }]} />
+}
+nodeTypes.switch = function SwitchFlowNode({ data, selected }) {
+  const cases = String(data.switchCases || 'default').split(',').map((s) => s.trim()).filter(Boolean)
+  const handles = [...new Set(cases.concat(['default']))].map((c) => ({ id: c, label: c }))
+  return <BranchNode data={data} selected={selected} accent="#fb7185" icon={GitBranch} handles={handles} />
+}
 
 function graphFromEvent(event, refs) {
   const { rules, pubs, integrations, alerts } = refs
@@ -387,7 +419,46 @@ function NodeConfigModal({ node, refs, onClose, onSave }) {
             </div>
           )}
           {type === 'stop' && (
-            <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Disables auto-publish to Salesforce. Integrations and alerts can still run.</p>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+              Hard stop: nothing after this node runs. Integrations already visited have already fired. Salesforce publish nodes after this are skipped.
+            </p>
+          )}
+          {type === 'if' && (
+            <>
+              <div className="field">
+                <label>Field (payload.Status or result.status)</label>
+                <input value={data.condField || 'payload.Status'} onChange={(e) => setData({ ...data, condField: e.target.value, subtitle: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>Operator</label>
+                <select value={data.condOp || 'eq'} onChange={(e) => setData({ ...data, condOp: e.target.value })}>
+                  <option value="eq">equals</option>
+                  <option value="ne">not equals</option>
+                  <option value="contains">contains</option>
+                  <option value="exists">exists</option>
+                  <option value="gt">greater than</option>
+                  <option value="lt">less than</option>
+                </select>
+              </div>
+              <div className="field">
+                <label>Value</label>
+                <input value={data.condValue || ''} onChange={(e) => setData({ ...data, condValue: e.target.value })} />
+              </div>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Connect the <b>true</b> handle and <b>false</b> handle to different branches.</p>
+            </>
+          )}
+          {type === 'switch' && (
+            <>
+              <div className="field">
+                <label>Field</label>
+                <input value={data.switchField || 'payload.Type'} onChange={(e) => setData({ ...data, switchField: e.target.value, subtitle: e.target.value })} />
+              </div>
+              <div className="field">
+                <label>Cases (comma-separated) + default</label>
+                <input value={data.switchCases || 'A,B,default'} onChange={(e) => setData({ ...data, switchCases: e.target.value })} />
+              </div>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Each case name is a source handle. Unmatched values use <b>default</b>.</p>
+            </>
           )}
           {type === 'source' && (
             <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Subscribe channel is fixed for this flow.</p>
@@ -414,9 +485,14 @@ function FlowCanvasInner({ event, refs }) {
 
   useEffect(() => {
     if (!event) return
-    const g = graphFromEvent(event, refs)
-    setNodes(g.nodes)
-    setEdges(g.edges)
+    if (event.flow_graph && Array.isArray(event.flow_graph.nodes) && event.flow_graph.nodes.length) {
+      setNodes(event.flow_graph.nodes)
+      setEdges(event.flow_graph.edges || [])
+    } else {
+      const g = graphFromEvent(event, refs)
+      setNodes(g.nodes)
+      setEdges(g.edges)
+    }
     setDirty(false)
   }, [event, refs])
 
@@ -458,7 +534,10 @@ function FlowCanvasInner({ event, refs }) {
     setSaving(true)
     setError(null)
     try {
-      const payload = configFromGraph(nodes)
+      const payload = {
+        ...configFromGraph(nodes),
+        flow_graph: { nodes, edges },
+      }
       await api.put(`/events/${event.id}`, payload)
       setDirty(false)
     } catch (err) {
@@ -483,7 +562,7 @@ function FlowCanvasInner({ event, refs }) {
           <div>
             <div className="flow-breadcrumb">Events / <code>{event?.channel}</code> / Flow</div>
             <h1 className="flow-title">Event Flow Designer</h1>
-            <p className="flow-subtitle">Phase A — drag from palette, connect handles, click a node to configure.</p>
+            <p className="flow-subtitle">The canvas is the pipeline. The worker walks nodes in order. If / Switch pick a branch. Stop aborts the rest.</p>
           </div>
         </div>
         <div className="flow-toolbar-right">

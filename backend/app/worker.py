@@ -529,6 +529,26 @@ async def inbound_worker():
             log_event("info", "Worker: skipping cancelled transaction", transaction_id=transaction_id)
             return
 
+        src_cfg_early = _source_event_config(org_id, source_channel)
+        if src_cfg_early and (src_cfg_early.get("flow_graph") or {}).get("nodes"):
+            from .flow_walker import run_flow_graph
+            await run_flow_graph(
+                src_cfg=src_cfg_early,
+                transaction_id=transaction_id,
+                org_id=org_id,
+                source_channel=source_channel,
+                payload=payload,
+                parent_carrier=parent_carrier,
+                process_payload=process_payload,
+                apply_result_transform=apply_result_transform,
+                apply_publish_field_map=apply_publish_field_map,
+                validate_payload_schema=validate_payload_schema,
+                evaluate_rule_gate=evaluate_rule_gate,
+                start_span=start_span,
+                inject_trace_context=inject_trace_context,
+            )
+            return
+
         _, _, routed_alert_ids = _resolve_routes(org_id, source_channel)
 
         # ---- Schema validation (before rule gate / processor) ----

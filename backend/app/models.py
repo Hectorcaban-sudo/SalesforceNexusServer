@@ -191,6 +191,8 @@ class EventConfigBase(BaseModel):
     schema_validation_mode: str = "off"  # off | warn | reject
     # Publish mapping: Salesforce field name -> Jinja2 over {payload, result}
     publish_field_map: Optional[dict] = None
+    # Visual flow designer graph {nodes, edges}. When present the worker walks it.
+    flow_graph: Optional[dict] = None
 
 
 class EventConfigCreate(EventConfigBase):
@@ -214,6 +216,7 @@ class EventConfigUpdate(BaseModel):
     payload_schema: Optional[dict] = None
     schema_validation_mode: Optional[str] = None
     publish_field_map: Optional[dict] = None
+    flow_graph: Optional[dict] = None
 
 
 class EventConfigOut(EventConfigBase):

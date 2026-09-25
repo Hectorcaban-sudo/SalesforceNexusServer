@@ -184,20 +184,19 @@ export default function EventsConfig() {
                     <td><code className="pill">{c.channel}</code></td>
                     <td>{orgName(c.org_id)}</td>
                     <td>
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        <button className="btn btn-sm" onClick={() => openRouting(c)}>
-                          <GitBranch size={12} />
-                          {hasRule && 'gated · '}
-                          {autoPublishOff
-                            ? 'No auto-publish'
+                      <button className="btn btn-sm" title="Pipeline is edited in the Flow designer" onClick={() => navigate(`/events/${c.id}/flow`)}>
+                        <Workflow size={12} />
+                        {(c.flow_graph && (c.flow_graph.nodes || []).length)
+                          ? `Flow · ${(c.route_integration_ids || []).length} hook${(c.route_integration_ids || []).length === 1 ? '' : 's'}`
+                          : (hasRule && 'gated · ') || ''}
+                        {!(c.flow_graph && (c.flow_graph.nodes || []).length)
+                          ? (autoPublishOff
+                            ? 'Legacy · no auto-publish'
                             : chCount === 0 && intCount === 0 && !hasProcessorOverride
-                              ? 'Auto (default)'
-                              : `${chCount} channel${chCount === 1 ? '' : 's'} · ${intCount} hook${intCount === 1 ? '' : 's'}${hasProcessorOverride ? ' · custom processor' : ''}`}
-                        </button>
-                        <button className="btn btn-sm" title="Open visual flow designer" onClick={() => navigate(`/events/${c.id}/flow`)}>
-                          <Workflow size={12} /> Flow
-                        </button>
-                      </div>
+                              ? 'Open flow'
+                              : `Legacy · ${chCount} ch · ${intCount} hooks`)
+                          : ''}
+                      </button>
                     </td>
                     <td>
                       <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: 0, cursor: 'pointer' }}>

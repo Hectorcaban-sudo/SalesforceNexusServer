@@ -37,18 +37,12 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
 - **Validation rules (GoRules JDM / Zen Engine)** — a *gate*, not a processing mode: assign a
   no-code decision graph to a subscribed event channel to decide whether an event gets processed at
   all before any processing mode runs. See "Rule engine" below.
-- **JSON Schema validation** — an independent, earlier gate: check every inbound payload against an
-  optional Draft-07 schema (off / warn / reject), with a "generate a starter schema from a sample
-  payload" helper so you don't have to hand-write one. See "Schema validation" below.
-- **Result transform and publish field mapping** — reshape a processor's output (Jinja, whole-result)
-  and/or build the exact outbound Salesforce field set (Jinja, field-by-field) before publish. See
-  "Result transform (Map step)" below.
-- **Graphical event routing** — for any subscribed event channel, visually select (checkboxes) which
-  publish channels, integration hooks, *and* alert rules the processed result should fan out to,
-  instead of one implicit default channel. See "Event routing" below.
-- **Event Flow Designer** — a React Flow canvas (`/events/:id/flow`) that visualizes the same
-  pipeline (Source → Rule → Processor → publish/integrations/alerts) and saves back to the existing
-  routing/processor fields. See "Event Flow Designer" below.
+- **Projects** — group orgs, events, integrations, and SharePoint actions by customer/project.
+  Processors and rules can be **global** (edited only under Administration) or project-scoped.
+- **Event Flow Designer + walker** — the canvas (`/events/:id/flow`) is the pipeline editor.
+  Saving stores `flow_graph` on the event. The worker walks that graph (order, If/Switch
+  branches, Stop abort, integrations when their node is visited). Events without a saved graph
+  still use the legacy linear path. See "Event Flow Designer" below.
 - **SharePoint Online (GCC High)** — multi-connection admin, reusable **File** (upload + metadata +
   check-in) and **List** (create/update) actions with Jinja2 field maps, Graph-backed site/drive/list
   pickers, usable as a **processing mode** *or* as an **integration fan-out** sink. See
@@ -87,10 +81,6 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   every mutating API route. Viewers get read-only access to the dashboard/transactions/logs;
   operators can manage orgs/events and reprocess transactions; admins additionally manage users,
   integrations, and global admin configuration.
-- **Projects** — an organizational grouping (a sidebar switcher + management page) for orgs,
-  events, integrations, and more under a named customer/solution, with real server-side data
-  filtering. **Membership doesn't grant or restrict permissions yet** — see "Projects" below for
-  exactly what that means today.
 - **Single sign-on (optional)** — generic OpenID Connect support that works with Okta, Azure AD /
   Entra ID, Auth0, Google Workspace, Keycloak, or any other OIDC-compliant IdP. Disabled by default
   (falls back to local username/password); enable by setting `SSO_ISSUER`/`SSO_CLIENT_ID`. New SSO
@@ -151,10 +141,12 @@ sfnexus/
 │   │   │                         (with org/admin-config context passed via env vars)
 │   │   ├── rules.py                GoRules JDM decision graph storage + evaluation (Zen Engine)
 │   │   ├── alerts.py               Alert rules - fire on success/failure, deliver via an integration sink
+│   │   ├── flow_walker.py         Walks a saved Event Flow graph (if/switch/stop/hooks)
+│   │   ├── projects.py            Multi-project scoping + default project bootstrap
 │   │   ├── worker.py             The "internal function": processes inbound events
 │   │   │                         (via DSSClient/Langflow/custom script/SharePoint/rule gate),
-│   │   │                         fans results out to selected publish channels + integrations +
-│   │   │                         alerts, and handles reprocessing
+│   │   │                         walks flow_graph when present, otherwise fans out via
+│   │   │                         legacy route_* fields, and handles reprocessing
 │   │   ├── transactions.py       Transaction audit-trail helpers
 │   │   └── routers/              /api/auth, /api/orgs, /api/events, /api/transactions,
 │   │                             /api/logs, /api/dashboard, /api/admin-config, /api/users,
@@ -186,11 +178,13 @@ docker compose up --build
 ```
 
 That's it — the multi-stage `Dockerfile` builds the React admin console and installs the Python
-backend in one image, and `docker-compose.yml` wires up:
-- Port **8000** exposed on the host — open **http://localhost:8000**
-- Two named volumes (`nexus-data`, `nexus-logs`) so the SQLite database and log files survive
-  container restarts and rebuilds
-- A container healthcheck against `/api/health`
+backend in one image. Current `docker-compose.yml` (network name **Nexus**, ports on `0.0.0.0`) wires up:
+- **nexus** — port **8000** — http://localhost:8000
+- **postgres** — port **5432**
+- **rabbitmq** — ports **5672** (AMQP) and **15672** (management UI)
+- **flowise** (optional) — port **3000** — see `docs/FLOWISE.md`
+- Named volumes for app data/logs, Postgres, RabbitMQ, and Flowise
+- Windows rebuild via WSL: `deploy-wsl.bat` / `stop-wsl.bat`
 
 To run it without Compose:
 
@@ -285,48 +279,6 @@ Three roles, enforced server-side on every route (not just hidden in the UI):
 Manage users from **Users** in the admin console (admin role required), or via the API
 (`GET/POST/PUT/DELETE /api/users`). You can't delete or demote your own account — have another
 admin do it if needed.
-
-## Projects — data filtering is real; permission enforcement isn't yet
-
-**Projects** group orgs, event channels, integrations, processors, rules, alerts, and SharePoint
-connections under a named "customer or solution" (a `project_id` field on each — `null`/absent
-means "global," which processors and rules can deliberately use for a shared library available
-under every project). A sidebar switcher (`ProjectSwitcher.jsx`, persisted in the browser's
-`localStorage`, not server-side session state) sets the active project; a dedicated **Projects**
-page manages projects and their membership (`project_admin` / `operator` / `viewer` per member).
-Transactions and System Logs also carry `project_id`/`project_name` (resolved from the triggering
-org when each record is created), so both are filterable by project too.
-
-**Server-side filtering is real** — every list endpoint (`orgs`, `events`, `integrations`, `rules`,
-`processors`, `alerts`, `sharepoint`) filters through one shared helper,
-`app/project_scope.py:filter_by_project()`, applied consistently:
-
-- **Strict** (orgs, events, integrations, SharePoint connections/actions): only rows matching the
-  requested `project_id` — a resource with no project at all is excluded, not shown everywhere.
-- **Library-style** (rules, processors): rows matching the requested `project_id` **or** with no
-  `project_id` at all (the shared/global library), toggleable per-request via `include_global`.
-
-This means the org-list bug from earlier ("`project_id` accepted but ignored") is genuinely fixed,
-and so is the inconsistency where the old inline filter in `events.py` treated unscoped events
-differently from how the frontend treated unscoped orgs — both now go through the same function
-with an explicit, documented rule instead of two different ad-hoc ones.
-
-**What's still not there: permission enforcement based on project membership.** Every mutating
-endpoint under `/api/projects`, and every create/update/delete on orgs/events/integrations/etc.,
-still gates purely on the existing *global* role (`require_role("operator")`/`require_role("admin")`)
-— nothing checks whether the calling user is actually a member of the specific project they're
-modifying, let alone what role they hold within it. A global `operator` can still create, edit, or
-delete any project's orgs regardless of `project_members`; a `project_admin` membership record
-doesn't currently grant any capability a global `viewer` wouldn't already lack. So: **the data each
-project shows is now correctly scoped, but who's allowed to change what is still governed entirely
-by the pre-existing global roles, not by project membership.** If you need "this person can manage
-Project A but not Project B," that authorization layer doesn't exist yet — `project_members` is
-recorded but not yet consulted by any permission check.
-
-**Migration**: a "Default Project" is created automatically every time the server starts (if it
-doesn't exist yet — idempotent, not something you need to run manually), and on that same startup
-*every* currently-unscoped org, event, integration, processor, rule, alert, and SharePoint
-connection is retroactively attached to it.
 
 ## Database backends
 
@@ -543,29 +495,6 @@ This is consistent with the existing trust model (a processor upload is already 
 equivalent to deploying server code), but it raises the stakes: only upload processors you trust
 as much as your own server code.
 
-## Schema validation (subscribe) — a second, independent gate
-
-Alongside the rule engine gate, a subscribed event channel can carry an optional **JSON Schema**
-(`payload_schema`, Draft-07) checked against every inbound payload, **before the rule gate runs** —
-so a rule referencing a field that no longer exists because Salesforce's schema drifted fails
-loudly at the schema step instead of behaving strangely inside the rule itself.
-
-- **`schema_validation_mode`**: `off` (default) / `warn` (log every mismatch, then continue
-  processing anyway — the escape hatch for a schema migration window) / `reject` (fail the
-  transaction immediately, with every violation listed, not just the first).
-- **Don't want to hand-write JSON Schema?** Paste a `sample_payload` and call
-  `POST /api/events/schema/infer` — it returns a best-effort Draft-07 schema inferred from the
-  sample's actual shape (types, nested objects/arrays), which you then edit down rather than
-  starting from a blank schema. The Event Flow Designer's Schema node wires this up as a one-click
-  "generate from sample" button.
-- **`POST /api/events/schema/validate`** — test a payload against either an inline schema or an
-  existing event's stored one (`event_id`), without touching the live pipeline. Useful for
-  confirming a schema is right before flipping `schema_validation_mode` to `reject`.
-- A `reject`-mode failure currently lands as an ordinary `failed` transaction (with the full list
-  of schema violations in the error message) — it isn't yet distinguished from a processing
-  failure by its own status, so filtering the Transactions page specifically for "schema rejected"
-  events means reading the error text rather than filtering by status.
-
 ## Rule engine (GoRules JDM / Zen Engine) — a validation gate, not a processing mode
 
 **Rules** are evaluated by GoRules' open-source [Zen Engine](https://gorules.io) against the JSON
@@ -593,63 +522,63 @@ Because a rule is data rather than code, it runs directly in-process (no subproc
 needed the way uploaded scripts require) and can't execute arbitrary code or make network calls —
 it only evaluates the decision logic you defined.
 
-- Use the **Test** button (from the Rules tab or the standalone Rules page — both exist and manage
-  the same data; `/rules` and `/processors` were pulled out as standalone top-level pages in the
-  same change that added Projects, but neither is actually project-scoped yet — they show every
-  rule/processor regardless of the active project) to evaluate a rule against a sample
+- Use the **Test** button (from the Rules tab, or per-rule) to evaluate a rule against a sample
   payload before assigning it to a live channel.
 - An invalid decision graph is rejected at save time with a descriptive error.
 - Leaving a channel's validation rule unset preserves the original behavior: every event is
   processed, exactly as before this feature existed.
 
-## Event routing
+## Event routing (legacy)
 
-Each **subscribed** event channel (Event Configuration page) has a **Routing** button that opens a
-graphical multi-select: pick any number of that org's **publish channels**, any number of
-**integration hooks**, and any number of **alert rules** to fan the processed result out to. This
-mirrors a typical event-broker architecture (one event in, many consumers out) — each selected
-publish channel is delivered to and tracked independently (so one Salesforce org accepting the
-event and another rejecting it don't affect each other), and integration/alert dispatch is
-restricted to exactly what you picked rather than every integration/alert that happens to match by
-trigger/org.
+Events is the **catalog** of Salesforce channels (org, name, enabled, schema). The pipeline is
+edited on the **Flow** canvas, not on a routing dialog.
 
-Leaving all three selections empty preserves the original behavior: the first enabled publish
-channel for the org, integrations auto-matched by their own trigger/org settings, and alerts
-auto-matched by their own scope/org settings — so existing setups keep working unchanged until you
-opt into explicit routing.
+If an event has **no** saved `flow_graph`, the worker still uses the older linear path:
 
-The same **Route & process** dialog also has an **"Automatically publish the result back to
-Salesforce"** toggle (on by default). Turn it off for a channel that should be received and
-processed — running through DSSClient/Langflow/a custom script, going through integrations/alerts —
-without ever publishing anything back to Salesforce. Useful for one-way "listen and notify" event
-types that don't have a meaningful reply. The transaction's terminal status becomes `processed`
-instead of `published`/`failed`, and routed (or globally auto-matched) integrations/alerts still
-fire off of it.
+- `processing_mode` / `processor_id` / `rule_id`
+- `route_publish_channel_ids`, `route_integration_ids`, `route_alert_ids`
+- `auto_publish` (false = process + fire hooks, do not publish back to Salesforce)
+- Empty route lists keep auto-match behavior (first publish channel, integrations/alerts by trigger)
 
+Once you **Save flow** in the designer, `flow_graph` is stored and the **walker** owns execution.
+Do not treat the old Events routing checkboxes as the source of truth after that.
 
 ## Event Flow Designer
 
-Open **Flow** on any subscribed channel (Event Configuration) to open `/events/:eventId/flow`.
+Open **Pipeline / Flow** on a subscribed channel → `/events/:eventId/flow`.
 
-Visualizes the pipeline as a React Flow graph:
+The canvas is the pipeline. **Save flow** writes:
+
+- `flow_graph`: `{ nodes, edges }` (what the walker runs)
+- flattened `route_*` / processor / schema fields (summary + legacy fallback)
 
 ```
-Salesforce Event → Schema gate (optional) → Rule gate → Processor → Map (optional) → Publish field map (optional) → ┬─ Publish channel(s)
-                                                                                                                     ├─ Integration hook(s)  (incl. SharePoint / Teams / …)
-                                                                                                                     └─ Alert(s)
+Subscribe → Schema → Rule → Processor → Transform → Publish map
+                 ↘ If / Switch ↗
+                    ├─ Integration (fires when visited)
+                    ├─ Publish channel (queued when visited)
+                    ├─ Alert
+                    └─ Stop (abort: nothing after this node runs)
 ```
 
-The left sidebar edits the same fields as the classic routing dialog (rule, processing mode,
-processor/action id, auto-publish, multi-select publish channels / integrations / alerts), plus
-four fields the classic Routing modal doesn't expose yet: `payload_schema` /
-`schema_validation_mode` (with a one-click "generate schema from sample payload" action calling
-`/api/events/schema/infer`), `result_transform_template` (see "Result transform (Map step)"), and
-`publish_field_map` (see "Publish field mapping") — the flow designer is currently the only place
-to configure any of these. **Save flow** writes those fields via `PUT /api/events/{id}` — no
-separate graph storage. Nodes are draggable for layout; removing a fan-out node unchecks that
-target.
+### Walker rules
 
-Requires the frontend dependency `@xyflow/react` (`npm install` in `frontend/`).
+| Node | Runtime |
+|------|---------|
+| Schema | Validate sample/schema (`off` / `warn` / `reject`) |
+| Rule | GoRules gate; `process=false` skips the event |
+| Processor | Local / DSS / Langflow / custom script / SharePoint |
+| Transform | Jinja2 reshape of the processor result |
+| Publish map | Map result fields onto the Salesforce publish payload |
+| Integration / Alert / Publish | Run **when that node is reached**, not only at the end |
+| If / else | Field + `eq` / `ne` / `contains` / `exists` / `gt` / `lt`. Use **true** and **false** handles |
+| Switch | Field value selects a named handle; unmatched uses **default** |
+| Stop | Hard abort. Hooks already visited have fired. Later publish nodes do not run |
+| Parallel edges | From a non-branch node, every outgoing edge is followed |
+
+Events without `flow_graph.nodes` keep the legacy linear worker.
+
+Requires `@xyflow/react` (`npm install` in `frontend/`).
 
 ## SharePoint Online (GCC High)
 
@@ -686,21 +615,9 @@ Reusable upload configurations:
 | Setting | Description |
 |---|---|
 | Connection, Site, List | Graph pickers |
-| Operation | `create`, `update`, `upsert`, `lookup`, or `delete` |
-| Item ID template | Direct path to a known item id (Jinja2) — used by `update`/`delete` when you already know the id |
-| Lookup field / value | `update`, `delete`, and `upsert` fall back to this when no item id template is set: finds an item where `fields/{lookup_field}` equals the rendered `lookup_value_template`, via a Graph OData filter |
+| Operation | `create` or `update` |
+| Item ID template | Required for update (Jinja2) |
 | Field map | Free-form JSON: list field → Jinja2 |
-
-**Operation behavior:**
-- **`create`** — always inserts a new item.
-- **`update`** / **`delete`** — resolve the target item from `item_id_template` if set, otherwise from the lookup; failing to resolve either way is an error (no silent no-op).
-- **`upsert`** — looks up by field match; updates the item if found, creates a new one if not.
-- **`lookup`** — read-only: returns how many items matched and the first match's id, without changing anything (useful for testing a lookup before wiring it into `update`/`upsert`).
-- Every lookup fetches **up to 5 matches** and **uses the first if more than one matches** — it does not error on ambiguous matches, so pick a `lookup_field` that's actually unique in practice (an external id column, not something like a status field).
-
-### Salesforce enrichment and file source
-
-Both the optional business-object enrichment (`salesforce_object` + `salesforce_record_id_template`) and the `salesforce_content_version` file source authenticate through the **same per-org session** (`app/salesforce_client.py`) the rest of the pipeline uses — respecting that org's real `auth_type` (password or client-credentials) — rather than opening a second, independent Salesforce login. There is no separate SharePoint-specific Salesforce credential to configure.
 
 ### Two ways to run an action
 
@@ -722,36 +639,6 @@ Jinja context for maps/paths includes `payload`, `org`, `year`, `month`, `day`, 
 | `GET /api/sharepoint/connections/{id}/sites-by-path?hostname=&path=` | Resolve site by path |
 | `GET /api/sharepoint/connections/{id}/sites/{siteId}/drives` | Document libraries |
 | `GET /api/sharepoint/connections/{id}/sites/{siteId}/lists` | Lists |
-
-## Result transform (Map step)
-
-A subscribed event channel can carry an optional `result_transform_template` — a Jinja2 template
-(the same sandboxed renderer used everywhere else: see "Custom body mapping") that reshapes
-whatever the processing mode returned **before** it goes on to publish/integration fan-out. This
-is the "Map" step in a Power Automate-style read: `Subscribe → Process → Map → Publish/route`.
-
-- **Context**: `payload` (the original inbound event) and `result` (whatever the processing mode —
-  local/DSSClient/Langflow/custom script/SharePoint — produced).
-- **Output**: the rendered text is parsed as JSON and becomes the new result. If it doesn't parse
-  as JSON, the original result is kept with the rendered text attached under
-  `transformed_text` instead of being discarded.
-- **Failure is non-fatal**: a broken template logs a warning and the untransformed result is used —
-  a typo here should never take down the whole event.
-- **Configured from the Event Flow Designer** (not yet in the classic Routing modal) — open an
-  event's flow and set it on the processor step.
-
-### Publish field mapping — a second, later mapping step
-
-A channel can *also* carry `publish_field_map` — a flat `{"SalesforceFieldName": "{{ jinja over payload/result }}"}`
-dict applied **after** the Map/Transform step above, immediately before the result is handed to the
-publish/fan-out stage. Where Result transform reshapes the *whole* result as one Jinja template
-(useful when a processor's output doesn't look anything like what you want to publish), Publish
-field mapping builds the *exact* outbound Salesforce field set one field at a time — the more
-direct tool when you know precisely which target fields you're populating and don't need to
-restructure everything else. Pipeline order: `Process → Map/Transform → Publish field map → Publish`.
-Leaving it empty (the default) publishes the (possibly Map-transformed) result unchanged, exactly
-as before this feature existed. A single field's expression failing logs a warning and that field
-comes through as `null` rather than aborting the whole publish.
 
 ## Alerts
 
@@ -882,9 +769,8 @@ single JSON file (`GET /api/admin-config/export`), and imports it back (`POST /a
 — here or on a different instance:
 
 - Salesforce orgs, event channels/routing, integrations (including SharePoint File/List sinks),
-  SharePoint connections + file/list actions, alerts, rules (including their JDM), **projects and
-  project members**, and every Admin Configuration setting (DSSClient, Langflow, Email/SMTP,
-  message broker, processing mode).
+  SharePoint connections + file/list actions, alerts, rules (including their JDM), and every Admin
+  Configuration setting (DSSClient, Langflow, Email/SMTP, message broker, processing mode).
 - **Uploaded processor scripts, including their actual code** — not just metadata, so a restored
   instance can run them immediately.
 - Records are upserted by their original id, which preserves the links between an event's routing
@@ -893,9 +779,7 @@ single JSON file (`GET /api/admin-config/export`), and imports it back (`POST /a
 **Deliberately excluded: local user accounts.** User management is treated as a separate identity
 concern from application configuration — re-importing accounts (especially password hashes) across
 environments is a different kind of risk than restoring integration settings, so it's left out on
-purpose. One consequence, since `project_members` *is* exported: a member record references a
-`user_id` that won't exist on a target instance with different accounts — re-link project
-membership by hand after importing into a fresh instance rather than assuming it carries over.
+purpose.
 
 **The export file contains credentials in plaintext** — org client secrets/passwords/security
 tokens, SharePoint client secrets, integration API keys/webhook signing secrets, DSSClient/Langflow
