@@ -289,10 +289,19 @@ async def run_flow_graph(
             await visit(e.get("target"))
 
     await visit(start.get("id"))
-    if not ctx.aborted:
-        rec = tx.get_transaction(transaction_id)
-        if rec and rec.get("status") == "processing":
-            tx.update_transaction(transaction_id, status="processed", result=ctx.result)
+    rec = tx.get_transaction(transaction_id)
+    if rec and rec.get("status") in ("queued", "received", "processing"):
+        # Reached the end of the walk (normally, or via a `stop` node) without
+        # any node putting the transaction into a terminal status - e.g. a
+        # `stop` reached straight from an `if`/`switch` branch, with no
+        # `processor` node ever run. Without this, the transaction is left
+        # permanently "queued"/"processing", which the UI (and anything
+        # polling for stuck transactions) treats as still in-flight forever.
+        tx.update_transaction(
+            transaction_id,
+            status=("processed" if ctx.result is not None else "skipped"),
+            result=ctx.result,
+        )
     log_event(
         "info",
         "Walker finished",
