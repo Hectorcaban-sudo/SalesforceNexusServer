@@ -8,6 +8,7 @@ import '@xyflow/react/dist/style.css'
 import {
   ArrowLeft, Save, Radio, ShieldCheck, Cpu, ArrowUpFromLine,
   Share2, BellRing, X, FileJson, Wand2, Map, Ban, GripVertical, GitBranch,
+  LayoutTemplate, Download, Play,
 } from 'lucide-react'
 import api from '../lib/api'
 import { isGlobalResource, useProject } from '../lib/ProjectContext'
@@ -481,7 +482,20 @@ function FlowCanvasInner({ event, refs }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [dirty, setDirty] = useState(false)
+  const [tplOpen, setTplOpen] = useState(false)
+  const [tplName, setTplName] = useState('')
+  const [tplDesc, setTplDesc] = useState('')
+  const [tplGlobal, setTplGlobal] = useState(false)
+  const [tplPlaceholders, setTplPlaceholders] = useState(true)
+  const [tplSaving, setTplSaving] = useState(false)
+  const [applyOpen, setApplyOpen] = useState(false)
+  const [templates, setTemplates] = useState([])
+  const [testOpen, setTestOpen] = useState(false)
+  const [testJson, setTestJson] = useState('{\n  "Status": "Closed"\n}')
+  const [testResult, setTestResult] = useState(null)
+  const [testRunning, setTestRunning] = useState(false)
   const navigate = useNavigate()
+  const { projectId } = useProject()
 
   useEffect(() => {
     if (!event) return
@@ -547,6 +561,84 @@ function FlowCanvasInner({ event, refs }) {
     }
   }
 
+  async function saveTemplate(e) {
+    e.preventDefault()
+    setTplSaving(true)
+    setError(null)
+    try {
+      await api.post('/flow-templates', {
+        name: tplName,
+        description: tplDesc,
+        project_id: tplGlobal ? null : (projectId || null),
+        placeholders: tplPlaceholders,
+        graph: { nodes, edges },
+      })
+      setTplOpen(false)
+      setTplName('')
+      setTplDesc('')
+    } catch (err) {
+      setError(err?.response?.data?.detail || err.message)
+    } finally {
+      setTplSaving(false)
+    }
+  }
+
+  async function openApply() {
+    const lib = projectId ? { project_id: projectId, include_global: true } : {}
+    const { data } = await api.get('/flow-templates', { params: lib })
+    setTemplates(data || [])
+    setApplyOpen(true)
+  }
+
+  function applyTemplate(tpl) {
+    const g = tpl.graph || {}
+    if (!g.nodes?.length) return
+    setNodes(g.nodes)
+    setEdges(g.edges || [])
+    setDirty(true)
+    setApplyOpen(false)
+  }
+
+  function exportPdf() {
+    const w = window.open('', '_blank', 'noopener,width=900,height=700')
+    if (!w) return
+    const rows = nodes.map((n) => {
+      const d = n.data || {}
+      return `<tr><td>${d.label || n.type}</td><td>${n.type}</td><td>${d.subtitle || d.refId || ''}</td><td>${Math.round(n.position?.x || 0)}, ${Math.round(n.position?.y || 0)}</td></tr>`
+    }).join('')
+    w.document.write(`<!doctype html><html><head><title>${event?.channel || 'flow'}</title>
+      <style>body{font-family:system-ui,sans-serif;padding:24px;color:#111}
+      h1{font-size:20px} table{border-collapse:collapse;width:100%;font-size:13px}
+      th,td{border:1px solid #ccc;padding:6px 8px;text-align:left} th{background:#f3f4f6}
+      .muted{color:#666;font-size:12px}</style></head><body>
+      <p class="muted">Nexus pipeline · ${new Date().toISOString()}</p>
+      <h1>${event?.channel || 'Flow'}</h1>
+      <p>${nodes.length} nodes · ${edges.length} edges · layout snapshot (not Visio)</p>
+      <table><thead><tr><th>Node</th><th>Type</th><th>Detail</th><th>Position</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+      <script>window.onload=()=>window.print()<\/script></body></html>`)
+    w.document.close()
+  }
+
+  async function runDryTest(e) {
+    e.preventDefault()
+    setTestRunning(true)
+    setTestResult(null)
+    setError(null)
+    try {
+      const payload = JSON.parse(testJson)
+      const { data } = await api.post(`/events/${event.id}/dry-run`, {
+        payload,
+        graph: { nodes, edges },
+      })
+      setTestResult(data)
+    } catch (err) {
+      setTestResult({ ok: false, error: err?.response?.data?.detail || err.message, steps: [] })
+    } finally {
+      setTestRunning(false)
+    }
+  }
+
   function onDragStart(e, type) {
     e.dataTransfer.setData('application/nexus-node', type)
     e.dataTransfer.effectAllowed = 'move'
@@ -567,6 +659,16 @@ function FlowCanvasInner({ event, refs }) {
         </div>
         <div className="flow-toolbar-right">
           {dirty && <span className="flow-dirty">Unsaved</span>}
+          <button type="button" className="btn btn-sm" onClick={() => { setTplName(`${event?.channel || 'flow'} template`); setTplOpen(true) }}>
+            <LayoutTemplate size={14} /> Save as template
+          </button>
+          <button type="button" className="btn btn-sm" onClick={openApply}>Apply template</button>
+          <button type="button" className="btn btn-sm" onClick={exportPdf}>
+            <Download size={14} /> Export PDF
+          </button>
+          <button type="button" className="btn btn-sm" onClick={() => { setTestOpen(true); setTestResult(null) }}>
+            <Play size={14} /> Test
+          </button>
           <button type="button" className="btn btn-primary" onClick={saveFlow} disabled={!dirty || saving}>
             <Save size={14} /> {saving ? 'Saving…' : 'Save flow'}
           </button>
@@ -623,7 +725,83 @@ function FlowCanvasInner({ event, refs }) {
           </aside>
         )}
       </div>
-      <div className="flow-footer">Integrations fire when visited. Stop aborts remaining nodes. If / Switch pick one branch.</div>
+      <div className="flow-footer">Integrations fire when visited. Stop aborts remaining nodes. If / Switch pick one branch. Test is a dry-run (no Salesforce / hooks).</div>
+
+      {tplOpen && (
+        <div className="modal-overlay" onClick={() => setTplOpen(false)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+            <div className="modal-header"><h3>Save as template</h3><button className="btn btn-sm" type="button" onClick={() => setTplOpen(false)}><X size={14} /></button></div>
+            <form onSubmit={saveTemplate}>
+              <div className="panel-body">
+                <div className="field"><label>Template name</label>
+                  <input required value={tplName} onChange={(e) => setTplName(e.target.value)} /></div>
+                <div className="field"><label>Description</label>
+                  <input value={tplDesc} onChange={(e) => setTplDesc(e.target.value)} /></div>
+                <label className="flow-check"><input type="checkbox" checked={tplGlobal} onChange={(e) => setTplGlobal(e.target.checked)} /> Global library (all projects)</label>
+                <label className="flow-check"><input type="checkbox" checked={tplPlaceholders} onChange={(e) => setTplPlaceholders(e.target.checked)} /> Replace integration / publish IDs with placeholders</label>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn" onClick={() => setTplOpen(false)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={tplSaving}>{tplSaving ? 'Saving…' : 'Save template'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {applyOpen && (
+        <div className="modal-overlay" onClick={() => setApplyOpen(false)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
+            <div className="modal-header"><h3>Apply template</h3><button className="btn btn-sm" type="button" onClick={() => setApplyOpen(false)}><X size={14} /></button></div>
+            <div className="panel-body">
+              {(templates || []).length === 0 && <div className="empty-state">No templates in this project yet</div>}
+              {(templates || []).map((t) => (
+                <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+                  <div>
+                    <strong>{t.name}</strong>
+                    <div className="muted" style={{ fontSize: 12 }}>{t.project_id ? 'Project' : 'Global'} · {(t.graph?.nodes || []).length} nodes</div>
+                    {t.description && <div style={{ fontSize: 12.5 }}>{t.description}</div>}
+                  </div>
+                  <button type="button" className="btn btn-sm btn-primary" onClick={() => applyTemplate(t)}>Apply</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {testOpen && (
+        <div className="modal-overlay" onClick={() => setTestOpen(false)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560 }}>
+            <div className="modal-header"><h3>Dry run</h3><button className="btn btn-sm" type="button" onClick={() => setTestOpen(false)}><X size={14} /></button></div>
+            <form onSubmit={runDryTest}>
+              <div className="panel-body">
+                <p style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>Walks If / Switch / Stop / Schema. Processor, publish, and integrations are logged only — not executed.</p>
+                <div className="field"><label>Sample JSON</label>
+                  <textarea className="mono" rows={8} value={testJson} onChange={(e) => setTestJson(e.target.value)} /></div>
+                {testResult && (
+                  <div style={{ fontSize: 12.5 }}>
+                    <div style={{ marginBottom: 8, color: testResult.ok === false ? 'var(--accent-red)' : 'var(--accent-green)' }}>
+                      {testResult.error || 'Dry run — no side effects'}
+                    </div>
+                    <ol style={{ margin: 0, paddingLeft: 18 }}>
+                      {(testResult.steps || []).map((s, i) => (
+                        <li key={i} style={{ marginBottom: 4 }}>
+                          <strong>{s.label}</strong> · {s.status} — {s.detail}
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn" onClick={() => setTestOpen(false)}>Close</button>
+                <button type="submit" className="btn btn-primary" disabled={testRunning}>{testRunning ? 'Running…' : 'Run test'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

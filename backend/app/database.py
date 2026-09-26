@@ -248,6 +248,7 @@ sharepoint_file_actions_table = _db.table("sharepoint_file_actions")
 sharepoint_list_actions_table = _db.table("sharepoint_list_actions")
 projects_table = _db.table("projects")
 project_members_table = _db.table("project_members")
+flow_templates_table = _db.table("flow_templates")
 
 
 def db_lock():

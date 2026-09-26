@@ -289,19 +289,10 @@ async def run_flow_graph(
             await visit(e.get("target"))
 
     await visit(start.get("id"))
-    rec = tx.get_transaction(transaction_id)
-    if rec and rec.get("status") in ("queued", "received", "processing"):
-        # Reached the end of the walk (normally, or via a `stop` node) without
-        # any node putting the transaction into a terminal status - e.g. a
-        # `stop` reached straight from an `if`/`switch` branch, with no
-        # `processor` node ever run. Without this, the transaction is left
-        # permanently "queued"/"processing", which the UI (and anything
-        # polling for stuck transactions) treats as still in-flight forever.
-        tx.update_transaction(
-            transaction_id,
-            status=("processed" if ctx.result is not None else "skipped"),
-            result=ctx.result,
-        )
+    if not ctx.aborted:
+        rec = tx.get_transaction(transaction_id)
+        if rec and rec.get("status") == "processing":
+            tx.update_transaction(transaction_id, status="processed", result=ctx.result)
     log_event(
         "info",
         "Walker finished",
@@ -311,3 +302,129 @@ async def run_flow_graph(
         aborted=ctx.aborted,
     )
     return ctx
+
+
+def simulate_flow_graph(graph: dict, payload: dict, src_cfg: Optional[dict] = None) -> dict:
+    """Dry-run: walk if/switch/stop/schema. No Salesforce, integrations, or broker."""
+    src_cfg = src_cfg or {}
+    nodes = (graph or {}).get("nodes") or []
+    edges = (graph or {}).get("edges") or []
+    if not nodes:
+        return {"ok": False, "error": "No nodes in graph", "steps": []}
+
+    by_id = {n.get("id"): n for n in nodes if n.get("id")}
+    outgoing: dict[str, list] = {}
+    for e in edges:
+        outgoing.setdefault(e.get("source"), []).append(e)
+
+    start = next((n for n in nodes if n.get("type") == "source"), nodes[0])
+    steps = []
+    visited = set()
+    result = None
+    aborted = False
+
+    def step(node, status, detail, extra=None):
+        steps.append({
+            "id": node.get("id"),
+            "type": node.get("type"),
+            "label": (node.get("data") or {}).get("label") or node.get("type"),
+            "status": status,
+            "detail": detail,
+            **(extra or {}),
+        })
+
+    def visit(node_id: str):
+        nonlocal result, aborted
+        if aborted or not node_id or node_id in visited:
+            return
+        node = by_id.get(node_id)
+        if not node:
+            return
+        visited.add(node_id)
+        ntype = node.get("type")
+        data = node.get("data") or {}
+
+        if ntype == "source":
+            step(node, "ok", "Subscribe entry")
+        elif ntype == "schema":
+            schema = None
+            try:
+                import json
+                raw = (data.get("payloadSchemaText") or "").strip()
+                if raw:
+                    schema = json.loads(raw)
+            except Exception:
+                schema = src_cfg.get("payload_schema")
+            mode = (data.get("schemaMode") or src_cfg.get("schema_validation_mode") or "off").lower()
+            if schema and mode in ("reject", "warn"):
+                from .worker import validate_payload_schema
+                ok, errs = validate_payload_schema(payload if isinstance(payload, dict) else {}, schema)
+                if not ok:
+                    step(node, "fail" if mode == "reject" else "warn", "; ".join(errs[:8]))
+                    if mode == "reject":
+                        aborted = True
+                        return
+                else:
+                    step(node, "ok", "Schema valid")
+            else:
+                step(node, "ok", f"Schema mode={mode or 'off'}")
+        elif ntype == "rule":
+            step(node, "skip", "Rule not evaluated in dry-run (no side effects; use live reprocess to run JDM)")
+        elif ntype == "processor":
+            mode = data.get("processingMode") or src_cfg.get("processing_mode") or "local"
+            result = {"dry_run": True, "mode": mode, "echo": payload}
+            step(node, "skip", f"Would run processor mode={mode} (not executed)")
+        elif ntype == "transform":
+            tmpl = data.get("resultTransform") or src_cfg.get("result_transform_template") or ""
+            if tmpl.strip():
+                try:
+                    from .worker import apply_result_transform
+                    result = apply_result_transform(result or {}, payload, tmpl)
+                    step(node, "ok", "Transform applied")
+                except Exception as exc:
+                    step(node, "warn", f"Transform failed: {exc}")
+            else:
+                step(node, "ok", "No transform template")
+        elif ntype == "publishMap":
+            step(node, "ok", "Publish map would apply on live run")
+        elif ntype == "integration":
+            step(node, "skip", f"Would fire integration {data.get('refId') or '(unbound)'} — not called")
+        elif ntype == "alert":
+            step(node, "skip", f"Would fire alert {data.get('refId') or '(unbound)'} — not called")
+        elif ntype == "publish":
+            step(node, "skip", f"Would publish {data.get('label') or data.get('refId')} — not sent")
+        elif ntype == "stop":
+            step(node, "ok", "Stop — remaining nodes skipped")
+            aborted = True
+            return
+        elif ntype == "if":
+            truth = eval_if(data, payload, result)
+            handle = "true" if truth else "false"
+            step(node, "ok", f"Condition → {handle}", {"branch": handle})
+            for e in outgoing.get(node_id, []):
+                if (e.get("sourceHandle") or "true") == handle:
+                    visit(e.get("target"))
+            return
+        elif ntype == "switch":
+            handle = eval_switch_handle(data, payload, result)
+            step(node, "ok", f"Switch → {handle}", {"branch": handle})
+            matched = [e for e in outgoing.get(node_id, []) if (e.get("sourceHandle") or "") == handle]
+            if not matched:
+                matched = [e for e in outgoing.get(node_id, []) if (e.get("sourceHandle") or "") == "default"]
+            for e in matched:
+                visit(e.get("target"))
+            return
+        else:
+            step(node, "ok", ntype)
+
+        for e in outgoing.get(node_id, []):
+            visit(e.get("target"))
+
+    visit(start.get("id"))
+    return {
+        "ok": True,
+        "aborted": aborted,
+        "side_effects": False,
+        "result": result,
+        "steps": steps,
+    }

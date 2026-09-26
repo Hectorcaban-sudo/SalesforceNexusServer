@@ -99,3 +99,16 @@ def validate_payload_against_schema(body: dict):
         return {"ok": True, "errors": [], "detail": "No schema provided"}
     ok, errors = validate_payload_schema(payload, schema)
     return {"ok": ok, "errors": errors}
+
+
+@router.post("/{config_id}/dry-run", dependencies=[Depends(require_role("operator"))])
+def dry_run_flow(config_id: str, body: dict):
+    """Walk the (saved or posted) graph with a sample payload. No Salesforce / hooks."""
+    from ..flow_walker import simulate_flow_graph
+    from ..models import FlowDryRunRequest
+    ev = event_configs_table.get(Q.id == config_id)
+    if not ev:
+        raise HTTPException(404, "Event config not found")
+    req = FlowDryRunRequest(**(body or {}))
+    graph = req.graph or ev.get("flow_graph") or {}
+    return simulate_flow_graph(graph, req.payload or {}, ev)

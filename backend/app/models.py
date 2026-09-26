@@ -44,6 +44,37 @@ class ProjectMemberCreate(BaseModel):
     role: str = "project_admin"
 
 
+class FlowTemplateCreate(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    project_id: Optional[str] = None  # None = global library
+    graph: dict = Field(default_factory=dict)
+    placeholders: bool = True
+
+
+class FlowTemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    project_id: Optional[str] = None
+    graph: Optional[dict] = None
+
+
+class FlowTemplateOut(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = ""
+    project_id: Optional[str] = None
+    graph: dict = Field(default_factory=dict)
+    placeholders: bool = True
+    created_at: Optional[str] = None
+    source_event_id: Optional[str] = None
+
+
+class FlowDryRunRequest(BaseModel):
+    payload: dict = Field(default_factory=dict)
+    graph: Optional[dict] = None  # unsaved canvas; else event.flow_graph
+
+
 
 
 def now_ts() -> float:
