@@ -30,12 +30,12 @@ zen-engine==2.0.2
 sqlalchemy==2.0.35
 # SQLite (the default) needs no extra driver - it's in the Python standard library.
 # Uncomment ONLY the driver for the backend you actually configure via DATABASE_TYPE:
-psycopg2-binary==2.9.9      # DATABASE_TYPE=postgres
+# psycopg2-binary==2.9.9      # DATABASE_TYPE=postgres
 # pyodbc==5.1.0               # DATABASE_TYPE=sqlserver (also needs the OS-level
 #                              # "ODBC Driver 18 for SQL Server" package - see README)
 # oracledb==2.4.1             # DATABASE_TYPE=oracle (pure Python "thin" mode, no
 #                              # separate Oracle Instant Client needed)
-salesforce
+
 # OpenTelemetry (tracing is safe to leave unconfigured - see app/tracing.py)
 opentelemetry-api==1.27.0
 opentelemetry-sdk==1.27.0

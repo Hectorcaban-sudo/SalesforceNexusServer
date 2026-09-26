@@ -32,6 +32,7 @@ from .routers import audit as audit_router
 from .routers import sharepoint as sharepoint_router
 from .routers import projects as projects_router
 from .routers import flow_templates as flow_templates_router
+from .routers import pipelines as pipelines_router
 from .routers.projects import ensure_default_project
 from .audit import AuditMiddleware
 
@@ -102,6 +103,7 @@ app.include_router(audit_router.router)
 app.include_router(sharepoint_router.router)
 app.include_router(projects_router.router)
 app.include_router(flow_templates_router.router)
+app.include_router(pipelines_router.router)
 
 
 @app.get("/api/health")

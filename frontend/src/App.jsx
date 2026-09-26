@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard'
 import Orgs from './pages/Orgs'
 import EventsConfig from './pages/EventsConfig'
 import EventFlowDesigner from './pages/EventFlowDesigner'
+import EventPipelines from './pages/EventPipelines'
 import Transactions from './pages/Transactions'
 import Logs from './pages/Logs'
 import AdminConfig from './pages/AdminConfig'
@@ -66,6 +67,8 @@ export default function App() {
         <Route path="/projects" element={<RequireAuth><RequireRole role="admin"><Projects /></RequireRole></RequireAuth>} />
         <Route path="/orgs" element={<RequireAuth><Orgs /></RequireAuth>} />
         <Route path="/events" element={<RequireAuth><EventsConfig /></RequireAuth>} />
+        <Route path="/events/:eventId/pipelines" element={<RequireAuth><EventPipelines /></RequireAuth>} />
+        <Route path="/events/:eventId/pipelines/:pipelineId/flow" element={<RequireAuth><EventFlowDesigner /></RequireAuth>} />
         <Route path="/events/:eventId/flow" element={<RequireAuth><EventFlowDesigner /></RequireAuth>} />
         <Route path="/processors" element={<RequireAuth><RequireRole role="admin"><Processors /></RequireRole></RequireAuth>} />
         <Route path="/rules" element={<RequireAuth><RequireRole role="admin"><Rules /></RequireRole></RequireAuth>} />

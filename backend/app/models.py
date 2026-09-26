@@ -75,6 +75,29 @@ class FlowDryRunRequest(BaseModel):
     graph: Optional[dict] = None  # unsaved canvas; else event.flow_graph
 
 
+class EventPipelineCreate(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    enabled: bool = True
+    flow_graph: dict = Field(default_factory=dict)
+
+
+class EventPipelineUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    enabled: Optional[bool] = None
+    flow_graph: Optional[dict] = None
+
+
+class EventPipelineOut(BaseModel):
+    id: str
+    event_id: str
+    name: str
+    description: Optional[str] = ""
+    enabled: bool = True
+    flow_graph: dict = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 def now_ts() -> float:
@@ -281,6 +304,9 @@ class TransactionOut(BaseModel):
     error: Optional[str] = None
     attempts: int = 0
     parent_transaction_id: Optional[str] = None
+    pipeline_id: Optional[str] = None
+    pipeline_name: Optional[str] = None
+    event_id: Optional[str] = None
     cancel_requested: bool = False   # set while an in-flight cancellation is pending - see routers/transactions.py:cancel_transaction
     created_at: float
     updated_at: float

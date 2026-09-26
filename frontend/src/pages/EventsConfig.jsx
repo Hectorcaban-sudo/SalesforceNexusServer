@@ -184,8 +184,8 @@ export default function EventsConfig() {
                     <td><code className="pill">{c.channel}</code></td>
                     <td>{orgName(c.org_id)}</td>
                     <td>
-                      <button className="btn btn-sm btn-primary" title="Edit pipeline in Flow designer" onClick={() => navigate(`/events/${c.id}/flow`)}>
-                        <Workflow size={12} /> Open flow
+                      <button className="btn btn-sm btn-primary" title="Edit pipeline in Flow designer" onClick={() => navigate(`/events/${c.id}/pipelines`)}>
+                        <Workflow size={12} /> Pipelines
                       </button>
                     </td>
                     <td>

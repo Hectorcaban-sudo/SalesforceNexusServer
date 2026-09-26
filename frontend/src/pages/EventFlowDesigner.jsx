@@ -552,7 +552,11 @@ function FlowCanvasInner({ event, refs }) {
         ...configFromGraph(nodes),
         flow_graph: { nodes, edges },
       }
-      await api.put(`/events/${event.id}`, payload)
+      if (event._pipelineId) {
+        await api.put(`/events/${event.id}/pipelines/${event._pipelineId}`, { flow_graph: { nodes, edges } })
+      } else {
+        await api.put(`/events/${event.id}`, payload)
+      }
       setDirty(false)
     } catch (err) {
       setError(err?.response?.data?.detail || err.message)
@@ -648,13 +652,19 @@ function FlowCanvasInner({ event, refs }) {
     <div className="flow-page">
       <div className="flow-toolbar">
         <div className="flow-toolbar-left">
-          <button type="button" className="btn btn-sm" onClick={() => navigate('/events')}>
+          <button type="button" className="btn btn-sm" onClick={() => navigate(event?.id ? `/events/${event.id}/pipelines` : '/events')}>
             <ArrowLeft size={14} /> Back to Events
           </button>
           <div>
             <div className="flow-breadcrumb">Events / Flow</div>
-            <h1 className="flow-title">{event?.channel} / Flow</h1>
+            <h1 className="flow-title">{event?._pipelineName || event?.channel} / Flow</h1>
             <p className="flow-subtitle">Worker walks this graph. Integrations fire when visited. Stop aborts remaining nodes.</p>
+            {(event?._pipelines || []).length > 1 && (
+              <select className="input" style={{ marginTop: 8 }} value={event._pipelineId || ''}
+                onChange={(e) => navigate(`/events/${event.id}/pipelines/${e.target.value}/flow`)}>
+                {event._pipelines.map((pl) => <option key={pl.id} value={pl.id}>{pl.name}{pl.enabled ? '' : ' (off)'}</option>)}
+              </select>
+            )}
           </div>
         </div>
         <div className="flow-toolbar-right">
@@ -807,7 +817,7 @@ function FlowCanvasInner({ event, refs }) {
 }
 
 export default function EventFlowDesigner() {
-  const { eventId } = useParams()
+  const { eventId, pipelineId } = useParams()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [event, setEvent] = useState(null)
@@ -837,7 +847,16 @@ export default function EventFlowDesigner() {
         const ev = c.data.find((x) => x.id === eventId)
         if (!ev) { setError('Event channel not found'); return }
         if (ev.direction !== 'subscribe') { setError('Flow designer is only for subscribe channels'); return }
-        setEvent(ev)
+        let graphEvent = ev
+        try {
+          const pl = await api.get(`/events/${eventId}/pipelines`)
+          const list = pl.data || []
+          const chosen = list.find((x) => x.id === pipelineId) || list[0]
+          if (chosen) {
+            graphEvent = { ...ev, flow_graph: chosen.flow_graph || { nodes: [], edges: [] }, _pipelineId: chosen.id, _pipelineName: chosen.name, _pipelines: list }
+          }
+        } catch (e) { /* fall back to event.flow_graph */ }
+        setEvent(graphEvent)
         setRefs({
           rules: r.data || [],
           processors: p.data || [],
@@ -855,7 +874,7 @@ export default function EventFlowDesigner() {
     }
     load()
     return () => { cancelled = true }
-  }, [eventId, projectId])
+  }, [eventId, pipelineId, projectId])
 
   if (loading) return <div className="empty-state">Loading flow…</div>
   if (error && !event) {

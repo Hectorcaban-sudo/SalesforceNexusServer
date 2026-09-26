@@ -29,6 +29,9 @@ def record_transaction(
     result: Optional[dict] = None,
     error: Optional[str] = None,
     parent_transaction_id: Optional[str] = None,
+    pipeline_id: Optional[str] = None,
+    pipeline_name: Optional[str] = None,
+    event_id: Optional[str] = None,
 ) -> dict:
     project_id, project_name = _resolve_project(org_id)
     record = {
@@ -45,6 +48,9 @@ def record_transaction(
         "error": error,
         "attempts": 0,
         "parent_transaction_id": parent_transaction_id,
+        "pipeline_id": pipeline_id,
+        "pipeline_name": pipeline_name,
+        "event_id": event_id,
         "created_at": now_ts(),
         "updated_at": now_ts(),
     }

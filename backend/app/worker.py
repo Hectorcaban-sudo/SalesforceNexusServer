@@ -530,23 +530,66 @@ async def inbound_worker():
             return
 
         src_cfg_early = _source_event_config(org_id, source_channel)
-        if src_cfg_early and (src_cfg_early.get("flow_graph") or {}).get("nodes"):
+        pipelines = []
+        if src_cfg_early:
+            try:
+                from .routers.pipelines import list_enabled_pipelines
+                pipelines = list_enabled_pipelines(src_cfg_early)
+            except Exception:
+                pipelines = []
+        runnable = [p for p in pipelines if (p.get("flow_graph") or {}).get("nodes")]
+        if not runnable and src_cfg_early and (src_cfg_early.get("flow_graph") or {}).get("nodes"):
+            runnable = [{"id": "legacy", "name": "Default", "flow_graph": src_cfg_early.get("flow_graph")}]
+        if runnable:
             from .flow_walker import run_flow_graph
-            await run_flow_graph(
-                src_cfg=src_cfg_early,
-                transaction_id=transaction_id,
-                org_id=org_id,
-                source_channel=source_channel,
-                payload=payload,
-                parent_carrier=parent_carrier,
-                process_payload=process_payload,
-                apply_result_transform=apply_result_transform,
-                apply_publish_field_map=apply_publish_field_map,
-                validate_payload_schema=validate_payload_schema,
-                evaluate_rule_gate=evaluate_rule_gate,
-                start_span=start_span,
-                inject_trace_context=inject_trace_context,
-            )
+
+            async def _walk(tid, graph, label):
+                cfg = dict(src_cfg_early or {})
+                cfg["flow_graph"] = graph
+                await run_flow_graph(
+                    src_cfg=cfg,
+                    transaction_id=tid,
+                    org_id=org_id,
+                    source_channel=source_channel,
+                    payload=payload,
+                    parent_carrier=parent_carrier,
+                    process_payload=process_payload,
+                    apply_result_transform=apply_result_transform,
+                    apply_publish_field_map=apply_publish_field_map,
+                    validate_payload_schema=validate_payload_schema,
+                    evaluate_rule_gate=evaluate_rule_gate,
+                    start_span=start_span,
+                    inject_trace_context=inject_trace_context,
+                )
+
+            event_id = (src_cfg_early or {}).get("id")
+            if len(runnable) == 1:
+                p0 = runnable[0]
+                tx.update_transaction(
+                    transaction_id,
+                    pipeline_id=p0.get("id"),
+                    pipeline_name=p0.get("name"),
+                    event_id=event_id,
+                )
+                await _walk(transaction_id, p0.get("flow_graph"), p0.get("name"))
+            else:
+                tx.update_transaction(
+                    transaction_id,
+                    status="processed",
+                    event_id=event_id,
+                    result={"pipelines": [p.get("name") for p in runnable], "fanout": len(runnable)},
+                )
+                for p in runnable:
+                    child = tx.record_transaction(
+                        org_id=org_id, org_name=None, direction="subscribe",
+                        channel=source_channel, status="queued", payload=payload,
+                        parent_transaction_id=transaction_id,
+                        pipeline_id=p.get("id"),
+                        pipeline_name=p.get("name"),
+                        event_id=event_id,
+                    )
+                    log_event("info", f"Worker: pipeline '{p.get('name')}'", transaction_id=child["id"], pipeline_id=p.get("id"))
+                    await _walk(child["id"], p.get("flow_graph"), p.get("name"))
             return
 
         _, _, routed_alert_ids = _resolve_routes(org_id, source_channel)

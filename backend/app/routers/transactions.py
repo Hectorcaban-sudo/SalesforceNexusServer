@@ -15,6 +15,7 @@ TERMINAL_STATUSES = ("published", "failed", "skipped", "cancelled")
 @router.get("", response_model=List[TransactionOut])
 def list_transactions(
     org_id: Optional[str] = None,
+    project_id: Optional[str] = None,
     status_filter: Optional[str] = Query(None, alias="status"),
     direction: Optional[str] = None,
     limit: int = 200,
@@ -22,6 +23,8 @@ def list_transactions(
     rows = transactions_table.all()
     if org_id:
         rows = [r for r in rows if r["org_id"] == org_id]
+    if project_id:
+        rows = [r for r in rows if r.get("project_id") == project_id]
     if status_filter:
         rows = [r for r in rows if r["status"] == status_filter]
     if direction:
@@ -31,8 +34,12 @@ def list_transactions(
 
 
 @router.get("/stats")
-def transaction_stats():
+def transaction_stats(project_id: Optional[str] = None, org_id: Optional[str] = None):
     rows = transactions_table.all()
+    if project_id:
+        rows = [r for r in rows if r.get("project_id") == project_id]
+    if org_id:
+        rows = [r for r in rows if r["org_id"] == org_id]
     total = len(rows)
     by_status = {}
     by_org = {}

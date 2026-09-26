@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Eye, X, RotateCcw, RefreshCcw, ChevronDown, ChevronRight, Layers, XCircle } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Eye, X, RotateCcw, RefreshCcw, ChevronDown, ChevronRight, Layers, XCircle, Workflow } from 'lucide-react'
 import api from '../lib/api'
 import { StatusBadge, fmtTime } from '../components/UI'
+import { useProject } from '../lib/ProjectContext'
 
 const GROUP_OPTIONS = [
   { key: 'none', label: 'No grouping' },
@@ -10,9 +12,12 @@ const GROUP_OPTIONS = [
   { key: 'direction', label: 'Direction' },
   { key: 'channel', label: 'Channel' },
   { key: 'parent_transaction_id', label: 'Fan-out group' },
+  { key: 'pipeline_name', label: 'Pipeline' },
 ]
 
 export default function Transactions() {
+  const navigate = useNavigate()
+  const { projectId, project } = useProject()
   const [orgs, setOrgs] = useState([])
   const [rows, setRows] = useState([])
   const [filters, setFilters] = useState({ org_id: '', status: '', direction: '' })
@@ -25,9 +30,11 @@ export default function Transactions() {
   const [toast, setToast] = useState('')
 
   async function load() {
+    const params = Object.fromEntries(Object.entries(filters).filter(([, v]) => v))
+    if (projectId) params.project_id = projectId
     const [o, t] = await Promise.all([
-      api.get('/orgs'),
-      api.get('/transactions', { params: Object.fromEntries(Object.entries(filters).filter(([, v]) => v)) }),
+      api.get('/orgs', { params: projectId ? { project_id: projectId } : {} }),
+      api.get('/transactions', { params }),
     ])
     setOrgs(o.data)
     setRows(t.data)
@@ -38,7 +45,7 @@ export default function Transactions() {
     const id = setInterval(load, 5000)
     return () => clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters])
+  }, [filters, projectId])
 
   function flashToast(msg) {
     setToast(msg)
@@ -108,12 +115,45 @@ export default function Transactions() {
     return [...map.entries()].sort((a, b) => Math.max(...b[1].map((r) => r.created_at)) - Math.max(...a[1].map((r) => r.created_at)))
   }, [rows, groupBy])
 
+  const treeRows = useMemo(() => {
+    const ids = new Set(rows.map((r) => r.id))
+    const children = new Map()
+    for (const t of rows) {
+      const pid = t.parent_transaction_id
+      if (pid && ids.has(pid)) {
+        if (!children.has(pid)) children.set(pid, [])
+        children.get(pid).push(t)
+      }
+    }
+    const out = []
+    const seen = new Set()
+    function walk(t, depth) {
+      if (seen.has(t.id)) return
+      seen.add(t.id)
+      out.push({ ...t, _depth: depth, _kids: (children.get(t.id) || []).length })
+      for (const c of children.get(t.id) || []) walk(c, depth + 1)
+    }
+    for (const t of rows) {
+      const isChild = t.parent_transaction_id && ids.has(t.parent_transaction_id)
+      if (!isChild) walk(t, 0)
+    }
+    for (const t of rows) {
+      if (!seen.has(t.id)) walk(t, 0)
+    }
+    return out
+  }, [rows])
+
+  function openFlow(t) {
+    if (t.event_id && t.pipeline_id) navigate(`/events/${t.event_id}/pipelines/${t.pipeline_id}/flow`)
+    else if (t.event_id) navigate(`/events/${t.event_id}/pipelines`)
+  }
+
   return (
     <div>
       <div className="page-title-row">
         <div>
           <h1>Transactions</h1>
-          <p>Full audit trail of every event received, processed, and published — requeue any transaction back through the broker if needed</p>
+          <p>{project ? `${project.name} · pipeline runs` : 'Audit trail of received, processed, published, and skipped (Stop) runs'}</p>
         </div>
         <button className="btn btn-sm" onClick={reprocessAllFailed} disabled={bulkBusy}>
           <RefreshCcw size={13} /> {bulkBusy ? 'Requeuing…' : 'Reprocess all failed'}
@@ -149,12 +189,12 @@ export default function Transactions() {
         <div className="panel">
           <table>
             <thead>
-              <tr><th>Time</th><th>Project</th><th>Org</th><th>Direction</th><th>Channel</th><th>Status</th><th>Attempts</th><th></th></tr>
+              <tr><th>Time</th><th>Channel</th><th>Pipeline</th><th>Status</th><th>Attempts</th><th></th></tr>
             </thead>
             <tbody>
-              {rows.length === 0 && <tr><td colSpan={8} className="empty-state">No transactions match these filters</td></tr>}
-              {rows.map((t) => (
-                <TransactionRow key={t.id} t={t} onView={setSelected} onReprocess={reprocess} reprocessingId={reprocessingId} onCancel={cancel} cancellingId={cancellingId} />
+              {treeRows.length === 0 && <tr><td colSpan={6} className="empty-state">No transactions match these filters</td></tr>}
+              {treeRows.map((t) => (
+                <TransactionRow key={t.id} t={t} onView={setSelected} onReprocess={reprocess} reprocessingId={reprocessingId} onCancel={cancel} cancellingId={cancellingId} onOpenFlow={openFlow} />
               ))}
             </tbody>
           </table>
@@ -179,11 +219,11 @@ export default function Transactions() {
               {!collapsed[key] && (
                 <table>
                   <thead>
-                    <tr><th>Time</th><th>Project</th><th>Org</th><th>Direction</th><th>Channel</th><th>Status</th><th>Attempts</th><th></th></tr>
+                    <tr><th>Time</th><th>Channel</th><th>Pipeline</th><th>Status</th><th>Attempts</th><th></th></tr>
                   </thead>
                   <tbody>
                     {groupRows.map((t) => (
-                      <TransactionRow key={t.id} t={t} onView={setSelected} onReprocess={reprocess} reprocessingId={reprocessingId} onCancel={cancel} cancellingId={cancellingId} />
+                      <TransactionRow key={t.id} t={t} onView={setSelected} onReprocess={reprocess} reprocessingId={reprocessingId} onCancel={cancel} cancellingId={cancellingId} onOpenFlow={openFlow} />
                     ))}
                   </tbody>
                 </table>
@@ -210,6 +250,10 @@ export default function Transactions() {
               <div className="form-row-2">
                 <div className="field"><label>Direction</label><div style={{ textTransform: 'capitalize' }}>{selected.direction}</div></div>
                 <div className="field"><label>Channel</label><code className="pill">{selected.channel}</code></div>
+              </div>
+              <div className="form-row-2">
+                <div className="field"><label>Pipeline</label><div>{selected.pipeline_name || (selected.result?.fanout ? `Fan-out · ${selected.result.fanout}` : '—')}</div></div>
+                <div className="field"><label>Parent</label><div className="mono">{selected.parent_transaction_id || '—'}</div></div>
               </div>
               <div className="field">
                 <label>Attempts</label>
@@ -262,15 +306,19 @@ export default function Transactions() {
 
 const NON_TERMINAL_STATUSES = ['received', 'queued', 'processing', 'publishing']
 
-function TransactionRow({ t, onView, onReprocess, reprocessingId, onCancel, cancellingId }) {
+function TransactionRow({ t, onView, onReprocess, reprocessingId, onCancel, cancellingId, onOpenFlow }) {
   const cancellable = NON_TERMINAL_STATUSES.includes(t.status)
+  const depth = t._depth || 0
+  const fanout = t.result && t.result.fanout
   return (
     <tr>
-      <td className="mono" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{fmtTime(t.created_at)}</td>
-      <td>{t.project_name || '-'}</td>
-      <td>{t.org_name}</td>
-      <td style={{ textTransform: 'capitalize' }}>{t.direction}</td>
+      <td className="mono" style={{ fontSize: 12, color: 'var(--text-secondary)', paddingLeft: 12 + depth * 18 }}>
+        {depth > 0 ? '↳ ' : ''}{fmtTime(t.created_at)}
+      </td>
       <td><code className="pill">{t.channel}</code></td>
+      <td>
+        {t.pipeline_name || (fanout ? `Fan-out · ${fanout} pipelines` : '—')}
+      </td>
       <td>
         <StatusBadge status={t.status} />
         {t.cancel_requested && t.status !== 'cancelled' && (
@@ -279,7 +327,12 @@ function TransactionRow({ t, onView, onReprocess, reprocessingId, onCancel, canc
       </td>
       <td className="mono" style={{ color: 'var(--text-muted)' }}>{t.attempts || 0}</td>
       <td style={{ display: 'flex', gap: 6 }}>
-        <button className="btn btn-sm btn-icon" onClick={() => onView(t)}><Eye size={14} /></button>
+        <button className="btn btn-sm btn-icon" onClick={() => onView(t)} title="View details"><Eye size={14} /></button>
+        {t.event_id && (
+          <button className="btn btn-sm btn-icon" title="Open flow" onClick={() => onOpenFlow(t)}>
+            <Workflow size={14} />
+          </button>
+        )}
         <button
           className="btn btn-sm btn-icon"
           title="Reprocess through broker"
