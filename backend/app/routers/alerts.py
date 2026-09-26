@@ -10,9 +10,9 @@ router = APIRouter(prefix="/api/alerts", tags=["alerts"], dependencies=[Depends(
 
 
 @router.get("", response_model=List[AlertOut])
-def list_alerts(project_id: Optional[str] = None):
+def list_alerts(project_id: Optional[str] = None, include_global: bool = True):
     from ..project_scope import filter_by_project
-    return filter_by_project(alerts_table.all(), project_id, include_global=False)
+    return filter_by_project(alerts_table.all(), project_id, include_global=include_global)
 
 
 @router.post("", response_model=AlertOut, dependencies=[Depends(require_role("admin"))])
@@ -20,6 +20,7 @@ def create_alert(alert: AlertCreate):
     if not integrations_table.get(Q.id == alert.integration_id):
         raise HTTPException(404, "Selected integration sink not found")
     record = alert.model_dump()
+    record["project_id"] = (record.get("project_id") or "").strip() or None
     record.update({"id": new_id(), "last_fired_at": None, "last_status": None, "last_error": None})
     alerts_table.insert(record)
     log_event("info", f"Alert '{record['name']}' created", scope=record["scope"])

@@ -38,10 +38,13 @@ from .models import now_ts
 TERMINAL_TRANSACTION_STATUSES = ("published", "processed", "failed")
 
 
-def _matches_scope_and_org(rule: dict, scope: str, org_id: Optional[str]) -> bool:
+def _matches_scope_and_org(rule: dict, scope: str, org_id: Optional[str], project_id: Optional[str] = None) -> bool:
     if rule.get("scope") != scope:
         return False
     if rule.get("org_id") not in (None, "") and rule.get("org_id") != org_id:
+        return False
+    rid = rule.get("project_id") or None
+    if rid and project_id and rid != project_id:
         return False
     return True
 
@@ -110,7 +113,7 @@ def fire_alert(scope: str, context: dict, org_id: Optional[str] = None, only_ids
         if only_ids is not None:
             rules = [r for r in rules if r["id"] in only_ids and r.get("scope") == scope]
         else:
-            rules = [r for r in rules if _matches_scope_and_org(r, scope, org_id)]
+            rules = [r for r in rules if _matches_scope_and_org(r, scope, org_id, context.get("project_id"))]
 
         for rule in rules:
             _deliver(rule, context)
@@ -139,13 +142,14 @@ def fire_alert_for_transaction(transaction: dict, only_ids: Optional[list] = Non
             "direction": transaction.get("direction"),
             "status": transaction.get("status"),
             "error": transaction.get("error"),
+            "project_id": transaction.get("project_id"),
         }
 
         rules = alerts_table.search(Q.enabled == True)  # noqa: E712
         if only_ids is not None:
             rules = [r for r in rules if r["id"] in only_ids and r.get("scope") == "transaction"]
         else:
-            rules = [r for r in rules if _matches_scope_and_org(r, "transaction", org_id)]
+            rules = [r for r in rules if _matches_scope_and_org(r, "transaction", org_id, transaction.get("project_id"))]
 
         for rule in rules:
             if _matches_transaction_trigger(rule.get("trigger", "on_failure"), transaction):

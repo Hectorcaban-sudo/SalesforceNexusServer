@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Plus, Trash2, Send, BellRing, Pencil } from 'lucide-react'
 import api from '../lib/api'
+import { isGlobalResource, useProject, visibleLibraryItem } from '../lib/ProjectContext'
 
 const SCOPE_LABELS = {
   transaction: 'A transaction reaches a terminal state',
@@ -18,6 +19,7 @@ const TRIGGER_LABELS = {
 const EMPTY = { name: '', scope: 'transaction', trigger: 'on_failure', enabled: true, org_id: '', integration_id: '' }
 
 export default function Alerts() {
+  const { projectId } = useProject()
   const [alerts, setAlerts] = useState([])
   const [orgs, setOrgs] = useState([])
   const [integrations, setIntegrations] = useState([])
@@ -27,14 +29,28 @@ export default function Alerts() {
   const [saving, setSaving] = useState(false)
   const [testResult, setTestResult] = useState(null)
 
+  const visibleAlerts = useMemo(
+    () => (alerts || []).filter((row) => visibleLibraryItem(row, projectId, { includeGlobal: true })),
+    [alerts, projectId],
+  )
+  const visibleIntegrations = useMemo(
+    () => (integrations || []).filter((row) => visibleLibraryItem(row, projectId, { includeGlobal: true })),
+    [integrations, projectId],
+  )
+
   async function load() {
-    const [a, o, i] = await Promise.all([api.get('/alerts'), api.get('/orgs'), api.get('/integrations')])
+    const pid = projectId ? { project_id: projectId, include_global: true } : {}
+    const [a, o, i] = await Promise.all([
+      api.get('/alerts', { params: pid }),
+      api.get('/orgs', { params: projectId ? { project_id: projectId } : {} }),
+      api.get('/integrations', { params: pid }),
+    ])
     setAlerts(a.data)
     setOrgs(o.data)
     setIntegrations(i.data)
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [projectId])
 
   function orgName(id) {
     if (!id) return 'All orgs'
@@ -47,7 +63,7 @@ export default function Alerts() {
 
   function openCreate() {
     setEditingId(null)
-    setForm({ ...EMPTY, integration_id: integrations[0]?.id || '' })
+    setForm({ ...EMPTY, integration_id: visibleIntegrations[0]?.id || integrations[0]?.id || '' })
     setTestResult(null)
     setModalOpen(true)
   }
@@ -70,7 +86,7 @@ export default function Alerts() {
     e.preventDefault()
     setSaving(true)
     try {
-      const payload = { ...form, org_id: form.org_id || null }
+      const payload = { ...form, org_id: form.org_id || null, project_id: projectId || undefined }
       if (editingId) {
         const { scope, ...updatable } = payload  // scope is immutable once created
         await api.put(`/alerts/${editingId}`, updatable)
@@ -125,7 +141,7 @@ export default function Alerts() {
           <thead><tr><th>Name</th><th>Fires when</th><th>Org scope</th><th>Delivers via</th><th>Status</th><th></th></tr></thead>
           <tbody>
             {alerts.length === 0 && <tr><td colSpan={6} className="empty-state">No alerts configured yet</td></tr>}
-            {alerts.map((a) => (
+            {visibleAlerts.map((a) => (
               <tr key={a.id}>
                 <td>{a.name}</td>
                 <td style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
@@ -197,7 +213,7 @@ export default function Alerts() {
                 <div className="field">
                   <label>Deliver via</label>
                   <select required value={form.integration_id} onChange={(e) => setForm({ ...form, integration_id: e.target.value })}>
-                    {integrations.map((i) => <option key={i.id} value={i.id}>{i.name} ({i.type}){i.alert_only ? ' — alert-only' : ''}</option>)}
+                    {visibleIntegrations.map((i) => <option key={i.id} value={i.id}>{isGlobalResource(i) ? '🌐 ' : ''}{i.name} ({i.type}){i.alert_only ? ' — alert-only' : ''}</option>)}
                   </select>
                   <p style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 6 }}>
                     Tip: mark an integration as "alert-only" (on the Integrations page) if you don't want it to also

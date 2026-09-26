@@ -681,6 +681,7 @@ class AlertBase(BaseModel):
     scope: AlertScope
     enabled: bool = True
     org_id: Optional[str] = None       # None = applies to every org (ignored for broker_degraded)
+    project_id: Optional[str] = None   # selected project; omitted = shared / unscoped
     integration_id: str                # which configured integration sink delivers this alert
     # Only meaningful when scope == "transaction". Other scopes are inherently
     # single-outcome events (a connection/integration/broker failure) with no
@@ -696,6 +697,7 @@ class AlertUpdate(BaseModel):
     name: Optional[str] = None
     enabled: Optional[bool] = None
     org_id: Optional[str] = None
+    project_id: Optional[str] = None
     integration_id: Optional[str] = None
     trigger: Optional[AlertTrigger] = None
 
