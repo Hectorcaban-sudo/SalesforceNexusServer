@@ -77,6 +77,10 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   SharePoint sinks), SharePoint connections/file/list actions, processors, alerts, rules, and admin
   settings to a single JSON file, and restore it (here or on another instance). See "Configuration
   backup" below.
+- **Agentforce chat pipeline (Salesforce-side)** — repo-root Apex classes + prompt files pair an
+  Agentforce agent with this server's existing platform-event pipeline (submit via a platform
+  event, poll for the reply). Reference-only; not part of the running Python/React app. See
+  "Salesforce-side reference assets" below.
 - **Role-based access control** — three roles (**admin**, **operator**, **viewer**) enforced on
   every mutating API route. Viewers get read-only access to the dashboard/transactions/logs;
   operators can manage orgs/events and reprocess transactions; admins additionally manage users,
@@ -279,6 +283,29 @@ Three roles, enforced server-side on every route (not just hidden in the UI):
 Manage users from **Users** in the admin console (admin role required), or via the API
 (`GET/POST/PUT/DELETE /api/users`). You can't delete or demote your own account — have another
 admin do it if needed.
+
+> **Project membership is not an authorization layer.** `project_members` (per-project
+> `project_admin`/`operator`/`viewer`) records who's on a project and drives `include_global`
+> filtering (see "Projects" below), but no route checks it — every mutation is still gated purely
+> by the three global roles above. A global `operator` can edit any project's orgs/events/
+> integrations regardless of whether they're a member of that project. Treat project roles as
+> organizational metadata, not a permission boundary until an authorization dependency is added
+> that actually reads `project_members`.
+
+## Projects — scoping, not access control
+
+Orgs, events, integrations, and SharePoint connections/actions can carry a `project_id`. Filtering
+is real and server-side (`app/project_scope.py`), in two modes:
+
+- **Strict** (orgs, events, SharePoint connections) — a request scoped to project A never sees
+  project B's (or unscoped/legacy) rows.
+- **Library-style** (`include_global=true`: rules, processors, and — as of the "Integrations tab
+  changes" update — integrations too) — project-scoped rows plus every *unscoped* row, so
+  pre-existing global integrations/processors/rules keep showing up everywhere as shared hooks
+  instead of disappearing once a project is selected. The admin UI tags each row **Shared**
+  (unscoped) or **Project** (scoped) so it's obvious which is which.
+
+What this does **not** do: gate who can create/edit/delete anything — see the RBAC note above.
 
 ## Database backends
 
@@ -897,13 +924,42 @@ All business logic (or a call out to an AI model) lives in one place:
 
 ```python
 # backend/app/worker.py
-def process_payload(payload: dict) -> dict:
+async def process_payload(payload: dict, mode_override=None, processor_id_override=None,
+                           org_id=None, transaction_id=None) -> dict:
     ...  # replace this with your real logic
     return {"status": "ok", "summary": "...", "echo": payload}
 ```
 
-Whatever dict this returns is what gets published back to Salesforce on the org's configured
-**publish** channel.
+`mode_override`/`processor_id_override` let a single event's Flow Designer graph (or the legacy
+per-event override) pick a different processing mode/processor than the global Admin Configuration
+default. Whatever dict this returns is what gets published back to Salesforce on the org's
+configured **publish** channel (or reshaped first by Transform/Publish-map, if present).
+
+## Salesforce-side reference assets (Agentforce)
+
+A few files live at the **repo root**, not under `backend/` or `frontend/` — they are not imported
+by, or part of, the running FastAPI/React app. They're Salesforce-side companion code and prompt
+libraries checked in for reference/deployment convenience:
+
+- `agentforce_client.py` — a standalone Agent API client/CLI for Salesforce **Agentforce**
+  (session start/end, sync + streaming chat, citations). Useful for testing an Agentforce agent
+  from a terminal; not called from this server.
+- `Sales force.py` — a scratch script for a headless MCP-based Salesforce "360" query flow (OAuth
+  client-credentials + OpenAI + MCP SSE client). Also standalone.
+- `NexusAIIntergrationService.apxc` / `NexusAIResponseIntergrationService.apxc` — Apex invocable
+  actions meant to be imported into the Salesforce org itself (not this repo's backend). Together
+  they form the other half of a chat pipeline this server already supports: the first publishes a
+  `NexusAI_Chat_Request__e` platform event (`Conversation_Id__c`, `User_Message__c`) that this
+  server subscribes to and runs through **dss_client** mode (see `Conversation_Id__c`/
+  `User_Message__c`/`Status__c`/`Payload_Json__c` handling in `worker.py`/`dss_runner.py`); the
+  second polls for the reply via an external Power Automate HTTP trigger, keyed by the same
+  conversation ID. An Agentforce topic/agent would call the first as a tool, then poll the second.
+- `Opportunites prompts.txt` / `contract prompts.txt` — example end-user prompts for testing the
+  Agentforce agent against real Opportunity/contract data.
+- `nexus-ai-agentforce.zip` — a packaged snapshot of the above, committed directly to the repo.
+
+None of this is wired into the Python backend's request path; it documents/supports a Salesforce-
+side Agentforce agent that talks to this server over the existing platform-event pipeline.
 
 ## Security notes
 
@@ -913,3 +969,10 @@ Whatever dict this returns is what gets published back to Salesforce on the org'
   ever returned to the browser masked (`••••••••`); the admin UI never re-displays a stored secret.
   For a hardened production deployment, consider encrypting `backend/data/nexus_db.json` at rest
   or moving secrets to a proper secrets manager.
+- **`NexusAIResponseIntergrationService.apxc` has a live secret checked into the repo**: its
+  Power Automate HTTP-trigger URL includes a `sig=` query parameter, which *is* the bearer
+  credential for invoking that flow — anyone with the URL can trigger it. Since this repo is on
+  GitHub, treat that signature as already compromised: regenerate the Power Automate HTTP trigger
+  (which rotates `sig`) and update the Apex class with the new URL, then avoid committing trigger
+  URLs (or any other secrets) directly into Apex/scripts going forward — put them in Custom
+  Metadata/Named Credentials on the Salesforce side instead.
