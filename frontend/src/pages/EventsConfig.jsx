@@ -155,8 +155,8 @@ export default function EventsConfig() {
     <div>
       <div className="page-title-row">
         <div>
-          <h1>Event Configuration</h1>
-          <p>Choose which Salesforce Platform Event channels to subscribe to and publish on, per org</p>
+          <h1>Event channels</h1>
+          <p>Catalog of Salesforce channels. Pipelines are edited in the Flow designer — the worker walks that graph.</p>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button className="btn" onClick={() => setPublishOpen(true)}><Send size={14} /> Publish test event</button>
@@ -168,9 +168,9 @@ export default function EventsConfig() {
 
       <div className="dash-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
         <div className="panel">
-          <div className="panel-header"><h3><ArrowDownToLine size={14} /> Subscribed channels (Salesforce → Nexus)</h3></div>
+          <div className="panel-header"><h3><ArrowDownToLine size={14} /> Subscribed (Salesforce → Nexus)</h3></div>
           <table>
-            <thead><tr><th>Channel</th><th>Org</th><th>Routing</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Channel</th><th>Org</th><th>Pipeline</th><th>Status</th><th></th></tr></thead>
             <tbody>
               {subs.length === 0 && <tr><td colSpan={5} className="empty-state">No subscribe channels configured</td></tr>}
               {subs.map((c) => {
@@ -184,18 +184,8 @@ export default function EventsConfig() {
                     <td><code className="pill">{c.channel}</code></td>
                     <td>{orgName(c.org_id)}</td>
                     <td>
-                      <button className="btn btn-sm" title="Pipeline is edited in the Flow designer" onClick={() => navigate(`/events/${c.id}/flow`)}>
-                        <Workflow size={12} />
-                        {(c.flow_graph && (c.flow_graph.nodes || []).length)
-                          ? `Flow · ${(c.route_integration_ids || []).length} hook${(c.route_integration_ids || []).length === 1 ? '' : 's'}`
-                          : (hasRule && 'gated · ') || ''}
-                        {!(c.flow_graph && (c.flow_graph.nodes || []).length)
-                          ? (autoPublishOff
-                            ? 'Legacy · no auto-publish'
-                            : chCount === 0 && intCount === 0 && !hasProcessorOverride
-                              ? 'Open flow'
-                              : `Legacy · ${chCount} ch · ${intCount} hooks`)
-                          : ''}
+                      <button className="btn btn-sm btn-primary" title="Edit pipeline in Flow designer" onClick={() => navigate(`/events/${c.id}/flow`)}>
+                        <Workflow size={12} /> Open flow
                       </button>
                     </td>
                     <td>
@@ -213,7 +203,7 @@ export default function EventsConfig() {
         </div>
 
         <div className="panel">
-          <div className="panel-header"><h3><ArrowUpFromLine size={14} /> Publish channels (Nexus → Salesforce)</h3></div>
+          <div className="panel-header"><h3><ArrowUpFromLine size={14} /> Publish (Nexus → Salesforce)</h3></div>
           <table>
             <thead><tr><th>Channel</th><th>Org</th><th>Status</th><th></th></tr></thead>
             <tbody>
@@ -307,194 +297,6 @@ export default function EventsConfig() {
         </div>
       )}
 
-      {routingTarget && (
-        <div className="modal-overlay" onClick={() => setRoutingTarget(null)}>
-          <div className="modal-box" onClick={(e) => e.stopPropagation()}>
-            <div className="panel-header">
-              <h3><GitBranch size={15} /> Route &amp; process <code className="pill">{routingTarget.channel}</code></h3>
-            </div>
-            <form onSubmit={saveRouting}>
-              <div className="panel-body">
-                <div style={{ background: 'var(--bg-panel-alt)', border: '1px solid var(--border-light)', borderRadius: 8, padding: '12px 14px', marginBottom: 18 }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 9, margin: 0, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
-                    <input type="checkbox" style={{ width: 16 }} checked={routingAutoPublish} onChange={(e) => setRoutingAutoPublish(e.target.checked)} />
-                    <Send size={13} />
-                    Automatically publish the result back to Salesforce
-                  </label>
-                  <p style={{ margin: '6px 0 0 25px', color: 'var(--text-muted)', fontSize: 11.5 }}>
-                    {routingAutoPublish
-                      ? 'On: after processing, the result is published to the channels below (or the org\'s default publish channel).'
-                      : 'Off: the event is still received and processed, but nothing is published back to Salesforce. Routed integrations/alerts below still fire.'}
-                  </p>
-                </div>
-
-                <label style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8, display: 'block' }}>
-                  <GitBranch size={13} style={{ verticalAlign: -2, marginRight: 5 }} />
-                  Validation rule (optional)
-                </label>
-                <p style={{ marginTop: 0, marginBottom: 10, color: 'var(--text-secondary)', fontSize: 12.5 }}>
-                  Runs before any processing. The rule's decision graph must output a boolean{' '}
-                  <code className="pill">process</code> field — <code className="pill">false</code> skips this event
-                  entirely (it's still received and recorded, just never processed or published).
-                </p>
-                <select value={routingRuleId} onChange={(e) => setRoutingRuleId(e.target.value)} style={{ marginBottom: 18 }}>
-                  <option value="">No rule — always process</option>
-                  <optgroup label="This project">
-                    {visibleRules.filter((r) => !isGlobalResource(r)).map((r) => (
-                      <option key={r.id} value={r.id}>{r.name}</option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Global library">
-                    {visibleRules.filter((r) => isGlobalResource(r)).map((r) => (
-                      <option key={r.id} value={r.id}>🌐 {r.name}</option>
-                    ))}
-                  </optgroup>
-                </select>
-
-                <label style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8, display: 'block' }}>
-                  <Cpu size={13} style={{ verticalAlign: -2, marginRight: 5 }} />
-                  Payload processor
-                </label>
-                <p style={{ marginTop: 0, marginBottom: 10, color: 'var(--text-secondary)', fontSize: 12.5 }}>
-                  Override which processor handles events on this channel, instead of the global Admin
-                  Configuration default.
-                </p>
-                <select
-                  value={routingProcessingMode}
-                  onChange={(e) => setRoutingProcessingMode(e.target.value)}
-                  style={{ marginBottom: routingProcessingMode === 'custom_script' ? 10 : 18 }}
-                >
-                  <option value="">Use global default</option>
-                  <option value="local">Local fallback</option>
-                  <option value="dss_client">DSSClient</option>
-                  <option value="langflow">Langflow</option>
-                  <option value="custom_script">Custom uploaded script</option>
-                  <option value="sharepoint_file">SharePoint File</option>
-                  <option value="sharepoint_list">SharePoint List</option>
-                </select>
-                {routingProcessingMode === 'custom_script' && (
-                  <select value={routingProcessorId} onChange={(e) => setRoutingProcessorId(e.target.value)} style={{ marginBottom: 18 }}>
-                    <option value="">Select an uploaded processor…</option>
-                    <optgroup label="This project">
-                      {visibleProcessors.filter((p) => !isGlobalResource(p)).map((p) => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="Global library">
-                      {visibleProcessors.filter((p) => isGlobalResource(p)).map((p) => (
-                        <option key={p.id} value={p.id}>🌐 {p.name}</option>
-                      ))}
-                    </optgroup>
-                  </select>
-                )}
-                {routingProcessingMode === 'sharepoint_file' && (
-                  <select value={routingProcessorId} onChange={(e) => setRoutingProcessorId(e.target.value)} style={{ marginBottom: 18 }}>
-                    <option value="">Select a SharePoint file action…</option>
-                    {spFileActions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-                )}
-                {routingProcessingMode === 'sharepoint_list' && (
-                  <select value={routingProcessorId} onChange={(e) => setRoutingProcessorId(e.target.value)} style={{ marginBottom: 18 }}>
-                    <option value="">Select a SharePoint list action…</option>
-                    {spListActions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-                )}
-
-                <p style={{ marginTop: 0, color: 'var(--text-secondary)', fontSize: 12.5 }}>
-                  Pick which publish channels and integration hooks should receive the processed result of events
-                  received on this channel. You can select <b>multiple</b> integration hooks (e.g. Teams + Slack + Webhook)
-                  — each fires independently. Leave everything unchecked to use the default behavior (first enabled
-                  publish channel for the org, integrations auto-matched by their own trigger rules).
-                </p>
-
-                <label style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8, display: 'block' }}>
-                  <ArrowUpFromLine size={13} style={{ verticalAlign: -2, marginRight: 5 }} />
-                  Publish channels ({orgName(routingTarget.org_id)})
-                </label>
-                <div style={{ opacity: routingAutoPublish ? 1 : 0.4, pointerEvents: routingAutoPublish ? 'auto' : 'none' }}>
-                {orgPublishChannels.length === 0 ? (
-                  <div className="empty-state" style={{ padding: '14px 0' }}>No publish channels configured for this org yet.</div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
-                    {orgPublishChannels.map((p) => (
-                      <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 9, margin: 0, cursor: 'pointer', fontSize: 13 }}>
-                        <input
-                          type="checkbox"
-                          style={{ width: 16 }}
-                          checked={routingChannels.includes(p.id)}
-                          onChange={() => toggleInList(routingChannels, setRoutingChannels, p.id)}
-                        />
-                        <code className="pill">{p.channel}</code>
-                      </label>
-                    ))}
-                  </div>
-                )}
-                </div>
-
-                <label style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8, display: 'block' }}>
-                  <Share2 size={13} style={{ verticalAlign: -2, marginRight: 5 }} />
-                  Integration hooks
-                  <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 6 }}>
-                    (select one or more — each fires independently)
-                  </span>
-                </label>
-                {routableIntegrations.length === 0 ? (
-                  <div className="empty-state" style={{ padding: '14px 0' }}>No integrations configured yet. Create them on the Integrations page first.</div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
-                    {routableIntegrations.map((i) => (
-                      <label key={i.id} style={{ display: 'flex', alignItems: 'center', gap: 9, margin: 0, cursor: 'pointer', fontSize: 13 }}>
-                        <input
-                          type="checkbox"
-                          style={{ width: 16 }}
-                          checked={routingIntegrations.includes(i.id)}
-                          onChange={() => toggleInList(routingIntegrations, setRoutingIntegrations, i.id)}
-                        />
-                        {i.name}{' '}
-                        <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>({i.type})</span>
-                        {i.body_mode === 'template' && (
-                          <span style={{ fontSize: 10, color: 'var(--accent-purple)', marginLeft: 4 }}>custom template</span>
-                        )}
-                      </label>
-                    ))}
-                    {routingIntegrations.length > 0 && (
-                      <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 2 }}>
-                        {routingIntegrations.length} integration{routingIntegrations.length === 1 ? '' : 's'} selected — all will receive this event's processed result.
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <label style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8, display: 'block' }}>
-                  <BellRing size={13} style={{ verticalAlign: -2, marginRight: 5 }} />
-                  Alerts (fire only on failure of this channel's events)
-                </label>
-                {alerts.length === 0 ? (
-                  <div className="empty-state" style={{ padding: '14px 0' }}>No alerts configured yet.</div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {alerts.filter((a) => a.scope === 'transaction').map((a) => (
-                      <label key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 9, margin: 0, cursor: 'pointer', fontSize: 13 }}>
-                        <input
-                          type="checkbox"
-                          style={{ width: 16 }}
-                          checked={routingAlerts.includes(a.id)}
-                          onChange={() => toggleInList(routingAlerts, setRoutingAlerts, a.id)}
-                        />
-                        {a.name}
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn" onClick={() => setRoutingTarget(null)}>Cancel</button>
-                <button type="submit" className="btn btn-primary" disabled={savingRouting}>{savingRouting ? 'Saving…' : 'Save routing'}</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

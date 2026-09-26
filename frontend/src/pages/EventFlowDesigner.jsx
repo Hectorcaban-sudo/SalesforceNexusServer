@@ -249,7 +249,7 @@ function configFromGraph(nodes) {
   }
 }
 
-function NodeConfigModal({ node, refs, onClose, onSave }) {
+function NodeConfigModal({ node, refs, onClose, onSave, panel }) {
   const [data, setData] = useState({ ...(node?.data || {}) })
   const [msg, setMsg] = useState(null)
   if (!node) return null
@@ -513,7 +513,7 @@ function FlowCanvasInner({ event, refs }) {
     const meta = PALETTE.find((p) => p.type === type)
     if (!meta) return
     if (meta.once && nodes.some((n) => n.type === type)) {
-      setError(`Only one "${meta.label}" node is allowed in Phase A`)
+      setError(`Only one "${meta.label}" node is allowed`)
       return
     }
     const position = screenToFlowPosition({ x: e.clientX, y: e.clientY })
@@ -557,16 +557,16 @@ function FlowCanvasInner({ event, refs }) {
       <div className="flow-toolbar">
         <div className="flow-toolbar-left">
           <button type="button" className="btn btn-sm" onClick={() => navigate('/events')}>
-            <ArrowLeft size={14} /> Events
+            <ArrowLeft size={14} /> Back to Events
           </button>
           <div>
-            <div className="flow-breadcrumb">Events / <code>{event?.channel}</code> / Flow</div>
-            <h1 className="flow-title">Event Flow Designer</h1>
-            <p className="flow-subtitle">The canvas is the pipeline. The worker walks nodes in order. If / Switch pick a branch. Stop aborts the rest.</p>
+            <div className="flow-breadcrumb">Events / Flow</div>
+            <h1 className="flow-title">{event?.channel} / Flow</h1>
+            <p className="flow-subtitle">Worker walks this graph. Integrations fire when visited. Stop aborts remaining nodes.</p>
           </div>
         </div>
         <div className="flow-toolbar-right">
-          {dirty && <span className="flow-dirty">Unsaved changes</span>}
+          {dirty && <span className="flow-dirty">Unsaved</span>}
           <button type="button" className="btn btn-primary" onClick={saveFlow} disabled={!dirty || saving}>
             <Save size={14} /> {saving ? 'Saving…' : 'Save flow'}
           </button>
@@ -617,10 +617,13 @@ function FlowCanvasInner({ event, refs }) {
             <MiniMap nodeStrokeWidth={2} pannable zoomable style={{ background: 'var(--bg-panel)' }} />
           </ReactFlow>
         </div>
+        {modalNode && (
+          <aside className="flow-inspector">
+            <NodeConfigModal node={modalNode} refs={refs} panel onClose={() => setModalNode(null)} onSave={saveNodeData} />
+          </aside>
+        )}
       </div>
-      {modalNode && (
-        <NodeConfigModal node={modalNode} refs={refs} onClose={() => setModalNode(null)} onSave={saveNodeData} />
-      )}
+      <div className="flow-footer">Integrations fire when visited. Stop aborts remaining nodes. If / Switch pick one branch.</div>
     </div>
   )
 }
