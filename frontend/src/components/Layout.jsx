@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, Radio, ListTree, ScrollText, Search, LogOut, Settings,
   Users as UsersIcon, Share2, BellRing, ShieldCheck, Cloud,
-  FolderKanban, Cpu, GitBranch, Plus, Minus,
+  FolderKanban, Cpu, GitBranch, Plus, Minus, Bell, CircleHelp,
 } from 'lucide-react'
-import { logout } from '../lib/api'
+import api, { logout } from '../lib/api'
 import { useAuth, hasRole } from '../lib/AuthContext'
 import { useProject } from '../lib/ProjectContext'
 import ProjectSwitcher from './ProjectSwitcher'
@@ -139,6 +139,8 @@ export default function Layout({ children }) {
           </div>
           <div className="topbar-right">
             <ProjectSwitcher />
+            <TopbarInbox />
+            <DocsHelpLink />
             <div className="user-chip" title={user ? (user.username + ' - ' + (ROLE_LABELS[user.role] || user.role)) : ''}>
               <div className="avatar">{(user?.username || 'A').slice(0, 1).toUpperCase()}</div>
               {user && (
@@ -152,6 +154,57 @@ export default function Layout({ children }) {
 
         <main className="page-content">{children}</main>
       </div>
+    </div>
+  )
+}
+
+function DocsHelpLink() {
+  const [docs, setDocs] = useState({ docs_url: '', docs_label: 'Documentation' })
+  useEffect(() => {
+    api.get('/dashboard/ui-settings').then((r) => setDocs(r.data || {})).catch(() => {})
+  }, [])
+  const url = (docs.docs_url || '').trim()
+  if (!url) {
+    return (
+      <span className="topbar-icon" title="Set documentation URL in Admin Configuration">
+        <CircleHelp size={18} style={{ opacity: 0.45 }} />
+      </span>
+    )
+  }
+  return (
+    <a className="topbar-icon" href={url} target="_blank" rel="noreferrer" title={docs.docs_label || 'Documentation'}>
+      <CircleHelp size={18} />
+    </a>
+  )
+}
+
+function TopbarInbox() {
+  const { projectId } = useProject()
+  const [open, setOpen] = useState(false)
+  const [items, setItems] = useState([])
+  async function load() {
+    const { data } = await api.get('/dashboard/notifications', { params: projectId ? { project_id: projectId } : {} })
+    setItems(data.items || [])
+  }
+  useEffect(() => { load(); const id = setInterval(load, 30000); return () => clearInterval(id) }, [projectId])
+  return (
+    <div style={{ position: 'relative' }}>
+      <button type="button" className="topbar-icon" onClick={() => setOpen((v) => !v)} title="Notifications">
+        <Bell size={18} />
+        {items.length > 0 && <span className="topbar-badge">{items.length > 9 ? '9+' : items.length}</span>}
+      </button>
+      {open && (
+        <div className="topbar-inbox">
+          <div className="topbar-inbox-head">Inbox {projectId ? '(this project)' : '(all)'}</div>
+          {items.length === 0 && <div className="empty-state" style={{ padding: 16 }}>No alerts right now</div>}
+          {items.map((it) => (
+            <a key={it.id} href={it.href || '/'} className="topbar-inbox-row" onClick={() => setOpen(false)}>
+              <strong>{it.title}</strong>
+              {it.detail && <div className="muted">{it.detail}</div>}
+            </a>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

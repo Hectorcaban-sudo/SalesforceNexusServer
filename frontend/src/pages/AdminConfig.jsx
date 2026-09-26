@@ -21,6 +21,7 @@ const TABS = [
   { key: 'broker', label: 'Message broker', icon: Network },
   { key: 'database', label: 'Database', icon: Database },
   { key: 'email', label: 'Email', icon: Mail },
+  { key: 'docs', label: 'Documentation', icon: FileDown },
   { key: 'backup', label: 'Configuration backup', icon: FileDown },
 ]
 
@@ -28,6 +29,7 @@ export default function AdminConfig() {
   const [tab, setTab] = useState('processing')
   const [toast, setToast] = useState('')
   const [loading, setLoading] = useState(true)
+  const [docsForm, setDocsForm] = useState({ docs_url: '', docs_label: 'Documentation' })
 
   // ---- DSSClient ----
   const [dssForm, setDssForm] = useState(EMPTY_DSS)
@@ -96,7 +98,7 @@ export default function AdminConfig() {
   const globalRules = rules.filter(isGlobalRow)
 
   async function load() {
-    const [dss, lf, pm, procs, brk, email, rls, db] = await Promise.all([
+    const [dss, lf, pm, procs, brk, email, rls, db, ui] = await Promise.all([
       api.get('/admin-config/dss-client'),
       api.get('/admin-config/langflow'),
       api.get('/admin-config/processing-mode'),
@@ -105,6 +107,7 @@ export default function AdminConfig() {
       api.get('/admin-config/email'),
       api.get('/rules'),
       api.get('/admin-config/database'),
+      api.get('/admin-config/ui-settings').catch(() => ({ data: {} })),
     ])
     setDssForm({ url: dss.data.url, project_name: dss.data.project_name, llm: dss.data.llm, api_key: '' })
     setDssConfigured(dss.data.configured)
@@ -125,6 +128,7 @@ export default function AdminConfig() {
       database_type: db.data.database_type, database_host: db.data.database_host, database_port: db.data.database_port || '',
       database_name: db.data.database_name, database_user: db.data.database_user, database_password: '',
     })
+    setDocsForm({ docs_url: ui.data?.docs_url || '', docs_label: ui.data?.docs_label || 'Documentation' })
     setLoading(false)
   }
 
@@ -1048,6 +1052,23 @@ export default function AdminConfig() {
                     <Save size={14} /> {savingEmail ? 'Saving…' : 'Save configuration'}
                   </button>
                 </form>
+              </div>
+            </div>
+          )}
+
+          {tab === 'docs' && (
+            <div className="panel" style={{ maxWidth: 720 }}>
+              <div className="panel-header"><h3>Documentation link</h3></div>
+              <div className="panel-body">
+                <p className="muted">The help icon in the top bar opens this URL in a new tab. Leave blank to disable the link.</p>
+                <div className="field"><label>Label</label>
+                  <input value={docsForm.docs_label} onChange={(e) => setDocsForm({ ...docsForm, docs_label: e.target.value })} /></div>
+                <div className="field"><label>URL</label>
+                  <input placeholder="https://…" value={docsForm.docs_url} onChange={(e) => setDocsForm({ ...docsForm, docs_url: e.target.value })} /></div>
+                <button type="button" className="btn btn-primary" onClick={async () => {
+                  await api.put('/admin-config/ui-settings', docsForm)
+                  flashToast('Documentation link saved')
+                }}>Save</button>
               </div>
             </div>
           )}

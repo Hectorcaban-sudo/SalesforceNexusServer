@@ -382,6 +382,34 @@ def set_broker_config(config: BrokerConfig):
     return result
 
 
+UI_SETTINGS_ID = "ui_settings"
+
+
+@router.get("/ui-settings")
+def admin_get_ui_settings():
+    row = admin_settings_table.get(Q.id == UI_SETTINGS_ID) or {}
+    return {
+        "docs_url": row.get("docs_url") or "",
+        "docs_label": row.get("docs_label") or "Documentation",
+    }
+
+
+@router.put("/ui-settings")
+def admin_put_ui_settings(body: dict):
+    existing = admin_settings_table.get(Q.id == UI_SETTINGS_ID)
+    record = {
+        "id": UI_SETTINGS_ID,
+        "docs_url": (body or {}).get("docs_url") or "",
+        "docs_label": (body or {}).get("docs_label") or "Documentation",
+    }
+    if existing:
+        admin_settings_table.update(record, Q.id == UI_SETTINGS_ID)
+    else:
+        admin_settings_table.insert(record)
+    log_event("info", "UI settings updated")
+    return record
+
+
 # ---------- Configuration export / import ----------
 EXPORT_VERSION = 3
 

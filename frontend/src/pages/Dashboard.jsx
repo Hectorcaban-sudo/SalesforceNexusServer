@@ -5,10 +5,11 @@ import {
 import { Building2, Activity, CheckCircle2, Layers, RefreshCw, Send, AlertTriangle } from 'lucide-react'
 import api from '../lib/api'
 import { Sparkline, StatusBadge, timeAgo } from '../components/UI'
+import { useProject } from '../lib/ProjectContext'
 
 const STATUS_COLORS = {
   received: '#3d8bfd', queued: '#ffb648', processing: '#29d1e8', processed: '#3d8bfd',
-  publishing: '#ffb648', published: '#33d685', failed: '#ff5470',
+  publishing: '#ffb648', published: '#33d685', failed: '#ff5470', skipped: '#a78bfa', cancelled: '#5d6a82',
 }
 
 export default function Dashboard() {
@@ -16,12 +17,14 @@ export default function Dashboard() {
   const [stats, setStats] = useState(null)
   const [txns, setTxns] = useState([])
   const [activeOrg, setActiveOrg] = useState('all')
+  const { projectId, project } = useProject()
 
   async function load() {
+    const pid = projectId ? { project_id: projectId } : {}
     const [s, st, t] = await Promise.all([
-      api.get('/dashboard/summary'),
-      api.get('/transactions/stats'),
-      api.get('/transactions', { params: { limit: 8 } }),
+      api.get('/dashboard/summary', { params: pid }),
+      api.get('/transactions/stats', { params: pid }),
+      api.get('/transactions', { params: { limit: 8, ...pid } }),
     ])
     setSummary(s.data)
     setStats(st.data)
@@ -32,7 +35,7 @@ export default function Dashboard() {
     load()
     const id = setInterval(load, 5000)
     return () => clearInterval(id)
-  }, [])
+  }, [projectId])
 
   async function resync() {
     await api.post('/orgs/resync')
@@ -52,7 +55,7 @@ export default function Dashboard() {
       <div className="page-title-row">
         <div>
           <h1>Operations Dashboard</h1>
-          <p>Live view of Salesforce event traffic across all connected orgs</p>
+          <p>{project ? `${project.name} · live event traffic` : 'Live view of Salesforce event traffic across projects'}</p>
         </div>
         <button className="btn" onClick={resync}><RefreshCw size={14} /> Resync connections</button>
       </div>
@@ -135,6 +138,14 @@ export default function Dashboard() {
                 <div className="k">Event channels</div>
                 <div className="v">{summary.total_event_configs}</div>
               </div>
+              <div className="side-stat">
+                <div className="k">Pipelines on</div>
+                <div className="v">{summary.pipelines_enabled ?? 0}</div>
+              </div>
+              <div className="side-stat">
+                <div className="k">Skipped / Stop (1h)</div>
+                <div className="v">{summary.skipped_last_hour ?? 0}</div>
+              </div>
               <div className="side-actions">
                 <button className="btn btn-primary btn-sm" onClick={resync}><RefreshCw size={13} /> Resync</button>
                 <a href="#/events" className="btn btn-sm" style={{ textDecoration: 'none' }}><Send size={13} /> Manage events</a>
@@ -143,6 +154,18 @@ export default function Dashboard() {
           </div>
         </div>
 
+        <div className="panel">
+          <div className="panel-header"><h3><AlertTriangle size={14} /> Attention</h3></div>
+          <div className="legend-list" style={{ padding: 14 }}>
+            {!(summary.attention || []).length && <div className="empty-state">Nothing needs you right now</div>}
+            {(summary.attention || []).map((a, i) => (
+              <a key={i} href={a.href || '/'} style={{ display: 'block', padding: '8px 0', fontSize: 13, color: 'inherit', textDecoration: 'none', borderBottom: '1px solid var(--border)' }}>
+                <strong>{a.title}</strong>
+                {a.detail && <div className="muted" style={{ fontSize: 12 }}>{a.detail}</div>}
+              </a>
+            ))}
+          </div>
+        </div>
         <div className="panel">
           <div className="panel-header"><h3>Transactions by status</h3></div>
           <div className="legend-list" style={{ paddingTop: 16 }}>
