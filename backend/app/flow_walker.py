@@ -265,6 +265,16 @@ async def run_flow_graph(
         elif ntype == "stop":
             ctx.stop_publish = True
             ctx.aborted = True
+            rec = tx.get_transaction(transaction_id)
+            st = (rec or {}).get("status")
+            # Stop with no processor leaves the tx in queued forever otherwise.
+            if st in (None, "queued", "processing"):
+                tx.update_transaction(
+                    transaction_id,
+                    status="skipped",
+                    result=ctx.result,
+                    error="Stopped by flow node — remaining graph skipped",
+                )
             log_event("info", "Walker: stop node — remaining graph skipped", transaction_id=transaction_id)
             return
 
@@ -289,9 +299,18 @@ async def run_flow_graph(
             await visit(e.get("target"))
 
     await visit(start.get("id"))
-    if not ctx.aborted:
-        rec = tx.get_transaction(transaction_id)
-        if rec and rec.get("status") == "processing":
+    rec = tx.get_transaction(transaction_id)
+    st = (rec or {}).get("status")
+    if st in (None, "queued", "processing"):
+        # Graph ended without a processor (or stop already handled). Never leave queued.
+        if ctx.aborted and ctx.stop_publish:
+            tx.update_transaction(
+                transaction_id,
+                status="skipped",
+                result=ctx.result,
+                error="Stopped by flow node — remaining graph skipped",
+            )
+        else:
             tx.update_transaction(transaction_id, status="processed", result=ctx.result)
     log_event(
         "info",
