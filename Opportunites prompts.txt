@@ -1,8 +1,0 @@
-Using the description on this opportunity, what are the top 3 contracts that I&S holds or has recently (last 5 year) held that are related and could be used as past performance?
-Can you provide for each result the project/contract name, period of performance and award amount for the overall contract in a table format?
-Using the description on this opportunity, what are the top 3 contracts that I&S holds or has recently (last 5 year) held that are related and could be used as past performance? List the contract name, period of performance and award amount in a table format with links to the contract statement of work or performance work statement.
-Summarize Navy SABER Production
-Provide a list of contracts by name that align with this opportunitiy's scope of work: SABER will need the ability to build and sustain these shipboard systems during the next five years. This includes integration of commercial-off-the-shelf (COTS) electronics into a rack that meets shipboard requirements for mission essential equipment, engineering support and potential re-design or system hardware upgrades.
-Find all the contracts in the last 3 years where we have done IT integrations for the federal government and provide links to the SOW or PWS
-Can you provide the value of the BAE Task Order 2 and the Contract Admin for that contract?
-Find all the contracts in the last 3 years where we have done IT integrations for the federal government and provide links to the SOW or PWS as well as the project IDs for those contracts
