@@ -47,6 +47,7 @@ def list_integrations(project_id: Optional[str] = None, include_global: bool = T
 @router.post("", response_model=IntegrationOut, dependencies=[Depends(require_role("admin"))])
 def create_integration(integration: IntegrationCreate):
     record = integration.model_dump()
+    record["project_id"] = (record.get("project_id") or "").strip() or None
     record.update({"id": new_id(), "last_status": None, "last_run_at": None, "last_error": None, "last_result": None})
     integrations_table.insert(record)
     log_event("info", f"Integration '{record['name']}' ({record['type']}) created")

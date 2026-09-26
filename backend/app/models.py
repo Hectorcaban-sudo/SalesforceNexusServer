@@ -623,6 +623,7 @@ class IntegrationBase(BaseModel):
     enabled: bool = True
     trigger: IntegrationTrigger = IntegrationTrigger.always
     org_id: Optional[str] = None   # None = applies to every org
+    project_id: Optional[str] = None  # selected project in the UI; omitted = unscoped/shared
     config: dict = Field(default_factory=dict)
     # When true, this sink is excluded from normal per-transaction fan-out
     # (dispatch_integrations) and can only be reached via an Alert rule that
@@ -646,6 +647,7 @@ class IntegrationUpdate(BaseModel):
     enabled: Optional[bool] = None
     trigger: Optional[IntegrationTrigger] = None
     org_id: Optional[str] = None
+    project_id: Optional[str] = None
     config: Optional[dict] = None
     alert_only: Optional[bool] = None
     body_mode: Optional[str] = None
