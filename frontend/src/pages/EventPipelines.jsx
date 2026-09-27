@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Plus, Workflow, Trash2 } from 'lucide-react'
+import { ArrowLeft, Plus, Workflow, Trash2, Pencil, X } from 'lucide-react'
 import api from '../lib/api'
 
 export default function EventPipelines() {
@@ -9,7 +9,12 @@ export default function EventPipelines() {
   const [event, setEvent] = useState(null)
   const [rows, setRows] = useState([])
   const [creating, setCreating] = useState(false)
-  const [name, setName] = useState('New pipeline')
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [editing, setEditing] = useState(null)
+  const [editName, setEditName] = useState('')
+  const [editDesc, setEditDesc] = useState('')
+  const [savingEdit, setSavingEdit] = useState(false)
 
   async function load() {
     const [evs, p] = await Promise.all([
@@ -26,11 +31,39 @@ export default function EventPipelines() {
     e.preventDefault()
     setCreating(true)
     try {
-      const { data } = await api.post(`/events/${eventId}/pipelines`, { name, enabled: true, flow_graph: { nodes: [], edges: [] } })
-      setName('New pipeline')
+      const { data } = await api.post(`/events/${eventId}/pipelines`, {
+        name: name.trim(),
+        description: description.trim(),
+        enabled: true,
+        flow_graph: { nodes: [], edges: [] },
+      })
+      setName('')
+      setDescription('')
       navigate(`/events/${eventId}/pipelines/${data.id}/flow`)
     } finally {
       setCreating(false)
+    }
+  }
+
+  function startEdit(row) {
+    setEditing(row)
+    setEditName(row.name || '')
+    setEditDesc(row.description || '')
+  }
+
+  async function saveEdit(e) {
+    e.preventDefault()
+    if (!editing) return
+    setSavingEdit(true)
+    try {
+      await api.put(`/events/${eventId}/pipelines/${editing.id}`, {
+        name: editName.trim(),
+        description: editDesc.trim(),
+      })
+      setEditing(null)
+      await load()
+    } finally {
+      setSavingEdit(false)
     }
   }
 
@@ -55,7 +88,7 @@ export default function EventPipelines() {
         <div>
           <button className="btn btn-sm" type="button" onClick={() => navigate('/events')}><ArrowLeft size={14} /> Events</button>
           <h1 style={{ marginTop: 10 }}>{event?.channel || 'Event'} pipelines</h1>
-          <p>One CometD subscription. Each enabled pipeline walks independently. Child transaction per pipeline when more than one is on.</p>
+          <p>Name and describe each pipeline. One CometD subscription; enabled pipelines walk in list order.</p>
         </div>
       </div>
       <div className="panel">
@@ -68,7 +101,7 @@ export default function EventPipelines() {
               <tr key={r.id}>
                 <td>
                   <strong>{r.name}</strong>
-                  {r.description && <div className="muted" style={{ fontSize: 12 }}>{r.description}</div>}
+                  <div className="muted" style={{ fontSize: 12 }}>{r.description || 'No description'}</div>
                 </td>
                 <td>{(r.flow_graph?.nodes || []).length}</td>
                 <td>
@@ -78,6 +111,7 @@ export default function EventPipelines() {
                   </label>
                 </td>
                 <td style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn btn-sm" type="button" onClick={() => startEdit(r)}><Pencil size={12} /> Edit</button>
                   <button className="btn btn-sm btn-primary" type="button" onClick={() => navigate(`/events/${eventId}/pipelines/${r.id}/flow`)}>
                     <Workflow size={12} /> Open flow
                   </button>
@@ -87,11 +121,41 @@ export default function EventPipelines() {
             ))}
           </tbody>
         </table>
-        <form onSubmit={create} style={{ display: 'flex', gap: 8, padding: 14, borderTop: '1px solid var(--border)' }}>
+        <form onSubmit={create} style={{ display: 'grid', gap: 8, padding: 14, borderTop: '1px solid var(--border)', gridTemplateColumns: '1fr 2fr auto' }}>
           <input required value={name} onChange={(e) => setName(e.target.value)} placeholder="Pipeline name" />
-          <button className="btn btn-primary" type="submit" disabled={creating}><Plus size={14} /> New pipeline</button>
+          <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description (what this pipeline does)" />
+          <button className="btn btn-primary" type="submit" disabled={creating || !name.trim()}><Plus size={14} /> New pipeline</button>
         </form>
       </div>
+
+      {editing && (
+        <div className="modal-overlay" onClick={() => setEditing(null)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+            <div className="modal-header">
+              <h3>Edit pipeline</h3>
+              <button className="btn btn-sm" type="button" onClick={() => setEditing(null)}><X size={14} /></button>
+            </div>
+            <form onSubmit={saveEdit}>
+              <div className="panel-body">
+                <div className="field">
+                  <label>Name</label>
+                  <input required value={editName} onChange={(e) => setEditName(e.target.value)} />
+                </div>
+                <div className="field">
+                  <label>Description</label>
+                  <textarea rows={3} value={editDesc} onChange={(e) => setEditDesc(e.target.value)} placeholder="What this pipeline does" />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn" onClick={() => setEditing(null)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={savingEdit || !editName.trim()}>
+                  {savingEdit ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
