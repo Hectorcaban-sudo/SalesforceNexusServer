@@ -82,7 +82,6 @@ def update_pipeline(event_id: str, pipeline_id: str, body: EventPipelineUpdate):
     data = {k: v for k, v in body.model_dump().items() if v is not None}
     data["updated_at"] = str(now_ts())
     event_pipelines_table.update(data, Q.id == pipeline_id)
-    # Keep event.flow_graph in sync with first/default enabled graph for legacy export.
     if "flow_graph" in data:
         event_configs_table.update({"flow_graph": data["flow_graph"]}, Q.id == event_id)
     return event_pipelines_table.get(Q.id == pipeline_id)
