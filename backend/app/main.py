@@ -33,6 +33,7 @@ from .routers import sharepoint as sharepoint_router
 from .routers import projects as projects_router
 from .routers import flow_templates as flow_templates_router
 from .routers import pipelines as pipelines_router
+from .routers import health as health_router
 from .routers.projects import ensure_default_project
 from .audit import AuditMiddleware
 
@@ -70,10 +71,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
-# Logging + tracing instrumentation must happen before the app starts (OTel's
-# FastAPI instrumentor adds middleware, which Starlette forbids once the
-# lifespan has begun) - setup_logging() is idempotent so it's safe to call
-# again inside lifespan() above too.
 setup_logging()
 setup_tracing(app)
 
@@ -104,6 +101,7 @@ app.include_router(sharepoint_router.router)
 app.include_router(projects_router.router)
 app.include_router(flow_templates_router.router)
 app.include_router(pipelines_router.router)
+app.include_router(health_router.router)
 
 
 @app.get("/api/health")
@@ -111,7 +109,6 @@ def health():
     return {"status": "ok", "app": settings.app_name}
 
 
-# ---- Serve the built React admin interface ----
 if FRONTEND_DIST.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
 
