@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Radio, Trash2, Send, ArrowDownToLine, ArrowUpFromLine, Share2, GitBranch, Cpu, BellRing, Workflow } from 'lucide-react'
+import { Plus, Radio, Trash2, Send, ArrowDownToLine, ArrowUpFromLine, Share2, GitBranch, Cpu, BellRing, Workflow, ChevronDown, ChevronRight } from 'lucide-react'
 import api from '../lib/api'
 import { useProject, belongsToProject, isGlobalResource, visibleLibraryItem } from '../lib/ProjectContext'
 
@@ -32,6 +32,7 @@ export default function EventsConfig() {
   const [processors, setProcessors] = useState([])
   const [rules, setRules] = useState([])
   const [savingRouting, setSavingRouting] = useState(false)
+  const [collapsedOrgs, setCollapsedOrgs] = useState({})
 
   const visibleConfigs = useMemo(
     () => (configs || []).filter((c) => belongsToProject(c, projectId, project)),
@@ -155,8 +156,8 @@ export default function EventsConfig() {
     <div>
       <div className="page-title-row">
         <div>
-          <h1>Event channels</h1>
-          <p>Catalog of Salesforce channels. Pipelines are edited in the Flow designer — the worker walks that graph.</p>
+          <h1>Events & flows</h1>
+          <p>{project ? `${project.name} · ` : ''}Channels grouped by Salesforce org. Pipelines live under each subscribe channel.</p>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button className="btn" onClick={() => setPublishOpen(true)}><Send size={14} /> Publish test event</button>
@@ -166,65 +167,91 @@ export default function EventsConfig() {
 
       {orgs.length === 0 && <div className="panel"><div className="empty-state">Add a Salesforce org first, then configure its event channels here.</div></div>}
 
-      <div className="dash-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
-        <div className="panel">
-          <div className="panel-header"><h3><ArrowDownToLine size={14} /> Subscribed (Salesforce → Nexus)</h3></div>
-          <table>
-            <thead><tr><th>Channel</th><th>Org</th><th>Pipeline</th><th>Status</th><th></th></tr></thead>
-            <tbody>
-              {subs.length === 0 && <tr><td colSpan={5} className="empty-state">No subscribe channels configured</td></tr>}
-              {subs.map((c) => {
-                const chCount = (c.route_publish_channel_ids || []).length
-                const intCount = (c.route_integration_ids || []).length
-                const hasProcessorOverride = !!c.processing_mode
-                const hasRule = !!c.rule_id
-                const autoPublishOff = c.auto_publish === false
-                return (
-                  <tr key={c.id}>
-                    <td><code className="pill">{c.channel}</code></td>
-                    <td>{orgName(c.org_id)}</td>
-                    <td>
-                      <button className="btn btn-sm btn-primary" title="Edit pipeline in Flow designer" onClick={() => navigate(`/events/${c.id}/pipelines`)}>
-                        <Workflow size={12} /> Pipelines
-                      </button>
-                    </td>
-                    <td>
-                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: 0, cursor: 'pointer' }}>
-                        <input type="checkbox" style={{ width: 15 }} checked={c.enabled} onChange={() => toggle(c)} />
-                        {c.enabled ? 'Enabled' : 'Disabled'}
-                      </label>
-                    </td>
-                    <td><button className="btn btn-sm btn-icon btn-danger" onClick={() => remove(c)}><Trash2 size={13} /></button></td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+      {orgs.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {orgs.map((org) => {
+            const orgSubs = visibleConfigs.filter((c) => c.org_id === org.id && c.direction === 'subscribe')
+            const orgPubs = visibleConfigs.filter((c) => c.org_id === org.id && c.direction === 'publish')
+            const total = orgSubs.length + orgPubs.length
+            const closed = !!collapsedOrgs[org.id]
+            return (
+              <div className="panel" key={org.id}>
+                <div
+                  className="panel-header"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => setCollapsedOrgs((s) => ({ ...s, [org.id]: !s[org.id] }))}
+                >
+                  <h3>
+                    {closed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                    {org.name}
+                    {org.active === false && <span className="badge badge-gray" style={{ marginLeft: 8 }}>inactive</span>}
+                  </h3>
+                  <span className="badge badge-gray">{total} channel{total === 1 ? '' : 's'}</span>
+                </div>
+                {!closed && (
+                  <div>
+                    <div className="panel-header" style={{ borderTop: '1px solid var(--border)' }}>
+                      <h3><ArrowDownToLine size={14} /> Subscribed</h3>
+                    </div>
+                    <table>
+                      <thead><tr><th>Channel</th><th>Status</th><th></th></tr></thead>
+                      <tbody>
+                        {orgSubs.length === 0 && <tr><td colSpan={3} className="empty-state">No subscribe channels</td></tr>}
+                        {orgSubs.map((c) => (
+                          <tr key={c.id}>
+                            <td>
+                              <code className="pill">{c.channel}</code>
+                              {c.description && <div className="muted" style={{ fontSize: 12 }}>{c.description}</div>}
+                            </td>
+                            <td>
+                              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: 0, cursor: 'pointer' }}>
+                                <input type="checkbox" style={{ width: 15 }} checked={c.enabled} onChange={() => toggle(c)} />
+                                {c.enabled ? 'Enabled' : 'Disabled'}
+                              </label>
+                            </td>
+                            <td style={{ display: 'flex', gap: 6 }}>
+                              <button className="btn btn-sm btn-primary" type="button" onClick={() => navigate(`/events/${c.id}/pipelines`)}>
+                                <Workflow size={12} /> Pipelines
+                              </button>
+                              <button className="btn btn-sm btn-icon btn-danger" type="button" onClick={() => remove(c)}><Trash2 size={13} /></button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div className="panel-header" style={{ borderTop: '1px solid var(--border)' }}>
+                      <h3><ArrowUpFromLine size={14} /> Publish</h3>
+                    </div>
+                    <table>
+                      <thead><tr><th>Channel</th><th>Status</th><th></th></tr></thead>
+                      <tbody>
+                        {orgPubs.length === 0 && <tr><td colSpan={3} className="empty-state">No publish channels</td></tr>}
+                        {orgPubs.map((c) => (
+                          <tr key={c.id}>
+                            <td><code className="pill">{c.channel}</code></td>
+                            <td>
+                              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: 0, cursor: 'pointer' }}>
+                                <input type="checkbox" style={{ width: 15 }} checked={c.enabled} onChange={() => toggle(c)} />
+                                {c.enabled ? 'Enabled' : 'Disabled'}
+                              </label>
+                            </td>
+                            <td>
+                              <button className="btn btn-sm btn-icon btn-danger" type="button" onClick={() => remove(c)}><Trash2 size={13} /></button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+          {visibleConfigs.length === 0 && orgs.length > 0 && (
+            <p className="muted" style={{ fontSize: 13 }}>No channels in this project yet. Use Add channel.</p>
+          )}
         </div>
-
-        <div className="panel">
-          <div className="panel-header"><h3><ArrowUpFromLine size={14} /> Publish (Nexus → Salesforce)</h3></div>
-          <table>
-            <thead><tr><th>Channel</th><th>Org</th><th>Status</th><th></th></tr></thead>
-            <tbody>
-              {pubs.length === 0 && <tr><td colSpan={4} className="empty-state">No publish channels configured</td></tr>}
-              {pubs.map((c) => (
-                <tr key={c.id}>
-                  <td><code className="pill">{c.channel}</code></td>
-                  <td>{orgName(c.org_id)}</td>
-                  <td>
-                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: 0, cursor: 'pointer' }}>
-                      <input type="checkbox" style={{ width: 15 }} checked={c.enabled} onChange={() => toggle(c)} />
-                      {c.enabled ? 'Enabled' : 'Disabled'}
-                    </label>
-                  </td>
-                  <td><button className="btn btn-sm btn-icon btn-danger" onClick={() => remove(c)}><Trash2 size={13} /></button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      )}
 
       {modalOpen && (
         <div className="modal-overlay" onClick={() => setModalOpen(false)}>
