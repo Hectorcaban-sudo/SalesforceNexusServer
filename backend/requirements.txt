@@ -15,29 +15,11 @@ jinja2==3.1.4
 # Message broker (RabbitMQ is optional - see Admin Configuration -> Message Broker)
 aio-pika==10.0.1
 
-# Dataiku DSS client (used by the "dss_client" payload processing mode)
-# NOTE: pin this to match your Dataiku DSS server's version if you hit API
-# incompatibilities - Dataiku recommends the client version track the server.
 dataiku-api-client==15.0.0
-
-# Rule engine (validation gate for whether an event gets processed - see
-# app/rules.py) - executes GoRules JSON Decision Model (JDM) decision
-# graphs, e.g. exported from the free online editor at https://editor.gorules.io
 zen-engine==2.0.2
-
-# ---- Database backend (see Admin Configuration -> Database, README "Database backends") ----
-# SQLAlchemy Core provides the SQL-dialect abstraction; always required.
 sqlalchemy==2.0.35
 alembic==1.13.3
-# SQLite (the default) needs no extra driver - it's in the Python standard library.
-# Uncomment ONLY the driver for the backend you actually configure via DATABASE_TYPE:
-# psycopg2-binary==2.9.9      # DATABASE_TYPE=postgres
-# pyodbc==5.1.0               # DATABASE_TYPE=sqlserver (also needs the OS-level
-#                              # "ODBC Driver 18 for SQL Server" package - see README)
-# oracledb==2.4.1             # DATABASE_TYPE=oracle (pure Python "thin" mode, no
-#                              # separate Oracle Instant Client needed)
 
-# OpenTelemetry (tracing is safe to leave unconfigured - see app/tracing.py)
 opentelemetry-api==1.27.0
 opentelemetry-sdk==1.27.0
 opentelemetry-instrumentation-fastapi==0.48b0
@@ -45,8 +27,5 @@ opentelemetry-instrumentation-requests==0.48b0
 opentelemetry-exporter-otlp-proto-http==1.27.0
 jsonschema>=4.20.0
 
-<<<<<<< Updated upstream
 # Cron scheduler for scheduled SOQL jobs (see app/scheduler.py)
-=======
->>>>>>> Stashed changes
 apscheduler==3.10.4
