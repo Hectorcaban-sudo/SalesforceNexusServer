@@ -57,7 +57,7 @@ async def update_job(job_id: str, body: dict):
     return scheduled_jobs_table.get(Q.id == job_id)
 
 
-@router.delete("/{job_id}", dependencies=[Depends(require_role("admin"))])
+@router.delete("/{job_id}", dependencies=[Depends(require_role("operator"))])
 async def delete_job(job_id: str):
     scheduled_jobs_table.remove(Q.id == job_id)
     await reload_jobs()
