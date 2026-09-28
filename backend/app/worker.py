@@ -430,13 +430,17 @@ def _resolve_routes(org_id: str, source_channel: str):
     """Looks up the subscribe event config that triggered this event to find
     its explicit routing selections (publish channels + integrations +
     alerts). Falls back to ([], None, None) when no explicit routing is
-    configured, so callers know to use legacy auto-match behavior instead."""
+    configured. Since dispatch_integrations() now only fires integrations
+    that are explicitly named (None/[] fires none - see
+    integration_dispatch.py), an integration_ids of None here means no
+    integration will fire for this event, not "auto-match by org" as it
+    did before that change."""
     source_cfg = _source_event_config(org_id, source_channel)
     if not source_cfg:
         return [], None, None
 
     publish_ids = source_cfg.get("route_publish_channel_ids") or []
-    integration_ids = source_cfg.get("route_integration_ids") or None  # None = no explicit selection -> legacy auto-match
+    integration_ids = source_cfg.get("route_integration_ids") or None  # None -> no integration fires (see docstring)
     alert_ids = source_cfg.get("route_alert_ids") or None
 
     publish_channels = []
@@ -601,7 +605,7 @@ async def inbound_worker():
                     await _walk(child["id"], p.get("flow_graph"), p.get("name"))
             return
 
-        _, _, routed_alert_ids = _resolve_routes(org_id, source_channel)
+        _, routed_integration_ids, routed_alert_ids = _resolve_routes(org_id, source_channel)
 
         # ---- Schema validation (before rule gate / processor) ----
         src_cfg = _source_event_config(org_id, source_channel)
@@ -615,7 +619,7 @@ async def inbound_worker():
                     tx.update_transaction(transaction_id, status="failed", error=msg)
                     log_event("error", f"Worker: {msg}", transaction_id=transaction_id)
                     failed_tx = tx.get_transaction(transaction_id)
-                    await asyncio.to_thread(dispatch_integrations, failed_tx, None, parent_carrier)
+                    await asyncio.to_thread(dispatch_integrations, failed_tx, routed_integration_ids, parent_carrier)
                     await asyncio.to_thread(fire_alert_for_transaction, failed_tx, routed_alert_ids)
                     return
                 log_event("warning", f"Worker: schema warn — {msg}", transaction_id=transaction_id)
@@ -630,7 +634,7 @@ async def inbound_worker():
                 tx.update_transaction(transaction_id, status="failed", error=f"Rule gate evaluation failed: {gate.error}")
                 log_event("error", f"Worker: rule gate evaluation failed: {gate.error}", transaction_id=transaction_id, rule_id=rule_id)
                 failed_tx = tx.get_transaction(transaction_id)
-                await asyncio.to_thread(dispatch_integrations, failed_tx, None, gate_carrier)
+                await asyncio.to_thread(dispatch_integrations, failed_tx, routed_integration_ids, gate_carrier)
                 await asyncio.to_thread(fire_alert_for_transaction, failed_tx, routed_alert_ids)
                 return
 
@@ -682,7 +686,7 @@ async def inbound_worker():
                 log_event("error", "Worker: dead-letter after max retries", transaction_id=transaction_id, retry=attempt)
                 failed_tx = tx.get_transaction(transaction_id)
                 fail_carrier = inject_trace_context(span=process_span) or parent_carrier
-                await asyncio.to_thread(dispatch_integrations, failed_tx, None, fail_carrier)
+                await asyncio.to_thread(dispatch_integrations, failed_tx, routed_integration_ids, fail_carrier)
                 await asyncio.to_thread(fire_alert_for_transaction, failed_tx, routed_alert_ids)
                 return
 
