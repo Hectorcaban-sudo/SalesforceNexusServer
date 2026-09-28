@@ -55,6 +55,8 @@ export default function AdminConfig() {
   const [uploading, setUploading] = useState(false)
   const [testResult, setTestResult] = useState(null)
   const fileInputRef = useRef(null)
+  const [viewCode, setViewCode] = useState(null)
+  const [viewName, setViewName] = useState('')
 
   // ---- Rules ----
   const [rules, setRules] = useState([])
@@ -780,6 +782,11 @@ export default function AdminConfig() {
                             ) : <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>never run</span>}
                           </td>
                           <td style={{ display: 'flex', gap: 6 }}>
+                            <button className="btn btn-sm btn-icon" title="View source" onClick={async () => {
+                              const { data } = await api.get(`/processors/${p.id}/code`)
+                              setViewName(p.name)
+                              setViewCode(data.code || '')
+                            }}>View</button>
                             <button className="btn btn-sm btn-icon" title="Test run" onClick={() => testProcessor(p.id)}><Play size={13} /></button>
                             <button className="btn btn-sm btn-icon" title="Download" onClick={() => downloadProcessor(p)}><Download size={13} /></button>
                             <label className="btn btn-sm btn-icon" title="Upload a new version to override this processor" style={{ margin: 0, cursor: 'pointer' }}>
@@ -792,6 +799,16 @@ export default function AdminConfig() {
                       ))}
                     </tbody>
                   </table>
+                )}
+
+                {viewCode != null && (
+                  <div style={{ marginTop: 14 }}>
+                    <div className="panel-header" style={{ paddingLeft: 0 }}>
+                      <h3>{viewName}.py</h3>
+                      <button className="btn btn-sm" type="button" onClick={() => setViewCode(null)}>Close</button>
+                    </div>
+                    <textarea className="mono" rows={18} readOnly value={viewCode} style={{ width: '100%', fontSize: 13 }} />
+                  </div>
                 )}
 
                 {testResult && (

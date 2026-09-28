@@ -528,10 +528,19 @@ async def inbound_worker():
         if current and current.get("status") == "cancelled":
             log_event("info", "Worker: skipping cancelled transaction", transaction_id=transaction_id)
             return
+        from .metrics import inc
+        from .config import settings as _settings
+        attempt = int(message.get("_retry", 0) or 0)
+        inc("inbound_jobs_total")
 
         src_cfg_early = _source_event_config(org_id, source_channel)
         pipelines = []
-        if src_cfg_early:
+        explicit_ids = message.get("pipeline_ids") or []
+        if explicit_ids:
+            from .database import event_pipelines_table, Q as _Q
+            pipelines = [event_pipelines_table.get(_Q.id == i) for i in explicit_ids]
+            pipelines = [p for p in pipelines if p]
+        elif src_cfg_early:
             try:
                 from .routers.pipelines import list_enabled_pipelines
                 pipelines = list_enabled_pipelines(src_cfg_early)
@@ -664,7 +673,13 @@ async def inbound_worker():
                 return
             except Exception as exc:  # noqa: BLE001
                 tx.update_transaction(transaction_id, status="failed", error=str(exc))
-                log_event("error", f"Worker: processing failed: {exc}", transaction_id=transaction_id)
+                log_event("error", f"Worker: processing failed: {exc}", transaction_id=transaction_id, retry=attempt)
+                if attempt < _settings.worker_max_retries:
+                    inc("inbound_retry_total")
+                    await broker.publish("inbound", {**message, "_retry": attempt + 1})
+                    return
+                inc("inbound_dead_letter_total")
+                log_event("error", "Worker: dead-letter after max retries", transaction_id=transaction_id, retry=attempt)
                 failed_tx = tx.get_transaction(transaction_id)
                 fail_carrier = inject_trace_context(span=process_span) or parent_carrier
                 await asyncio.to_thread(dispatch_integrations, failed_tx, None, fail_carrier)

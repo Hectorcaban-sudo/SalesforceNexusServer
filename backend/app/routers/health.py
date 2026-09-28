@@ -1,4 +1,11 @@
+<<<<<<< Updated upstream
 from fastapi import APIRouter, Response
+=======
+"""Liveness vs readiness. Do not fail liveness because Salesforce is down."""
+from fastapi import APIRouter, Response
+from fastapi.responses import PlainTextResponse
+
+>>>>>>> Stashed changes
 from ..config import settings
 from ..metrics import render_prometheus
 
@@ -8,7 +15,11 @@ router = APIRouter(tags=["health"])
 @router.get("/healthz")
 @router.get("/api/healthz")
 def healthz():
+<<<<<<< Updated upstream
     return {"status": "ok", "app": settings.app_name}
+=======
+    return {"status": "ok", "app": settings.app_name, "version": getattr(settings, "app_version", "1.1.0")}
+>>>>>>> Stashed changes
 
 
 @router.get("/readyz")

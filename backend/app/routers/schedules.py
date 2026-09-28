@@ -1,5 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException
+<<<<<<< Updated upstream
 from typing import Optional
+=======
+from typing import List, Optional
+
+>>>>>>> Stashed changes
 from ..auth import get_current_user, require_role
 from ..database import scheduled_jobs_table, orgs_table, Q
 from ..models import new_id, now_ts
@@ -33,7 +38,13 @@ async def create_job(body: dict):
         "pipeline_ids": body.get("pipeline_ids") or [],
         "max_records": int(body.get("max_records") or 500),
         "enabled": body.get("enabled", True),
+<<<<<<< Updated upstream
         "last_run_at": None, "last_count": None, "last_error": None,
+=======
+        "last_run_at": None,
+        "last_count": None,
+        "last_error": None,
+>>>>>>> Stashed changes
         "created_at": now_ts(),
     }
     scheduled_jobs_table.insert(rec)

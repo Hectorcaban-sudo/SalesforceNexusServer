@@ -11,7 +11,11 @@ def list_catalog(project_id: Optional[str] = None):
     rows = []
     for p in event_pipelines_table.all():
         ev = event_configs_table.get(Q.id == p.get("event_id")) or {}
+<<<<<<< Updated upstream
         if project_id and ev.get("project_id") not in (None, "", project_id):
+=======
+        if project_id and ev.get("project_id") not in (None, "", project_id) and p.get("project_id") not in (None, "", project_id):
+>>>>>>> Stashed changes
             if ev.get("project_id") != project_id:
                 continue
         org = orgs_table.get(Q.id == ev.get("org_id")) or {}
@@ -21,6 +25,10 @@ def list_catalog(project_id: Optional[str] = None):
             "channel": ev.get("channel"),
             "org_id": ev.get("org_id"),
             "org_name": org.get("name"),
+<<<<<<< Updated upstream
+=======
+            "event_project_id": ev.get("project_id"),
+>>>>>>> Stashed changes
             "source": "event",
             "node_count": len(nodes),
         })

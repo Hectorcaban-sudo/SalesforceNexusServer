@@ -45,5 +45,8 @@ opentelemetry-instrumentation-requests==0.48b0
 opentelemetry-exporter-otlp-proto-http==1.27.0
 jsonschema>=4.20.0
 
+<<<<<<< Updated upstream
 # Cron scheduler for scheduled SOQL jobs (see app/scheduler.py)
+=======
+>>>>>>> Stashed changes
 apscheduler==3.10.4

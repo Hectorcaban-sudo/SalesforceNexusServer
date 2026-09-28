@@ -437,6 +437,7 @@ class ProcessorOut(BaseModel):
     last_status: Optional[str] = None
     last_run_at: Optional[float] = None
     last_error: Optional[str] = None
+    project_id: Optional[str] = None
 
 
 class ProcessingMode(str, Enum):
@@ -620,6 +621,7 @@ class RuleOut(BaseModel):
     last_status: Optional[str] = None
     last_run_at: Optional[float] = None
     last_error: Optional[str] = None
+    project_id: Optional[str] = None
     # jdm is intentionally omitted from the list/summary response (can be
     # large); fetch it via GET /api/rules/{id}/jdm when needed (e.g. to edit).
 

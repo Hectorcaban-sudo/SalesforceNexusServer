@@ -57,6 +57,11 @@ async def lifespan(app: FastAPI):
     background_tasks.append(asyncio.create_task(inbound_worker()))
     background_tasks.append(asyncio.create_task(outbound_publisher()))
     await cometd_manager.sync()
+    try:
+        from .scheduler import start_scheduler
+        await start_scheduler()
+    except Exception as exc:
+        log_event("warning", f"Scheduler failed to start: {exc}")
 
     log_event("info", f"{settings.app_name} startup complete")
     yield
@@ -102,11 +107,17 @@ app.include_router(projects_router.router)
 app.include_router(flow_templates_router.router)
 app.include_router(pipelines_router.router)
 app.include_router(health_router.router)
+<<<<<<< Updated upstream
+=======
+app.include_router(schedules_router.router)
+app.include_router(pipeline_catalog_router.router)
+>>>>>>> Stashed changes
 
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "app": settings.app_name}
+    """Legacy alias — prefer /healthz (live) and /readyz (deps)."""
+    return {"status": "ok", "app": settings.app_name, "version": getattr(settings, "app_version", "1.1.0")}
 
 
 if FRONTEND_DIST.exists():

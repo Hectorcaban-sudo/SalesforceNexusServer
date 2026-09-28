@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Plus, Trash2, Cpu, Globe2, Save, ShieldCheck } from 'lucide-react'
 import api from '../lib/api'
+import PythonHighlight from '../components/PythonHighlight'
 import { useProject, isGlobalResource, visibleLibraryItem } from '../lib/ProjectContext'
 
 export default function Processors() {
@@ -193,6 +194,7 @@ export default function Processors() {
       </div>
 
       {selected && (
+<<<<<<< Updated upstream
         <div className="panel" style={{ marginTop: 18 }}>
           <div className="panel-header">
             <h3>{selected.name}.py {isGlobalResource(selected) && <span className="badge badge-blue">Global · read-only</span>}</h3>
@@ -214,6 +216,30 @@ export default function Processors() {
             ) : (
               <textarea className="mono" rows={22} value={code} readOnly={isGlobalResource(selected)} onChange={(e) => { setCode(e.target.value); setSyntax(null) }} style={{ width: '100%', fontSize: 13, lineHeight: 1.45 }} spellCheck={false} />
             )}
+=======
+        <div className="modal-overlay" onClick={() => setSelected(null)}>
+          <div className="modal-box" style={{ maxWidth: 920, width: '92vw' }} onClick={(e) => e.stopPropagation()}>
+            <div className="panel-header">
+              <h3>{selected.name}.py {isGlobalResource(selected) && <span className="badge badge-blue">Global · read-only</span>}</h3>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {syntax && (
+                  <span className={syntax.ok ? 'badge badge-green' : 'badge badge-red'}>
+                    {syntax.ok ? 'Syntax OK · ast.parse' : syntax.error}
+                  </span>
+                )}
+                <button type="button" className="btn btn-sm" onClick={validateCode}><ShieldCheck size={13} /> Validate</button>
+                <button type="button" className="btn btn-sm btn-primary" disabled={savingCode || isGlobalResource(selected)} onClick={saveCode}>
+                  <Save size={13} /> {savingCode ? 'Saving…' : 'Save'}
+                </button>
+                <button type="button" className="btn btn-sm" onClick={() => setSelected(null)}>Close</button>
+              </div>
+            </div>
+            <div className="panel-body">
+              {loadingCode ? <div className="empty-state">Loading…</div> : (
+                <PythonHighlight code={code} readOnly={isGlobalResource(selected)} onChange={(v) => { setCode(v); setSyntax(null) }} />
+              )}
+            </div>
+>>>>>>> Stashed changes
           </div>
         </div>
       )}

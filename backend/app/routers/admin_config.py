@@ -416,7 +416,8 @@ EXPORT_VERSION = 3
 
 @router.get("/export")
 def export_configuration():
-    """
+    """Thin handler. Bundle assembly lives here until config_bundle service grows.
+
     Exports the full configuration bundle for backup/migration:
 
       - projects + project_members (customer boundaries and admins)

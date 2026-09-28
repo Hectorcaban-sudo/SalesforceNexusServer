@@ -3,14 +3,29 @@ from datetime import datetime
 from typing import Optional
 
 from .logging_config import log_event
+<<<<<<< Updated upstream
+=======
+from .config import settings
+>>>>>>> Stashed changes
 
 _scheduler = None
 
 
+<<<<<<< Updated upstream
+=======
+def get_scheduler():
+    return _scheduler
+
+
+>>>>>>> Stashed changes
 async def start_scheduler():
     global _scheduler
     try:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
+<<<<<<< Updated upstream
+=======
+        from apscheduler.triggers.cron import CronTrigger
+>>>>>>> Stashed changes
     except ImportError:
         log_event("warning", "APScheduler not installed — scheduled jobs disabled")
         return
@@ -61,7 +76,11 @@ def _cron_trigger(expr: str, tz: str):
 
 
 async def _run_job(job_id: str):
+<<<<<<< Updated upstream
     from .database import scheduled_jobs_table, orgs_table, Q
+=======
+    from .database import scheduled_jobs_table, orgs_table, event_pipelines_table, Q
+>>>>>>> Stashed changes
     from . import transactions as tx
     from .broker import broker
     from .salesforce_client import sf_client
@@ -93,10 +112,16 @@ async def _run_job(job_id: str):
     queued = 0
     mode = job.get("mode") or "per_record"
     payloads = records if mode != "batch" else ([{"records": records, "job_id": job_id}] if records else [])
+<<<<<<< Updated upstream
+=======
+    if mode != "batch" and not payloads:
+        payloads = []
+>>>>>>> Stashed changes
     for rec in payloads:
         payload = rec if isinstance(rec, dict) else {"record": rec}
         payload.setdefault("_schedule_job_id", job_id)
         record = tx.record_transaction(
+<<<<<<< Updated upstream
             org_id=org["id"], org_name=org.get("name"), direction="subscribe",
             channel=channel, status="queued", payload=payload,
         )
@@ -110,6 +135,28 @@ async def _run_job(job_id: str):
 
 
 def _stamp(job_id: str, last_count=None, error=None):
+=======
+            org_id=org["id"],
+            org_name=org.get("name"),
+            direction="subscribe",
+            channel=channel,
+            status="queued",
+            payload=payload,
+        )
+        await broker.publish("inbound", {
+            "transaction_id": record["id"],
+            "org_id": org["id"],
+            "channel": channel,
+            "payload": payload,
+            "pipeline_ids": pipe_ids,
+        })
+        queued += 1
+    _stamp(job_id, last_count=queued, error=None)
+    log_event("info", f"Schedule '{job.get('name')}' queued {queued} record(s)", job_id=job_id, org_id=org["id"])
+
+
+def _stamp(job_id: str, last_count: Optional[int] = None, error: Optional[str] = None):
+>>>>>>> Stashed changes
     from .database import scheduled_jobs_table, Q
     from .models import now_ts
     data = {"last_run_at": now_ts()}

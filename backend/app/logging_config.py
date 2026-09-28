@@ -6,9 +6,24 @@ Every log record is:
   2. Mirrored into the SQLite `logs` table so the React admin interface can
      query/filter/paginate logs through the API without needing file access.
 """
+import json
 import logging
 import logging.handlers
 from .config import settings
+
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "ts": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        ctx = getattr(record, "context", None) or {}
+        if isinstance(ctx, dict):
+            payload.update({k: v for k, v in ctx.items() if v is not None})
+        return json.dumps(payload, default=str)
 
 _MAX_DB_LOG_RECORDS = 5000
 
@@ -78,7 +93,7 @@ def setup_logging() -> logging.Logger:
 
     logger.setLevel(settings.log_level)
 
-    fmt = logging.Formatter(
+    fmt = JsonFormatter() if settings.json_logs else logging.Formatter(
         "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
     )
 

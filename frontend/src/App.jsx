@@ -18,6 +18,8 @@ import SharePoint from './pages/SharePoint'
 import Projects from './pages/Projects'
 import Processors from './pages/Processors'
 import Rules from './pages/Rules'
+import PipelineCatalog from './pages/PipelineCatalog'
+import ScheduledJobs from './pages/ScheduledJobs'
 import Layout from './components/Layout'
 import { isAuthed } from './lib/api'
 import { AuthProvider, useAuth, hasRole } from './lib/AuthContext'
@@ -80,6 +82,8 @@ export default function App() {
         <Route path="/integrations" element={<RequireAuth><RequireRole role="admin"><Integrations /></RequireRole></RequireAuth>} />
         <Route path="/alerts" element={<RequireAuth><RequireRole role="admin"><Alerts /></RequireRole></RequireAuth>} />
         <Route path="/sharepoint" element={<RequireAuth><RequireRole role="admin"><SharePoint /></RequireRole></RequireAuth>} />
+        <Route path="/pipelines" element={<RequireAuth><PipelineCatalog /></RequireAuth>} />
+        <Route path="/schedules" element={<RequireAuth><RequireRole role="operator"><ScheduledJobs /></RequireRole></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

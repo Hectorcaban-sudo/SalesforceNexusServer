@@ -73,7 +73,8 @@ def _send_webhook(cfg: dict, transaction: dict) -> dict:
     if secret:
         signature = hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()
         headers["X-Nexus-Signature"] = f"sha256={signature}"
-    resp = requests.post(url, data=body, headers=headers, timeout=15, verify=False)
+    from .http_timeouts import requests_timeout
+    resp = requests.post(url, data=body, headers=headers, timeout=requests_timeout(), verify=False)
     resp.raise_for_status()
     return _response_summary(resp)
 
@@ -90,9 +91,9 @@ def _send_custom_api(cfg: dict, transaction: dict) -> dict:
 
     if isinstance(payload, str):
         headers.setdefault("Content-Type", "application/json")
-        resp = requests.request(method, c["url"], data=payload, headers=headers, timeout=15, verify=False)
+        resp = requests.request(method, c["url"], data=payload, headers=headers, timeout=requests_timeout(), verify=False)
     else:
-        resp = requests.request(method, c["url"], json=payload, headers=headers, timeout=15, verify=False)
+        resp = requests.request(method, c["url"], json=payload, headers=headers, timeout=requests_timeout(), verify=False)
     resp.raise_for_status()
     return _response_summary(resp)
 
@@ -116,7 +117,7 @@ def _send_slack(cfg: dict, transaction: dict) -> dict:
             text += f"\nError: {transaction['error']}"
         body = {"text": text}
 
-    resp = requests.post(webhook_url, json=body, timeout=15, verify=False)
+    resp = requests.post(webhook_url, json=body, timeout=requests_timeout(), verify=False)
     resp.raise_for_status()
     return _response_summary(resp)
 
@@ -151,7 +152,7 @@ def _send_teams(cfg: dict, transaction: dict) -> dict:
             ],
         }
 
-    resp = requests.post(webhook_url, json=card, timeout=15, verify=False)
+    resp = requests.post(webhook_url, json=card, timeout=requests_timeout(), verify=False)
     resp.raise_for_status()
     return _response_summary(resp)
 
@@ -201,7 +202,7 @@ def _send_email(cfg: dict, transaction: dict) -> dict:
     msg["From"] = settings["from_address"]
     msg["To"] = ", ".join(to_addresses)
 
-    with smtplib.SMTP(settings["host"], settings.get("port", 587), timeout=15) as smtp:
+    with smtplib.SMTP(settings["host"], settings.get("port", 587), timeout=30) as smtp:
         if settings.get("use_tls"):
             smtp.starttls()
         if settings.get("username"):
@@ -355,15 +356,27 @@ def dispatch_integrations(transaction: dict, only_ids: Optional[list] = None, tr
         if sender is None:
             continue
 
+        from .circuit import is_open, record_success, record_failure
+        from .metrics import inc
+        sink_id = f"integration:{cfg['id']}"
+        if is_open(sink_id):
+            inc("circuit_open_total")
+            log_event("warning", f"Integration '{cfg['name']}' circuit open — skipped", integration_id=cfg["id"])
+            continue
+
         with start_span(f"integration.{cfg['type']}", carrier=trace_carrier, integration_id=cfg["id"], transaction_id=transaction.get("id")):
             try:
                 result = sender(cfg, transaction)
+                record_success(sink_id)
+                inc("integration_ok_total")
                 _record_result(cfg["id"], "ok", result=result)
                 log_event(
                     "info", f"Integration '{cfg['name']}' ({cfg['type']}) dispatched",
                     transaction_id=transaction.get("id"), integration_id=cfg["id"], result=result,
                 )
             except Exception as exc:  # noqa: BLE001
+                record_failure(sink_id)
+                inc("integration_error_total")
                 _record_result(cfg["id"], "error", str(exc))
                 log_event(
                     "error", f"Integration '{cfg['name']}' ({cfg['type']}) failed: {exc}",

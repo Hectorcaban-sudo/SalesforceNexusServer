@@ -14,6 +14,7 @@ LOG_DIR.mkdir(exist_ok=True)
 
 class Settings(BaseSettings):
     app_name: str = "Salesforce Nexus AI Server"
+    app_version: str = "1.1.1"
 
     # JWT / auth
     secret_key: str = "CHANGE_ME_super_secret_key_please_rotate"
@@ -109,6 +110,17 @@ class Settings(BaseSettings):
     sso_scope: str = "openid email profile"
     sso_default_role: str = "viewer"  # role assigned to newly-created SSO users
     frontend_base_url: str = "http://localhost:8000"  # where to send the browser back to after SSO login
+
+    # Outbound HTTP timeouts (seconds)
+    http_connect_timeout: float = 5.0
+    http_read_timeout: float = 30.0
+    http_write_timeout: float = 30.0
+
+    # Circuit breaker / dead-letter
+    circuit_fail_threshold: int = 5
+    circuit_open_seconds: float = 60.0
+    worker_max_retries: int = 3
+    json_logs: bool = True
 
     class Config:
         env_file = ".env"

@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, Radio, ListTree, ScrollText, Search, LogOut, Settings,
   Users as UsersIcon, Share2, BellRing, ShieldCheck, Cloud,
-  FolderKanban, Cpu, GitBranch, Plus, Minus, Bell, CircleHelp,
+  FolderKanban, Cpu, GitBranch, Plus, Minus, Bell, CircleHelp, Workflow, Clock,
 } from 'lucide-react'
 import api, { logout } from '../lib/api'
 import { useAuth, hasRole } from '../lib/AuthContext'
@@ -19,6 +19,8 @@ const MONITOR_NAV = [
 const PROJECT_NAV = [
   { to: '/orgs', label: 'Salesforce Orgs', icon: Building2 },
   { to: '/events', label: 'Events & flows', icon: Radio },
+  { to: '/pipelines', label: 'Pipelines', icon: Workflow },
+  { to: '/schedules', label: 'Scheduled jobs', icon: Clock },
   { to: '/integrations', label: 'Integrations', icon: Share2, admin: true },
   { to: '/sharepoint', label: 'SharePoint', icon: Cloud, admin: true },
   { to: '/processors', label: 'Processors', icon: Cpu, admin: true },
@@ -128,6 +130,7 @@ export default function Layout({ children }) {
             <LogOut />
             Log out
           </div>
+          <AppVersion />
         </div>
       </aside>
 
@@ -207,4 +210,15 @@ function TopbarInbox() {
       )}
     </div>
   )
+}
+
+function AppVersion() {
+  const [ver, setVer] = useState('')
+  useEffect(() => {
+    api.get('/healthz').then((r) => setVer(r.data?.version || '')).catch(() => {
+      api.get('/health').then((r) => setVer(r.data?.version || '')).catch(() => {})
+    })
+  }, [])
+  if (!ver) return null
+  return <div className="muted" style={{ padding: '6px 14px', fontSize: 11 }}>v{ver}</div>
 }

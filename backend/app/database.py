@@ -250,6 +250,7 @@ projects_table = _db.table("projects")
 project_members_table = _db.table("project_members")
 flow_templates_table = _db.table("flow_templates")
 event_pipelines_table = _db.table("event_pipelines")
+scheduled_jobs_table = _db.table("scheduled_jobs")
 
 
 def db_lock():
