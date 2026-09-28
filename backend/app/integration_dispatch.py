@@ -35,15 +35,13 @@ def _matches_trigger(trigger: str, status: str) -> bool:
 
 
 def dispatch_integrations(transaction: dict, only_ids: Optional[list] = None, trace_carrier: Optional[dict] = None):
-    org_id = transaction.get("org_id")
+    """Fire only the integration IDs in only_ids. None or [] fires none."""
     status = transaction.get("status")
+    if not only_ids:
+        return
     candidates = integrations_table.search(Q.enabled == True)  # noqa: E712
-    candidates = [c for c in candidates if not c.get("alert_only")]
-    if only_ids is not None:
-        candidates = [c for c in candidates if c["id"] in only_ids]
+    candidates = [c for c in candidates if not c.get("alert_only") and c["id"] in only_ids]
     for cfg in candidates:
-        if only_ids is None and cfg.get("org_id") not in (None, "", org_id):
-            continue
         if not _matches_trigger(cfg.get("trigger", "always"), status):
             continue
         sender = _SENDERS.get(cfg.get("type"))
