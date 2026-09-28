@@ -20,11 +20,7 @@ def observe_latency(name: str, seconds: float) -> None:
 
 
 def render_prometheus() -> str:
-<<<<<<< Updated upstream
     lines = ["# TYPE nexus_info gauge", "nexus_info 1"]
-=======
-    lines = ["# TYPE nexus_info gauge", f"nexus_info 1"]
->>>>>>> Stashed changes
     for k, v in sorted(_counters.items()):
         lines.append(f"nexus_{k} {v}")
     for k, v in sorted(_last.items()):
