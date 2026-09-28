@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, Cpu, Globe2 } from 'lucide-react'
+import { Plus, Trash2, Cpu, Globe2, Save, ShieldCheck } from 'lucide-react'
 import api from '../lib/api'
 import { useProject, isGlobalResource, visibleLibraryItem } from '../lib/ProjectContext'
 
@@ -10,6 +10,11 @@ export default function Processors() {
   const [uploading, setUploading] = useState(false)
   const [name, setName] = useState('')
   const [file, setFile] = useState(null)
+  const [selected, setSelected] = useState(null)
+  const [code, setCode] = useState('')
+  const [syntax, setSyntax] = useState(null)
+  const [savingCode, setSavingCode] = useState(false)
+  const [loadingCode, setLoadingCode] = useState(false)
 
   async function load() {
     const { data } = await api.get('/processors', {
@@ -60,15 +65,60 @@ export default function Processors() {
     await load()
   }
 
+  async function openEditor(p) {
+    setSelected(p)
+    setLoadingCode(true)
+    setSyntax(null)
+    try {
+      const { data } = await api.get(`/processors/${p.id}/code`)
+      setCode(data.code || '')
+    } catch (err) {
+      setError(err?.response?.data?.detail || err.message)
+      setCode('')
+    } finally {
+      setLoadingCode(false)
+    }
+  }
+
+  async function validateCode() {
+    const { data } = await api.post('/processors/validate', { code })
+    setSyntax(data)
+    return data
+  }
+
+  async function saveCode() {
+    if (!selected || isGlobalResource(selected)) return
+    setSavingCode(true)
+    setError(null)
+    try {
+      const v = await validateCode()
+      if (!v.ok) {
+        setError(v.error)
+        return
+      }
+      await api.put(`/processors/${selected.id}/code`, { code })
+    } catch (err) {
+      setError(err?.response?.data?.detail || err.message)
+    } finally {
+      setSavingCode(false)
+    }
+  }
+
   function Card({ p, global: isGlobal }) {
+    const active = selected?.id === p.id
     return (
       <div
         key={p.id}
         className="org-card"
-        style={isGlobal ? {
-          borderColor: 'rgba(56, 189, 248, 0.45)',
-          background: 'rgba(14, 165, 233, 0.06)',
-        } : undefined}
+        onClick={() => openEditor(p)}
+        style={{
+          cursor: 'pointer',
+          outline: active ? '1px solid var(--accent-blue)' : undefined,
+          ...(isGlobal ? {
+            borderColor: 'rgba(56, 189, 248, 0.45)',
+            background: 'rgba(14, 165, 233, 0.06)',
+          } : {}),
+        }}
       >
         <div className="org-card-header">
           {isGlobal ? <Globe2 size={18} style={{ color: '#38bdf8' }} /> : <Cpu size={18} />}
@@ -85,7 +135,7 @@ export default function Processors() {
           {isGlobal ? (
             <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>Read-only · edit in Admin</span>
           ) : (
-            <button className="btn btn-sm btn-danger" onClick={() => remove(p.id)}><Trash2 size={13} /></button>
+            <button className="btn btn-sm btn-danger" onClick={(e) => { e.stopPropagation(); remove(p.id) }}><Trash2 size={13} /></button>
           )}
         </div>
       </div>
@@ -97,7 +147,8 @@ export default function Processors() {
       <div className="page-header">
         <h1>Payload processors</h1>
         <p className="page-sub">
-          Project processors you can upload here, plus shared <strong>global</strong> processors (read-only; managed under Administration → Admin Configuration).
+          Click a card to view source. Project processors can be edited and saved after ast.parse.
+          Globals are read-only here.
           {project ? <> Active project: <strong>{project.name}</strong></> : null}
         </p>
       </div>
@@ -140,6 +191,32 @@ export default function Processors() {
         )}
         {globals.map((p) => <Card key={p.id} p={p} global />)}
       </div>
+
+      {selected && (
+        <div className="panel" style={{ marginTop: 18 }}>
+          <div className="panel-header">
+            <h3>{selected.name}.py {isGlobalResource(selected) && <span className="badge badge-blue">Global · read-only</span>}</h3>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              {syntax && (
+                <span className={syntax.ok ? 'badge badge-green' : 'badge badge-red'}>
+                  {syntax.ok ? 'Syntax OK · ast.parse' : syntax.error}
+                </span>
+              )}
+              <button type="button" className="btn btn-sm" onClick={validateCode}><ShieldCheck size={13} /> Validate</button>
+              <button type="button" className="btn btn-sm btn-primary" disabled={savingCode || isGlobalResource(selected)} onClick={saveCode}>
+                <Save size={13} /> {savingCode ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+          <div className="panel-body">
+            {loadingCode ? (
+              <div className="empty-state">Loading…</div>
+            ) : (
+              <textarea className="mono" rows={22} value={code} readOnly={isGlobalResource(selected)} onChange={(e) => { setCode(e.target.value); setSyntax(null) }} style={{ width: '100%', fontSize: 13, lineHeight: 1.45 }} spellCheck={false} />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

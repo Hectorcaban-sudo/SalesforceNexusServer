@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/processors", tags=["processors"], dependencies=[
 MAX_UPLOAD_BYTES = 512 * 1024
 
 
-@router.get("", response_model=List[ProcessorOut])
+@router.get("")
 def list_processors(project_id: Optional[str] = None, include_global: bool = True):
     from ..project_scope import filter_by_project
     return filter_by_project(processors_table.all(), project_id, include_global=include_global)
@@ -74,7 +74,7 @@ def download_processor(processor_id: str):
     )
 
 
-@router.post("", response_model=ProcessorOut)
+@router.post("")
 async def upload_processor(name: str = Form(...), file: UploadFile = File(...), project_id: Optional[str] = Form(None)):
     if not file.filename.endswith(".py"):
         raise HTTPException(400, "Only .py files are accepted")
@@ -102,7 +102,7 @@ async def upload_processor(name: str = Form(...), file: UploadFile = File(...), 
     return record
 
 
-@router.post("/{processor_id}/upload", response_model=ProcessorOut)
+@router.post("/{processor_id}/upload")
 async def override_processor(processor_id: str, name: Optional[str] = Form(None), file: UploadFile = File(...)):
     existing = processors_table.get(Q.id == processor_id)
     if not existing:
