@@ -1,10 +1,6 @@
-<<<<<<< Updated upstream
-from fastapi import HTTPException
-=======
 """Event catalog service. Routers stay thin; CometD sync is a side effect here."""
 from fastapi import HTTPException
 
->>>>>>> Stashed changes
 from ..database import event_configs_table, orgs_table, Q
 from ..models import EventConfigCreate, EventConfigUpdate, new_id
 from ..logging_config import log_event
