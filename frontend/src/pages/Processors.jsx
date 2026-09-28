@@ -24,9 +24,7 @@ export default function Processors() {
     setItems(data || [])
   }
 
-  useEffect(() => {
-    load().catch((e) => setError(e.message))
-  }, [projectId])
+  useEffect(() => { load().catch((e) => setError(e.message)) }, [projectId])
 
   const visible = useMemo(
     () => (items || []).filter((p) => visibleLibraryItem(p, projectId, { includeGlobal: true })),
@@ -93,10 +91,7 @@ export default function Processors() {
     setError(null)
     try {
       const v = await validateCode()
-      if (!v.ok) {
-        setError(v.error)
-        return
-      }
+      if (!v.ok) { setError(v.error); return }
       await api.put(`/processors/${selected.id}/code`, { code })
     } catch (err) {
       setError(err?.response?.data?.detail || err.message)
@@ -108,19 +103,7 @@ export default function Processors() {
   function Card({ p, global: isGlobal }) {
     const active = selected?.id === p.id
     return (
-      <div
-        key={p.id}
-        className="org-card"
-        onClick={() => openEditor(p)}
-        style={{
-          cursor: 'pointer',
-          outline: active ? '1px solid var(--accent-blue)' : undefined,
-          ...(isGlobal ? {
-            borderColor: 'rgba(56, 189, 248, 0.45)',
-            background: 'rgba(14, 165, 233, 0.06)',
-          } : {}),
-        }}
-      >
+      <div key={p.id} className="org-card" onClick={() => openEditor(p)} style={{ cursor: 'pointer', outline: active ? '1px solid var(--accent-blue)' : undefined, ...(isGlobal ? { borderColor: 'rgba(56, 189, 248, 0.45)', background: 'rgba(14, 165, 233, 0.06)' } : {}) }}>
         <div className="org-card-header">
           {isGlobal ? <Globe2 size={18} style={{ color: '#38bdf8' }} /> : <Cpu size={18} />}
           <div>
@@ -147,90 +130,40 @@ export default function Processors() {
     <div>
       <div className="page-header">
         <h1>Payload processors</h1>
-        <p className="page-sub">
-          Click a card to view source. Project processors can be edited and saved after ast.parse.
-          Globals are read-only here.
-          {project ? <> Active project: <strong>{project.name}</strong></> : null}
-        </p>
+        <p className="page-sub">Click a card to view source. Globals are read-only.{project ? <> Active project: <strong>{project.name}</strong></> : null}</p>
       </div>
       {error && <div className="panel" style={{ color: 'var(--accent-red)', marginBottom: 12 }}>{String(error)}</div>}
-
       <div className="panel" style={{ marginBottom: 16 }}>
         <div className="panel-header"><h3><Plus size={15} /> Upload project processor</h3></div>
         <div className="panel-body">
           <form onSubmit={upload}>
             <div className="form-row-2">
-              <div className="field">
-                <label>Name</label>
-                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Optional display name" />
-              </div>
-              <div className="field">
-                <label>Python file (.py)</label>
-                <input type="file" accept=".py,text/x-python" onChange={(e) => setFile(e.target.files?.[0] || null)} required />
-                {file && <div style={{ fontSize: 12, marginTop: 4, color: 'var(--text-muted)' }}>Selected: {file.name}</div>}
-              </div>
+              <div className="field"><label>Name</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>
+              <div className="field"><label>Python file (.py)</label><input type="file" accept=".py,text/x-python" onChange={(e) => setFile(e.target.files?.[0] || null)} required /></div>
             </div>
-            <button className="btn btn-primary" disabled={uploading || !file || !projectId} style={{ marginTop: 8 }}>
-              {uploading ? 'Uploading…' : 'Upload to this project'}
-            </button>
+            <button className="btn btn-primary" disabled={uploading || !file || !projectId} style={{ marginTop: 8 }}>{uploading ? 'Uploading…' : 'Upload to this project'}</button>
           </form>
         </div>
       </div>
-
       <h3 style={{ fontSize: 14, margin: '8px 0 10px', color: 'var(--text-muted)' }}>This project</h3>
       <div className="org-grid" style={{ marginBottom: 20 }}>
-        {projectOwned.length === 0 && (
-          <div className="panel"><div className="empty-state">No project-specific processors yet.</div></div>
-        )}
+        {projectOwned.length === 0 && <div className="panel"><div className="empty-state">No project-specific processors yet.</div></div>}
         {projectOwned.map((p) => <Card key={p.id} p={p} global={false} />)}
       </div>
-
       <h3 style={{ fontSize: 14, margin: '8px 0 10px', color: 'var(--text-muted)' }}>Global library (read-only)</h3>
       <div className="org-grid">
-        {globals.length === 0 && (
-          <div className="panel"><div className="empty-state">No global processors. Create them under Admin Configuration.</div></div>
-        )}
+        {globals.length === 0 && <div className="panel"><div className="empty-state">No global processors.</div></div>}
         {globals.map((p) => <Card key={p.id} p={p} global />)}
       </div>
-
       {selected && (
-<<<<<<< Updated upstream
-        <div className="panel" style={{ marginTop: 18 }}>
-          <div className="panel-header">
-            <h3>{selected.name}.py {isGlobalResource(selected) && <span className="badge badge-blue">Global · read-only</span>}</h3>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              {syntax && (
-                <span className={syntax.ok ? 'badge badge-green' : 'badge badge-red'}>
-                  {syntax.ok ? 'Syntax OK · ast.parse' : syntax.error}
-                </span>
-              )}
-              <button type="button" className="btn btn-sm" onClick={validateCode}><ShieldCheck size={13} /> Validate</button>
-              <button type="button" className="btn btn-sm btn-primary" disabled={savingCode || isGlobalResource(selected)} onClick={saveCode}>
-                <Save size={13} /> {savingCode ? 'Saving…' : 'Save'}
-              </button>
-            </div>
-          </div>
-          <div className="panel-body">
-            {loadingCode ? (
-              <div className="empty-state">Loading…</div>
-            ) : (
-              <textarea className="mono" rows={22} value={code} readOnly={isGlobalResource(selected)} onChange={(e) => { setCode(e.target.value); setSyntax(null) }} style={{ width: '100%', fontSize: 13, lineHeight: 1.45 }} spellCheck={false} />
-            )}
-=======
         <div className="modal-overlay" onClick={() => setSelected(null)}>
           <div className="modal-box" style={{ maxWidth: 920, width: '92vw' }} onClick={(e) => e.stopPropagation()}>
             <div className="panel-header">
               <h3>{selected.name}.py {isGlobalResource(selected) && <span className="badge badge-blue">Global · read-only</span>}</h3>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                {syntax && (
-                  <span className={syntax.ok ? 'badge badge-green' : 'badge badge-red'}>
-                    {syntax.ok ? 'Syntax OK · ast.parse' : syntax.error}
-                  </span>
-                )}
+              <div style={{ display: 'flex', gap: 8 }}>
+                {syntax && <span className={syntax.ok ? 'badge badge-green' : 'badge badge-red'}>{syntax.ok ? 'Syntax OK' : syntax.error}</span>}
                 <button type="button" className="btn btn-sm" onClick={validateCode}><ShieldCheck size={13} /> Validate</button>
-                <button type="button" className="btn btn-sm btn-primary" disabled={savingCode || isGlobalResource(selected)} onClick={saveCode}>
-                  <Save size={13} /> {savingCode ? 'Saving…' : 'Save'}
-                </button>
+                <button type="button" className="btn btn-sm btn-primary" disabled={savingCode || isGlobalResource(selected)} onClick={saveCode}><Save size={13} /> Save</button>
                 <button type="button" className="btn btn-sm" onClick={() => setSelected(null)}>Close</button>
               </div>
             </div>
@@ -239,7 +172,6 @@ export default function Processors() {
                 <PythonHighlight code={code} readOnly={isGlobalResource(selected)} onChange={(v) => { setCode(v); setSyntax(null) }} />
               )}
             </div>
->>>>>>> Stashed changes
           </div>
         </div>
       )}
