@@ -93,12 +93,25 @@ export default function ScheduledJobs() {
                 <div className="field"><label>Cron (min hour dom mon dow)</label><input value={form.cron} onChange={(e) => setForm({ ...form, cron: e.target.value })} /></div>
                 <div className="field">
                   <label>Target pipelines</label>
-                  {pipes.map((p) => (
-                    <label key={p.id} style={{ display: 'flex', gap: 8, fontSize: 13 }}>
-                      <input type="checkbox" checked={form.pipeline_ids.includes(p.id)} onChange={() => togglePipe(p.id)} />
-                      {p.name} <span className="muted">{p.channel}</span>
-                    </label>
-                  ))}
+                  <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>
+                    Use an event pipeline, or create a standalone pipeline with no Salesforce subscribe event.
+                  </p>
+                  <button type="button" className="btn btn-sm" style={{ marginBottom: 8 }} onClick={async () => {
+                    const name = window.prompt('Standalone pipeline name', 'Scheduled pipeline')
+                    if (!name) return
+                    const { data } = await api.post('/pipeline-catalog', { name, project_id: projectId || undefined })
+                    setPipes((prev) => [...prev, data])
+                    setForm((f) => ({ ...f, pipeline_ids: [...f.pipeline_ids, data.id] }))
+                  }}>+ Standalone pipeline</button>
+                  <div style={{ maxHeight: 180, overflow: 'auto' }}>
+                    {pipes.map((p) => (
+                      <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 6 }}>
+                        <input type="checkbox" checked={form.pipeline_ids.includes(p.id)} onChange={() => togglePipe(p.id)} />
+                        <span>{p.name}</span>
+                        <span className="muted">{p.channel || p.source || 'standalone'}</span>
+                      </label>
+                    ))}
+                  </div>
                 </div>
               </div>
               <div className="modal-footer">

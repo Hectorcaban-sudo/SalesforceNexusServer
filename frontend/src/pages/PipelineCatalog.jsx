@@ -53,7 +53,7 @@ export default function PipelineCatalog() {
                 <td>{p.enabled === false ? 'Off' : 'On'}</td>
                 <td>{p.node_count}</td>
                 <td>
-                  <button className="btn btn-sm btn-primary" onClick={() => navigate(`/events/${p.event_id}/pipelines/${p.id}/flow`)}>
+                  <button className="btn btn-sm btn-primary" onClick={() => navigate(p.event_id ? `/events/${p.event_id}/pipelines/${p.id}/flow` : `/pipelines/${p.id}/flow`)}>
                     <Workflow size={12} /> Open flow
                   </button>
                 </td>
