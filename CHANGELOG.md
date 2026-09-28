@@ -1,14 +1,16 @@
 # Changelog
 
+## 1.2.1 — 2026-09-28
+
+- Remove leftover git stash conflict markers (`<<<<<<<`) from merged files
+
 ## 1.2.0 — 2026-09-27
 
-- Pipelines catalog (all flows in the project)
-- Scheduled jobs: APScheduler cron + SOQL → inbound walker
-- Processor viewer is a modal with Python syntax colors
+- Pipelines catalog, scheduled jobs (APScheduler), processor modal highlighter
 
 ## 1.1.1 — 2026-09-27
 
-- Processor list returns project_id; view globals; validate/save
+- Processor project_id on list responses; view globals
 
 ## 1.1.0 — 2026-09-27
 

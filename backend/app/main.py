@@ -34,6 +34,8 @@ from .routers import projects as projects_router
 from .routers import flow_templates as flow_templates_router
 from .routers import pipelines as pipelines_router
 from .routers import health as health_router
+from .routers import schedules as schedules_router
+from .routers import pipeline_catalog as pipeline_catalog_router
 from .routers.projects import ensure_default_project
 from .audit import AuditMiddleware
 
@@ -107,17 +109,13 @@ app.include_router(projects_router.router)
 app.include_router(flow_templates_router.router)
 app.include_router(pipelines_router.router)
 app.include_router(health_router.router)
-<<<<<<< Updated upstream
-=======
 app.include_router(schedules_router.router)
 app.include_router(pipeline_catalog_router.router)
->>>>>>> Stashed changes
 
 
 @app.get("/api/health")
 def health():
-    """Legacy alias — prefer /healthz (live) and /readyz (deps)."""
-    return {"status": "ok", "app": settings.app_name, "version": getattr(settings, "app_version", "1.1.0")}
+    return {"status": "ok", "app": settings.app_name, "version": getattr(settings, "app_version", "1.2.0")}
 
 
 if FRONTEND_DIST.exists():
