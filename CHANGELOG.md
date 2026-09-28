@@ -1,22 +1,19 @@
 # Changelog
 
-Format: Keep a Changelog. Version is `VERSION` and `settings.app_version`.
+## 1.2.0 — 2026-09-27
+
+- Pipelines catalog (all flows in the project)
+- Scheduled jobs: APScheduler cron + SOQL → inbound walker
+- Processor viewer is a modal with Python syntax colors
 
 ## 1.1.1 — 2026-09-27
 
-- List processors (and rules) now return `project_id` so project uploads stay on the project
-- Project Processors page: click any card — including global — to view source (globals read-only)
-- Admin → Global processors: View source
-- Validate (ast.parse) + Save for project-owned scripts
+- Processor list returns project_id; view globals; validate/save
 
 ## 1.1.0 — 2026-09-27
 
-- Processor Phase A editor
-- App version on /healthz and in the sidebar
+- Processor Phase A editor and app versioning
 
 ## 1.0.0 — 2026-09-27
 
-- Projects, multi-pipeline events, flow walker
-- SharePoint GCC High processors
-- Templates, dry-run, dashboard, transactions by pipeline
-- Events catalog grouped by org
+- Projects, multi-pipeline events, flow walker, SharePoint
