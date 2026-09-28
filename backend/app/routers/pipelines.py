@@ -83,7 +83,18 @@ def update_pipeline(event_id: str, pipeline_id: str, body: EventPipelineUpdate):
     data["updated_at"] = str(now_ts())
     event_pipelines_table.update(data, Q.id == pipeline_id)
     if "flow_graph" in data:
-        event_configs_table.update({"flow_graph": data["flow_graph"]}, Q.id == event_id)
+        # Only mirror onto the event-level flow_graph field when this is the
+        # event's ONE pipeline. With 2+ pipelines there is no single graph to
+        # call authoritative - unconditionally overwriting it here (the old
+        # behavior) meant saving ANY pipeline, including a disabled or
+        # secondary one, silently clobbered event_configs.flow_graph with
+        # whichever pipeline was edited last. That field is also what
+        # config export/import serializes, so the corruption was persistent
+        # and would resurface as the wrong graph (mislabeled "Default") on
+        # a restore.
+        siblings = event_pipelines_table.search(Q.event_id == event_id)
+        if len(siblings) <= 1:
+            event_configs_table.update({"flow_graph": data["flow_graph"]}, Q.id == event_id)
     return event_pipelines_table.get(Q.id == pipeline_id)
 
 
