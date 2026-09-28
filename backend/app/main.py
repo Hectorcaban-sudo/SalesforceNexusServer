@@ -36,7 +36,6 @@ from .routers import pipelines as pipelines_router
 from .routers import health as health_router
 from .routers import schedules as schedules_router
 from .routers import pipeline_catalog as pipeline_catalog_router
-from .routers.projects import ensure_default_project
 from .audit import AuditMiddleware
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -47,7 +46,7 @@ background_tasks = []
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger = setup_logging()
+    setup_logging()
     bootstrap_default_admin()
     from .routers.projects import ensure_default_project
     ensure_default_project()
@@ -64,6 +63,15 @@ async def lifespan(app: FastAPI):
         await start_scheduler()
     except Exception as exc:
         log_event("warning", f"Scheduler failed to start: {exc}")
+
+    if getattr(settings, "dss_warmup_on_start", True):
+        async def _dss_warm():
+            try:
+                from .dss_runner import warmup_dss
+                await asyncio.to_thread(warmup_dss)
+            except Exception as exc:
+                log_event("warning", f"DSS warmup skipped: {exc}")
+        background_tasks.append(asyncio.create_task(_dss_warm()))
 
     log_event("info", f"{settings.app_name} startup complete")
     yield
@@ -115,7 +123,7 @@ app.include_router(pipeline_catalog_router.router)
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "app": settings.app_name, "version": getattr(settings, "app_version", "1.2.0")}
+    return {"status": "ok", "app": settings.app_name, "version": getattr(settings, "app_version", "1.2.6")}
 
 
 if FRONTEND_DIST.exists():
