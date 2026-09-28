@@ -3,18 +3,20 @@ from .config import settings
 
 
 def requests_timeout():
-    """(connect, read) tuple for requests."""
-    return (settings.http_connect_timeout, settings.http_read_timeout)
+    """(connect, read) tuple for the requests library."""
+    connect = float(getattr(settings, "http_connect_timeout", 5.0) or 5.0)
+    read = float(getattr(settings, "http_read_timeout", 30.0) or 30.0)
+    return (connect, read)
 
 
 def httpx_timeout():
     try:
         import httpx
         return httpx.Timeout(
-            connect=settings.http_connect_timeout,
-            read=settings.http_read_timeout,
-            write=settings.http_write_timeout,
-            pool=settings.http_connect_timeout,
+            connect=float(getattr(settings, "http_connect_timeout", 5.0) or 5.0),
+            read=float(getattr(settings, "http_read_timeout", 30.0) or 30.0),
+            write=float(getattr(settings, "http_write_timeout", 30.0) or 30.0),
+            pool=float(getattr(settings, "http_connect_timeout", 5.0) or 5.0),
         )
     except Exception:
-        return settings.http_read_timeout
+        return float(getattr(settings, "http_read_timeout", 30.0) or 30.0)
