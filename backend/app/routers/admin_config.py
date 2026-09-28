@@ -440,6 +440,7 @@ def export_configuration():
         sharepoint_connections_table, sharepoint_file_actions_table,
         sharepoint_list_actions_table,
         projects_table, project_members_table,
+        event_pipelines_table, flow_templates_table,
     )
     from .. import processors as proc_module
     from ..models import now_ts
@@ -463,6 +464,8 @@ def export_configuration():
         "project_members": project_members_table.all(),
         "orgs": orgs_table.all(),
         "event_configs": event_configs_table.all(),
+        "event_pipelines": event_pipelines_table.all(),
+        "flow_templates": flow_templates_table.all(),
         "integrations": integrations_table.all(),
         "alerts": alerts_table.all(),
         "rules": rules_export,
@@ -489,6 +492,7 @@ async def import_configuration(bundle: dict):
         sharepoint_connections_table, sharepoint_file_actions_table,
         sharepoint_list_actions_table,
         projects_table, project_members_table,
+        event_pipelines_table, flow_templates_table,
     )
     from .. import processors as proc_module
     from ..cometd_client import cometd_manager
@@ -513,6 +517,10 @@ async def import_configuration(bundle: dict):
         "project_members": _upsert(project_members_table, bundle.get("project_members", [])),
         "orgs": _upsert(orgs_table, bundle.get("orgs", [])),
         "event_configs": _upsert(event_configs_table, bundle.get("event_configs", [])),
+        # event_pipelines reference event_configs by event_id; safe to load
+        # right after event_configs. flow_templates are self-contained.
+        "event_pipelines": _upsert(event_pipelines_table, bundle.get("event_pipelines", [])),
+        "flow_templates": _upsert(flow_templates_table, bundle.get("flow_templates", [])),
         "sharepoint_connections": _upsert(sharepoint_connections_table, bundle.get("sharepoint_connections", [])),
         "sharepoint_file_actions": _upsert(sharepoint_file_actions_table, bundle.get("sharepoint_file_actions", [])),
         "sharepoint_list_actions": _upsert(sharepoint_list_actions_table, bundle.get("sharepoint_list_actions", [])),
