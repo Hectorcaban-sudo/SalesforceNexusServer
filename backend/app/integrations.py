@@ -1,2 +1,4 @@
-from .template_renderer import build_integration_body
-from .http_timeouts import requests_timeout
+"""Outbound integration fan-out."""
+from .integration_dispatch import dispatch_integrations
+
+__all__ = ["dispatch_integrations"]
