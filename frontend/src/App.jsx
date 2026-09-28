@@ -27,13 +27,11 @@ import { ProjectProvider } from './lib/ProjectContext'
 
 function RequireAuth({ children }) {
   const navigate = useNavigate()
-
   useEffect(() => {
     function onUnauthorized() { navigate('/login') }
     window.addEventListener('nexus:unauthorized', onUnauthorized)
     return () => window.removeEventListener('nexus:unauthorized', onUnauthorized)
   }, [navigate])
-
   if (!isAuthed()) return <Navigate to="/login" replace />
   return (
     <AuthProvider>
@@ -83,7 +81,8 @@ export default function App() {
         <Route path="/alerts" element={<RequireAuth><RequireRole role="admin"><Alerts /></RequireRole></RequireAuth>} />
         <Route path="/sharepoint" element={<RequireAuth><RequireRole role="admin"><SharePoint /></RequireRole></RequireAuth>} />
         <Route path="/pipelines" element={<RequireAuth><PipelineCatalog /></RequireAuth>} />
-        <Route path="/schedules" element={<RequireAuth><RequireRole role="operator"><ScheduledJobs /></RequireRole></RequireAuth>} />
+        <Route path="/pipelines/:pipelineId/flow" element={<RequireAuth><EventFlowDesigner /></RequireAuth>} />
+        <Route path="/schedules" element={<RequireAuth><RequireRole role="operator"><ScheduledJobs /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
