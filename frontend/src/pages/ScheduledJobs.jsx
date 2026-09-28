@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Play } from 'lucide-react'
+import { Plus, Play, Pencil, Trash2 } from 'lucide-react'
 import api from '../lib/api'
 import { useProject } from '../lib/ProjectContext'
 
@@ -15,6 +15,7 @@ export default function ScheduledJobs() {
   const [orgs, setOrgs] = useState([])
   const [pipes, setPipes] = useState([])
   const [form, setForm] = useState(EMPTY)
+  const [editId, setEditId] = useState(null)
   const [open, setOpen] = useState(false)
   const [err, setErr] = useState(null)
 
@@ -31,12 +32,53 @@ export default function ScheduledJobs() {
   }
   useEffect(() => { load().catch((e) => setErr(e.message)) }, [projectId])
 
+  function openNew() {
+    setEditId(null)
+    setForm(EMPTY)
+    setOpen(true)
+  }
+
+  function openEdit(j) {
+    setEditId(j.id)
+    setForm({
+      name: j.name || '',
+      org_id: j.org_id || '',
+      soql: j.soql || '',
+      cron: j.cron || '0 2 * * *',
+      timezone: j.timezone || 'UTC',
+      mode: j.mode || 'per_record',
+      pipeline_ids: j.pipeline_ids || [],
+      enabled: j.enabled !== false,
+      description: j.description || '',
+    })
+    setOpen(true)
+  }
+
   async function save(e) {
     e.preventDefault()
-    await api.post('/schedules', { ...form, project_id: projectId || undefined })
-    setOpen(false)
-    setForm(EMPTY)
-    load()
+    setErr(null)
+    const body = { ...form, project_id: projectId || undefined }
+    try {
+      if (editId) await api.put(`/schedules/${editId}`, body)
+      else await api.post('/schedules', body)
+      setOpen(false)
+      setEditId(null)
+      setForm(EMPTY)
+      await load()
+    } catch (ex) {
+      setErr(ex?.response?.data?.detail || ex.message)
+    }
+  }
+
+  async function toggleEnabled(j) {
+    await api.put(`/schedules/${j.id}`, { enabled: j.enabled === false })
+    await load()
+  }
+
+  async function remove(j) {
+    if (!window.confirm(`Delete scheduled job "${j.name}"?`)) return
+    await api.delete(`/schedules/${j.id}`)
+    await load()
   }
 
   function togglePipe(id) {
@@ -51,24 +93,35 @@ export default function ScheduledJobs() {
       <div className="page-title-row">
         <div>
           <h1>Scheduled jobs</h1>
-          <p>{project ? `${project.name} · ` : ''}SOQL on a cron. Same walker as event pipelines.</p>
+          <p>{project ? `${project.name} \u00b7 ` : ''}SOQL on a cron. Same walker as event pipelines.</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setOpen(true)}><Plus size={14} /> New job</button>
+        <button className="btn btn-primary" onClick={openNew}><Plus size={14} /> New job</button>
       </div>
-      {err && <div className="panel" style={{ color: 'var(--accent-red)' }}>{err}</div>}
+      {err && <div className="panel" style={{ color: 'var(--accent-red)', marginBottom: 12 }}>{String(err)}</div>}
       <div className="panel">
         <table>
-          <thead><tr><th>Name</th><th>Org</th><th>Cron</th><th>Pipelines</th><th>Last run</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Org</th><th>Cron</th><th>Pipelines</th><th>Status</th><th>Last run</th><th></th></tr></thead>
           <tbody>
-            {jobs.length === 0 && <tr><td colSpan={6} className="empty-state">No scheduled jobs</td></tr>}
+            {jobs.length === 0 && <tr><td colSpan={7} className="empty-state">No scheduled jobs</td></tr>}
             {jobs.map((j) => (
               <tr key={j.id}>
-                <td>{j.name} {j.enabled === false && <span className="badge badge-gray">off</span>}</td>
+                <td>{j.name}</td>
                 <td>{orgs.find((o) => o.id === j.org_id)?.name || j.org_id}</td>
                 <td className="mono">{j.cron}</td>
                 <td>{(j.pipeline_ids || []).length}</td>
+                <td>
+                  <button type="button" className="btn btn-sm" onClick={() => toggleEnabled(j)}>
+                    {j.enabled === false ? 'Off — enable' : 'On — disable'}
+                  </button>
+                </td>
                 <td>{j.last_error ? <span className="badge badge-red">{j.last_error}</span> : (j.last_count != null ? `${j.last_count} queued` : '—')}</td>
-                <td><button className="btn btn-sm" onClick={() => api.post(`/schedules/${j.id}/run`).then(load)}><Play size={12} /> Run now</button></td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  <button className="btn btn-sm" onClick={() => openEdit(j)}><Pencil size={12} /> Edit</button>
+                  {' '}
+                  <button className="btn btn-sm" onClick={() => api.post(`/schedules/${j.id}/run`).then(load)}><Play size={12} /> Run</button>
+                  {' '}
+                  <button className="btn btn-sm btn-danger" onClick={() => remove(j)}><Trash2 size={12} /></button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -78,7 +131,7 @@ export default function ScheduledJobs() {
       {open && (
         <div className="modal-overlay" onClick={() => setOpen(false)}>
           <div className="modal-box" onClick={(e) => e.stopPropagation()}>
-            <div className="panel-header"><h3>New scheduled job</h3></div>
+            <div className="panel-header"><h3>{editId ? 'Edit scheduled job' : 'New scheduled job'}</h3></div>
             <form onSubmit={save}>
               <div className="panel-body">
                 <div className="field"><label>Name</label><input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
@@ -92,10 +145,13 @@ export default function ScheduledJobs() {
                 <div className="field"><label>SOQL</label><textarea rows={4} className="mono" value={form.soql} onChange={(e) => setForm({ ...form, soql: e.target.value })} /></div>
                 <div className="field"><label>Cron (min hour dom mon dow)</label><input value={form.cron} onChange={(e) => setForm({ ...form, cron: e.target.value })} /></div>
                 <div className="field">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <input type="checkbox" checked={form.enabled !== false} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
+                    Enabled
+                  </label>
+                </div>
+                <div className="field">
                   <label>Target pipelines</label>
-                  <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>
-                    Use an event pipeline, or create a standalone pipeline with no Salesforce subscribe event.
-                  </p>
                   <button type="button" className="btn btn-sm" style={{ marginBottom: 8 }} onClick={async () => {
                     const name = window.prompt('Standalone pipeline name', 'Scheduled pipeline')
                     if (!name) return
@@ -116,7 +172,7 @@ export default function ScheduledJobs() {
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn" onClick={() => setOpen(false)}>Cancel</button>
-                <button className="btn btn-primary">Save</button>
+                <button className="btn btn-primary">{editId ? 'Update' : 'Save'}</button>
               </div>
             </form>
           </div>
