@@ -47,7 +47,7 @@ export default function Processors() {
       fd.append('name', name || file.name)
       fd.append('file', file)
       fd.append('project_id', projectId)
-      await api.post('/processors', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      await api.post('/processors', fd)
       setName('')
       setFile(null)
       await load()
@@ -71,6 +71,9 @@ export default function Processors() {
     try {
       const { data } = await api.get(`/processors/${p.id}/code`)
       setCode(data.code || '')
+      if (!(data.code || '').trim()) {
+        setError('This processor file is empty on disk. Re-upload the .py or paste the script before saving.')
+      }
     } catch (err) {
       setError(err?.response?.data?.detail || err.message)
       setCode('')
@@ -86,7 +89,11 @@ export default function Processors() {
   }
 
   async function saveCode() {
-    if (!selected || isGlobalResource(selected)) return
+    if (!selected || isGlobalResource(selected) || loadingCode) return
+    if (!(code || '').trim()) {
+      setError('Cannot save an empty script')
+      return
+    }
     setSavingCode(true)
     setError(null)
     try {
@@ -163,7 +170,7 @@ export default function Processors() {
               <div style={{ display: 'flex', gap: 8 }}>
                 {syntax && <span className={syntax.ok ? 'badge badge-green' : 'badge badge-red'}>{syntax.ok ? 'Syntax OK' : syntax.error}</span>}
                 <button type="button" className="btn btn-sm" onClick={validateCode}><ShieldCheck size={13} /> Validate</button>
-                <button type="button" className="btn btn-sm btn-primary" disabled={savingCode || isGlobalResource(selected)} onClick={saveCode}><Save size={13} /> Save</button>
+                <button type="button" className="btn btn-sm btn-primary" disabled={savingCode || loadingCode || isGlobalResource(selected) || !(code || '').trim()} onClick={saveCode}><Save size={13} /> Save</button>
                 <button type="button" className="btn btn-sm" onClick={() => setSelected(null)}>Close</button>
               </div>
             </div>
