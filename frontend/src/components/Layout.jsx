@@ -9,6 +9,7 @@ import api, { logout } from '../lib/api'
 import { useAuth, hasRole } from '../lib/AuthContext'
 import { useProject } from '../lib/ProjectContext'
 import ProjectSwitcher from './ProjectSwitcher'
+import ToastHost from './ToastHost'
 
 const MONITOR_NAV = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -49,31 +50,15 @@ function loadCollapsed() {
 function NavSection({ id, label, items, collapsed, onToggle }) {
   return (
     <div className="nav-group">
-      <button
-        type="button"
-        className="nav-label"
-        onClick={() => onToggle(id)}
-        style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          width: '100%', background: 'none', border: 'none', cursor: 'pointer',
-          color: 'inherit', padding: 0, font: 'inherit', textAlign: 'left',
-        }}
-        title={collapsed[id] ? 'Expand' : 'Collapse'}
-      >
+      <button type="button" className="nav-label" onClick={() => onToggle(id)}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', padding: 0, font: 'inherit', textAlign: 'left' }}
+        title={collapsed[id] ? 'Expand' : 'Collapse'}>
         <span>{label}</span>
-        <span style={{ opacity: 0.7, display: 'inline-flex' }}>
-          {collapsed[id] ? <Plus size={12} /> : <Minus size={12} />}
-        </span>
+        <span style={{ opacity: 0.7, display: 'inline-flex' }}>{collapsed[id] ? <Plus size={12} /> : <Minus size={12} />}</span>
       </button>
       {!collapsed[id] && items.map((item) => (
-        <NavLink
-          key={item.to}
-          to={item.to}
-          end={item.end}
-          className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}
-        >
-          <item.icon />
-          {item.label}
+        <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}>
+          <item.icon />{item.label}
         </NavLink>
       ))}
     </div>
@@ -84,7 +69,7 @@ export default function Layout({ children }) {
   const navigate = useNavigate()
   const { user } = useAuth()
   const isAdmin = hasRole(user, 'admin')
-  const { projects, projectId, project, setProjectId } = useProject()
+  const { project } = useProject()
   const [collapsed, setCollapsed] = useState(loadCollapsed)
 
   function toggleSection(id) {
@@ -107,55 +92,31 @@ export default function Layout({ children }) {
       <aside className="sidebar">
         <div className="sidebar-logo">
           <div className="mark">SN</div>
-          <div className="name">
-            Nexus AI Server
-            <span>Salesforce Integration</span>
-          </div>
+          <div className="name">Nexus AI Server<span>Salesforce Integration</span></div>
         </div>
-
         <NavSection id="monitor" label="Monitor" items={MONITOR_NAV} collapsed={collapsed} onToggle={toggleSection} />
-        <NavSection
-          id="project"
-          label={project ? ('Project - ' + project.name) : 'Project'}
-          items={projectItems}
-          collapsed={collapsed}
-          onToggle={toggleSection}
-        />
-        {isAdmin && (
-          <NavSection id="admin" label="Administration" items={ADMIN_NAV} collapsed={collapsed} onToggle={toggleSection} />
-        )}
-
+        <NavSection id="project" label={project ? ('Project - ' + project.name) : 'Project'} items={projectItems} collapsed={collapsed} onToggle={toggleSection} />
+        {isAdmin && <NavSection id="admin" label="Administration" items={ADMIN_NAV} collapsed={collapsed} onToggle={toggleSection} />}
         <div className="sidebar-footer">
-          <div className="nav-item" onClick={handleLogout}>
-            <LogOut />
-            Log out
-          </div>
+          <div className="nav-item" onClick={handleLogout}><LogOut />Log out</div>
           <AppVersion />
         </div>
       </aside>
-
       <div className="main-col">
         <header className="topbar">
-          <div className="topbar-search">
-            <Search size={15} />
-            Search transactions, orgs, channels…
-          </div>
+          <div className="topbar-search"><Search size={15} />Search transactions, orgs, channels…</div>
           <div className="topbar-right">
             <ProjectSwitcher />
             <TopbarInbox />
             <DocsHelpLink />
             <div className="user-chip" title={user ? (user.username + ' - ' + (ROLE_LABELS[user.role] || user.role)) : ''}>
               <div className="avatar">{(user?.username || 'A').slice(0, 1).toUpperCase()}</div>
-              {user && (
-                <span className={'badge badge-' + (user.role === 'admin' ? 'blue' : user.role === 'operator' ? 'orange' : 'gray')}>
-                  {ROLE_LABELS[user.role] || user.role}
-                </span>
-              )}
+              {user && <span className={'badge badge-' + (user.role === 'admin' ? 'blue' : user.role === 'operator' ? 'orange' : 'gray')}>{ROLE_LABELS[user.role] || user.role}</span>}
             </div>
           </div>
         </header>
-
         <main className="page-content">{children}</main>
+        <ToastHost />
       </div>
     </div>
   )
@@ -168,17 +129,9 @@ function DocsHelpLink() {
   }, [])
   const url = (docs.docs_url || '').trim()
   if (!url) {
-    return (
-      <span className="topbar-icon" title="Set documentation URL in Admin Configuration">
-        <CircleHelp size={18} style={{ opacity: 0.45 }} />
-      </span>
-    )
+    return <span className="topbar-icon" title="Set documentation URL in Admin Configuration"><CircleHelp size={18} style={{ opacity: 0.45 }} /></span>
   }
-  return (
-    <a className="topbar-icon" href={url} target="_blank" rel="noreferrer" title={docs.docs_label || 'Documentation'}>
-      <CircleHelp size={18} />
-    </a>
-  )
+  return <a className="topbar-icon" href={url} target="_blank" rel="noreferrer" title={docs.docs_label || 'Documentation'}><CircleHelp size={18} /></a>
 }
 
 function TopbarInbox() {
