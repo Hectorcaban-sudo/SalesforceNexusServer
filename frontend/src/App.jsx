@@ -24,6 +24,7 @@ import Layout from './components/Layout'
 import { isAuthed } from './lib/api'
 import { AuthProvider, useAuth, hasRole } from './lib/AuthContext'
 import { ProjectProvider } from './lib/ProjectContext'
+import { ToastProvider } from './lib/ToastContext'
 
 function RequireAuth({ children }) {
   const navigate = useNavigate()
@@ -36,7 +37,9 @@ function RequireAuth({ children }) {
   return (
     <AuthProvider>
       <ProjectProvider>
-        <Layout>{children}</Layout>
+        <ToastProvider>
+          <Layout>{children}</Layout>
+        </ToastProvider>
       </ProjectProvider>
     </AuthProvider>
   )
@@ -82,7 +85,7 @@ export default function App() {
         <Route path="/sharepoint" element={<RequireAuth><RequireRole role="admin"><SharePoint /></RequireRole></RequireAuth>} />
         <Route path="/pipelines" element={<RequireAuth><PipelineCatalog /></RequireAuth>} />
         <Route path="/pipelines/:pipelineId/flow" element={<RequireAuth><EventFlowDesigner /></RequireAuth>} />
-        <Route path="/schedules" element={<RequireAuth><RequireRole role="operator"><ScheduledJobs /></RequireAuth>} />
+        <Route path="/schedules" element={<RequireAuth><RequireRole role="operator"><ScheduledJobs /></RequireRole></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
