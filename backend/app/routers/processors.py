@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body
 from fastapi.responses import Response
-from typing import List, Optional
+from typing import Optional
 
 from ..auth import require_role
 from ..database import processors_table, Q
@@ -76,11 +76,15 @@ def download_processor(processor_id: str):
     )
 
 
-@router.post("")
+@router.post("", response_model=ProcessorOut)
 async def upload_processor(name: str = Form(...), file: UploadFile = File(...), project_id: Optional[str] = Form(None)):
-    if not file.filename.endswith(".py"):
+    filename = (file.filename or "").strip() or f"{name}.py"
+    if not filename.lower().endswith(".py"):
         raise HTTPException(400, "Only .py files are accepted")
-    contents = await file.read()
+    try:
+        contents = await file.read()
+    except Exception as exc:
+        raise HTTPException(400, f"Could not read uploaded file: {exc}") from exc
     if len(contents) > MAX_UPLOAD_BYTES:
         raise HTTPException(400, f"File too large (max {MAX_UPLOAD_BYTES // 1024}KB)")
     code = contents.decode("utf-8", errors="replace")
@@ -90,28 +94,32 @@ async def upload_processor(name: str = Form(...), file: UploadFile = File(...), 
     if syntax_error:
         raise HTTPException(400, f"Uploaded file is not valid Python: {syntax_error}")
     processor_id = new_id()
-    proc_module.save_processor_file(processor_id, code)
-    record = {
-        "id": processor_id,
-        "name": name,
-        "filename": file.filename,
-        "uploaded_at": now_ts(),
-        "last_status": None,
-        "last_run_at": None,
-        "last_error": None,
-        "project_id": project_id,
-    }
-    processors_table.insert(record)
-    log_event("info", f"Processor script '{name}' uploaded", processor_id=processor_id, filename=file.filename)
+    try:
+        proc_module.save_processor_file(processor_id, code)
+        record = {
+            "id": processor_id,
+            "name": name,
+            "filename": filename,
+            "uploaded_at": now_ts(),
+            "last_status": None,
+            "last_run_at": None,
+            "last_error": None,
+            "project_id": (project_id or "").strip() or None,
+        }
+        processors_table.insert(record)
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to store processor: {exc}") from exc
+    log_event("info", f"Processor script '{name}' uploaded", processor_id=processor_id, filename=filename)
     return record
 
 
-@router.post("/{processor_id}/upload")
+@router.post("/{processor_id}/upload", response_model=ProcessorOut)
 async def override_processor(processor_id: str, name: Optional[str] = Form(None), file: UploadFile = File(...)):
     existing = processors_table.get(Q.id == processor_id)
     if not existing:
         raise HTTPException(404, "Processor not found")
-    if not file.filename.endswith(".py"):
+    filename = (file.filename or "").strip() or f"{existing.get('name') or 'processor'}.py"
+    if not filename.lower().endswith(".py"):
         raise HTTPException(400, "Only .py files are accepted")
     contents = await file.read()
     if len(contents) > MAX_UPLOAD_BYTES:
@@ -123,7 +131,7 @@ async def override_processor(processor_id: str, name: Optional[str] = Form(None)
     if syntax_error:
         raise HTTPException(400, f"Uploaded file is not valid Python: {syntax_error}")
     proc_module.save_processor_file(processor_id, code)
-    updates = {"filename": file.filename, "last_status": None, "last_run_at": None, "last_error": None}
+    updates = {"filename": filename, "last_status": None, "last_run_at": None, "last_error": None}
     if name:
         updates["name"] = name
     processors_table.update(updates, Q.id == processor_id)
