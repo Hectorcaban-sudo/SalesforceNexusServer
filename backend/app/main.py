@@ -14,7 +14,6 @@ from .database import flush
 from .broker import broker
 from .worker import inbound_worker, outbound_publisher
 from .cometd_client import cometd_manager
-from .tracing import setup_tracing
 from .routers import auth as auth_router
 from .routers import orgs as orgs_router
 from .routers import events as events_router
@@ -87,7 +86,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 setup_logging()
-setup_tracing(app)
 
 app.add_middleware(
     CORSMiddleware,
@@ -123,7 +121,7 @@ app.include_router(pipeline_catalog_router.router)
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "app": settings.app_name, "version": getattr(settings, "app_version", "1.2.6")}
+    return {"status": "ok", "app": settings.app_name, "version": getattr(settings, "app_version", "1.2.10")}
 
 
 if FRONTEND_DIST.exists():
