@@ -45,7 +45,9 @@ def save_processor_code(processor_id: str, body: dict = Body(...)):
     existing = processors_table.get(Q.id == processor_id)
     if not existing:
         raise HTTPException(404, "Processor not found")
-    code = body.get("code") or ""
+    code = body.get("code")
+    if code is None or not str(code).strip():
+        raise HTTPException(400, "Code is empty — refused to overwrite the processor with a blank file")
     if len(code.encode("utf-8")) > MAX_UPLOAD_BYTES:
         raise HTTPException(400, f"File too large (max {MAX_UPLOAD_BYTES // 1024}KB)")
     err = proc_module.validate_syntax(code)
@@ -82,6 +84,8 @@ async def upload_processor(name: str = Form(...), file: UploadFile = File(...), 
     if len(contents) > MAX_UPLOAD_BYTES:
         raise HTTPException(400, f"File too large (max {MAX_UPLOAD_BYTES // 1024}KB)")
     code = contents.decode("utf-8", errors="replace")
+    if not code.strip():
+        raise HTTPException(400, "Uploaded file is empty")
     syntax_error = proc_module.validate_syntax(code)
     if syntax_error:
         raise HTTPException(400, f"Uploaded file is not valid Python: {syntax_error}")
@@ -113,6 +117,8 @@ async def override_processor(processor_id: str, name: Optional[str] = Form(None)
     if len(contents) > MAX_UPLOAD_BYTES:
         raise HTTPException(400, f"File too large (max {MAX_UPLOAD_BYTES // 1024}KB)")
     code = contents.decode("utf-8", errors="replace")
+    if not code.strip():
+        raise HTTPException(400, "Uploaded file is empty")
     syntax_error = proc_module.validate_syntax(code)
     if syntax_error:
         raise HTTPException(400, f"Uploaded file is not valid Python: {syntax_error}")
