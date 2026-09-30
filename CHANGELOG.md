@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.8 — 2026-09-30
+
+### Processors
+- Do not set `Content-Type: multipart/form-data` on upload (missing boundary made FastAPI read a 0-byte file)
+- Reject empty scripts on upload, override, and PUT `/code` (empty source is valid Python `compile()`)
+- Editor Save disabled while code is loading or the buffer is empty
+
 ## 1.2.7 — 2026-09-29
 
 ### SharePoint save / project scope
