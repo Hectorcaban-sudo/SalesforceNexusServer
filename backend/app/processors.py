@@ -41,7 +41,7 @@ from .logging_config import log_event
 PROCESSORS_DIR = DATA_DIR / "processors"
 PROCESSORS_DIR.mkdir(exist_ok=True)
 
-PROCESSOR_TIMEOUT_SECONDS = settings.processor_timeout_seconds  # configurable via PROCESSOR_TIMEOUT_SECONDS env var
+PROCESSOR_TIMEOUT_SECONDS = settings.processor_timeout_seconds
 
 EXAMPLE_TEMPLATE = '''"""
 Example Salesforce Nexus AI Server payload processor.
@@ -73,7 +73,6 @@ import json
 
 
 def process(payload: dict) -> dict:
-    # Anything printed here goes to the System Logs page automatically.
     print(f"Received payload with keys: {list(payload.keys())}", file=sys.stderr)
 
     org = json.loads(os.environ.get("NEXUS_ORG", "{}"))
@@ -81,8 +80,6 @@ def process(payload: dict) -> dict:
     if org:
         print(f"Triggered by org: {org.get('name')} ({org.get('login_url')})", file=sys.stderr)
 
-    # Your custom logic goes here. This example just echoes the payload
-    # back with a computed field, as a starting point.
     return {
         "status": "ok",
         "summary": "Processed by custom uploaded script",
@@ -102,8 +99,6 @@ def _script_path(processor_id: str) -> Path:
 
 
 def validate_syntax(code: str) -> Optional[str]:
-    """Returns an error message string if the code doesn't even parse as
-    valid Python, or None if it looks syntactically fine."""
     try:
         compile(code, "<uploaded processor>", "exec")
         return None
@@ -112,12 +107,12 @@ def validate_syntax(code: str) -> Optional[str]:
 
 
 def save_processor_file(processor_id: str, code: str):
-    _script_path(processor_id).write_text(code)
+    _script_path(processor_id).write_text(code, encoding="utf-8")
 
 
 def read_processor_code(processor_id: str) -> str:
     path = _script_path(processor_id)
-    return path.read_text() if path.exists() else ""
+    return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
 def delete_processor_file(processor_id: str):
@@ -127,11 +122,6 @@ def delete_processor_file(processor_id: str):
 
 
 def _log_processor_stderr(processor_id: str, name: str, stderr: str):
-    """Custom processor scripts are expected to print their own log lines to
-    stderr (stdout is reserved for the JSON result) - pipe each non-empty
-    line into the system Logs page under a distinct logger name so they're
-    visible and attributable to this specific processor, exactly like any
-    other component's logs."""
     if not stderr:
         return
     logger_name = f"nexus.processor.{name or processor_id}"
@@ -141,40 +131,18 @@ def _log_processor_stderr(processor_id: str, name: str, stderr: str):
 
 
 def _build_processor_env(org_id: Optional[str]) -> dict:
-    """
-    Builds the extra environment variables passed to a processor subprocess:
-      - NEXUS_ORG        : the triggering event's Salesforce org record (raw,
-                            unmasked - login_url, auth_type, client_id/secret,
-                            username/password/security_token, api_version),
-                            or "{}" if there's no org context (e.g. a manual
-                            test run with no org_id given)
-      - NEXUS_ADMIN_CONFIG: {"dss_client": ..., "langflow": ..., "email": ...,
-                            "processing_mode": ...} - also raw/unmasked
-
-    SECURITY NOTE: this hands an uploaded script every credential configured
-    in the system (Salesforce org secrets, DSSClient/Langflow API keys, SMTP
-    password) via its environment - a significant expansion of what a
-    processor can do (e.g. call Salesforce APIs directly, send its own
-    email). This is consistent with the existing trust model documented at
-    the top of this file (processor uploads = deploying trusted server code,
-    admin-only), but it means a malicious or buggy script now has a much
-    bigger blast radius than before. Only upload processors from sources you
-    trust as much as your own server code.
-    """
-    from .database import orgs_table, Q as _Q  # local import avoids a circular import at module load time
+    from .database import orgs_table, Q as _Q
     from .routers.admin_config import (
         get_dss_client_config_raw, get_langflow_config_raw, get_email_settings_raw, get_processing_mode_raw,
     )
 
     org = orgs_table.get(_Q.id == org_id) if org_id else None
-
     admin_config = {
         "dss_client": get_dss_client_config_raw(),
         "langflow": get_langflow_config_raw(),
         "email": get_email_settings_raw(),
         "processing_mode": get_processing_mode_raw(),
     }
-
     env = dict(os.environ)
     env["NEXUS_ORG"] = json.dumps(org or {})
     env["NEXUS_ADMIN_CONFIG"] = json.dumps(admin_config)
@@ -182,32 +150,10 @@ def _build_processor_env(org_id: Optional[str]) -> dict:
 
 
 class ProcessorCancelled(RuntimeError):
-    """Raised by run_processor() when a cancellation request killed the
-    subprocess mid-execution - callers should treat this differently from a
-    genuine processing failure (the transaction becomes "cancelled", not
-    "failed")."""
+    pass
 
 
 def run_processor(processor_id: str, payload: dict, org_id: Optional[str] = None, cancel_check=None) -> dict:
-    """Executes an uploaded processor script in an isolated subprocess and
-    returns its JSON result. Raises RuntimeError with a descriptive message
-    on any failure (non-zero exit, bad JSON output, or timeout), or
-    ProcessorCancelled if `cancel_check` returned True while it was running.
-    Anything the script prints to stderr is captured and mirrored into the
-    system Logs page regardless of outcome - see `_log_processor_stderr`.
-
-    `org_id`, when given, is the Salesforce org that triggered this event -
-    its full settings (and other admin configuration: DSSClient, Langflow,
-    Email) are made available to the script via environment variables
-    (NEXUS_ORG, NEXUS_ADMIN_CONFIG) - see `_build_processor_env`.
-
-    `cancel_check`, when given, is a zero-argument callable polled roughly
-    every 100ms while the subprocess runs; if it returns True the subprocess
-    is killed immediately (SIGKILL) rather than waiting for it to finish or
-    time out - this is the one processing mode that can be hard-cancelled,
-    since it's the only one running as a real, independently-killable OS
-    process rather than a plain blocking library call.
-    """
     path = _script_path(processor_id)
     if not path.exists():
         raise RuntimeError(f"Processor script file not found for id '{processor_id}'")
@@ -219,7 +165,7 @@ def run_processor(processor_id: str, payload: dict, org_id: Optional[str] = None
     proc = subprocess.Popen(
         [sys.executable, str(path)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, env=_build_processor_env(org_id),
+        text=True, encoding="utf-8", env=_build_processor_env(org_id),
     )
     proc.stdin.write(json.dumps(payload))
     proc.stdin.close()
