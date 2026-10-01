@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Plus, Trash2, Send, BellRing, Pencil } from 'lucide-react'
 import api from '../lib/api'
 import { isGlobalResource, useProject, visibleLibraryItem } from '../lib/ProjectContext'
+import { useToast } from '../lib/ToastContext'
 
 const SCOPE_LABELS = {
   transaction: 'A transaction reaches a terminal state',
@@ -20,6 +21,7 @@ const EMPTY = { name: '', scope: 'transaction', trigger: 'on_failure', enabled: 
 
 export default function Alerts() {
   const { projectId } = useProject()
+  const { toast } = useToast()
   const [alerts, setAlerts] = useState([])
   const [orgs, setOrgs] = useState([])
   const [integrations, setIntegrations] = useState([])
@@ -93,22 +95,35 @@ export default function Alerts() {
       } else {
         await api.post('/alerts', payload)
       }
+      toast(editingId ? 'Alert updated' : 'Alert created')
       setModalOpen(false)
       load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to save alert', { kind: 'error' })
     } finally {
       setSaving(false)
     }
   }
 
   async function toggle(alert) {
-    await api.put(`/alerts/${alert.id}`, { enabled: !alert.enabled })
-    load()
+    try {
+      await api.put(`/alerts/${alert.id}`, { enabled: !alert.enabled })
+      toast(alert.enabled ? 'Alert disabled' : 'Alert enabled')
+      load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to update alert', { kind: 'error' })
+    }
   }
 
   async function remove(alert) {
     if (!confirm(`Delete alert "${alert.name}"?`)) return
-    await api.delete(`/alerts/${alert.id}`)
-    load()
+    try {
+      await api.delete(`/alerts/${alert.id}`)
+      toast('Alert deleted')
+      load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to delete alert', { kind: 'error' })
+    }
   }
 
   async function sendTest(alert) {

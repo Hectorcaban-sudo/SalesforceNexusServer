@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { Plus, Trash2, Pencil, Users, Building2, Zap, MoreHorizontal } from 'lucide-react'
 import api from '../lib/api'
 import { useProject } from '../lib/ProjectContext'
+import { useToast } from '../lib/ToastContext'
 
 export default function Projects() {
   const { projects, reload, setProjectId, projectId } = useProject()
+  const { toast } = useToast()
   const [modal, setModal] = useState(null)
   const [form, setForm] = useState({ name: '', description: '', enabled: true })
   const [members, setMembers] = useState([])
@@ -69,10 +71,13 @@ export default function Projects() {
     try {
       if (modal?.id) await api.put(`/projects/${modal.id}`, form)
       else await api.post('/projects', form)
+      toast(modal?.id ? 'Project updated' : 'Project created')
       setModal(null)
       await reload()
     } catch (err) {
-      setError(err?.response?.data?.detail || err.message)
+      const detail = err?.response?.data?.detail || err.message
+      setError(detail)
+      toast(detail || 'Failed to save project', { kind: 'error' })
     } finally {
       setSaving(false)
     }
@@ -82,9 +87,12 @@ export default function Projects() {
     if (!confirm(`Delete project "${pr.name}"?`)) return
     try {
       await api.delete(`/projects/${pr.id}`)
+      toast('Project deleted')
       await reload()
     } catch (err) {
-      setError(err?.response?.data?.detail || err.message)
+      const detail = err?.response?.data?.detail || err.message
+      setError(detail)
+      toast(detail || 'Failed to delete project', { kind: 'error' })
     }
   }
 
@@ -94,16 +102,24 @@ export default function Projects() {
       await api.post(`/projects/${modal.project.id}/members`, { user_id: userId, role: 'project_admin' })
       const { data } = await api.get(`/projects/${modal.project.id}/members`)
       setMembers(data || [])
+      toast('Admin added')
     } catch (err) {
-      setError(err?.response?.data?.detail || err.message)
+      const detail = err?.response?.data?.detail || err.message
+      setError(detail)
+      toast(detail || 'Failed to add admin', { kind: 'error' })
     }
   }
 
   async function removeMember(memberId) {
     if (!modal?.project) return
-    await api.delete(`/projects/${modal.project.id}/members/${memberId}`)
-    const { data } = await api.get(`/projects/${modal.project.id}/members`)
-    setMembers(data || [])
+    try {
+      await api.delete(`/projects/${modal.project.id}/members/${memberId}`)
+      const { data } = await api.get(`/projects/${modal.project.id}/members`)
+      setMembers(data || [])
+      toast('Admin removed')
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to remove admin', { kind: 'error' })
+    }
   }
 
   const sorted = useMemo(

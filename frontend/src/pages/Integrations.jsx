@@ -3,6 +3,7 @@ import { Plus, Trash2, Send, Share2, Webhook, MessageSquare, Database, Cloud, Li
 import api from '../lib/api'
 import { useProject, belongsToProject, isGlobalResource, visibleLibraryItem } from '../lib/ProjectContext'
 import { TruncatedWithPopup } from '../components/UI'
+import { useToast } from '../lib/ToastContext'
 
 const TYPE_META = {
   webhook: { label: 'Webhook', icon: Webhook },
@@ -92,6 +93,7 @@ const EMPTY = {
 
 export default function Integrations() {
   const { projectId, project } = useProject()
+  const { toast } = useToast()
   const [orgs, setOrgs] = useState([])
   const [items, setItems] = useState([])
   const visibleItems = useMemo(
@@ -222,22 +224,35 @@ export default function Integrations() {
       } else {
         await api.post('/integrations', { ...payload, project_id: projectId || undefined })
       }
+      toast(editingId ? 'Integration updated' : 'Integration created')
       setModalOpen(false)
       load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to save integration', { kind: 'error' })
     } finally {
       setSaving(false)
     }
   }
 
   async function toggle(item) {
-    await api.put(`/integrations/${item.id}`, { enabled: !item.enabled })
-    load()
+    try {
+      await api.put(`/integrations/${item.id}`, { enabled: !item.enabled })
+      toast(item.enabled ? 'Integration disabled' : 'Integration enabled')
+      load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to update integration', { kind: 'error' })
+    }
   }
 
   async function remove(item) {
     if (!confirm(`Delete integration "${item.name}"?`)) return
-    await api.delete(`/integrations/${item.id}`)
-    load()
+    try {
+      await api.delete(`/integrations/${item.id}`)
+      toast('Integration deleted')
+      load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to delete integration', { kind: 'error' })
+    }
   }
 
   async function sendTest(item) {

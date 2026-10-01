@@ -5,6 +5,7 @@ import {
   Workflow, Mail, GitFork, Plus, Pencil, Database, PlugZap,
 } from 'lucide-react'
 import api from '../lib/api'
+import { useToast } from '../lib/ToastContext'
 
 const EMPTY_DSS = { url: '', project_name: '', llm: '', api_key: '' }
 const EMPTY_LANGFLOW = { base_url: '', flow_id: '', api_key: '', input_field: 'input_value', output_path: '' }
@@ -26,8 +27,8 @@ const TABS = [
 ]
 
 export default function AdminConfig() {
+  const { toast } = useToast()
   const [tab, setTab] = useState('processing')
-  const [toast, setToast] = useState('')
   const [loading, setLoading] = useState(true)
   const [docsForm, setDocsForm] = useState({ docs_url: '', docs_label: 'Documentation' })
 
@@ -136,9 +137,8 @@ export default function AdminConfig() {
 
   useEffect(() => { load() }, [])
 
-  function flashToast(msg) {
-    setToast(msg)
-    setTimeout(() => setToast(''), 4000)
+  function flashToast(msg, opts) {
+    toast(msg, opts)
   }
 
   async function saveDss(e) {
@@ -151,6 +151,8 @@ export default function AdminConfig() {
       setDssConfigured(data.configured)
       setDssForm({ url: data.url, project_name: data.project_name, llm: data.llm, api_key: '' })
       flashToast('DSSClient configuration saved')
+    } catch (err) {
+      flashToast(err?.response?.data?.detail || 'Failed to save DSSClient configuration', { kind: 'error' })
     } finally {
       setSavingDss(false)
     }
@@ -247,6 +249,8 @@ export default function AdminConfig() {
       setLfConfigured(data.configured)
       setLfForm({ base_url: data.base_url, flow_id: data.flow_id, api_key: '', input_field: data.input_field, output_path: data.output_path })
       flashToast('Langflow configuration saved')
+    } catch (err) {
+      flashToast(err?.response?.data?.detail || 'Failed to save Langflow configuration', { kind: 'error' })
     } finally {
       setSavingLf(false)
     }
@@ -256,11 +260,15 @@ export default function AdminConfig() {
     setMode(newMode)
     if (newActiveId !== undefined) setActiveProcessorId(newActiveId)
     const usesId = newMode === 'custom_script' || newMode === 'rule_engine'
-    await api.put('/admin-config/processing-mode', {
-      mode: newMode,
-      active_processor_id: usesId ? (newActiveId ?? activeProcessorId) || null : null,
-    })
-    flashToast('Processing mode updated')
+    try {
+      await api.put('/admin-config/processing-mode', {
+        mode: newMode,
+        active_processor_id: usesId ? (newActiveId ?? activeProcessorId) || null : null,
+      })
+      flashToast('Processing mode updated')
+    } catch (err) {
+      flashToast(err?.response?.data?.detail || 'Failed to update processing mode', { kind: 'error' })
+    }
   }
 
   async function downloadExample() {
@@ -308,11 +316,16 @@ export default function AdminConfig() {
 
   async function removeProcessor(p) {
     if (!confirm(`Delete processor "${p.name}"?`)) return
-    if (activeProcessorId === p.id) {
-      await saveMode('local', null)
+    try {
+      if (activeProcessorId === p.id) {
+        await saveMode('local', null)
+      }
+      await api.delete(`/processors/${p.id}`)
+      flashToast('Processor deleted')
+      load()
+    } catch (err) {
+      flashToast(err?.response?.data?.detail || 'Failed to delete processor', { kind: 'error' })
     }
-    await api.delete(`/processors/${p.id}`)
-    load()
   }
 
   async function downloadProcessor(p) {
@@ -384,6 +397,7 @@ export default function AdminConfig() {
       } else {
         await api.post('/rules', { name: ruleForm.name, description: ruleForm.description, jdm })
       }
+      flashToast(editingRuleId ? 'Rule updated' : 'Rule created')
       setRuleModalOpen(false)
       load()
     } catch (err) {
@@ -406,8 +420,13 @@ export default function AdminConfig() {
 
   async function removeRule(rule) {
     if (!confirm(`Delete rule "${rule.name}"? Any event channel gating on it will fall back to always processing.`)) return
-    await api.delete(`/rules/${rule.id}`)
-    load()
+    try {
+      await api.delete(`/rules/${rule.id}`)
+      flashToast('Rule deleted')
+      load()
+    } catch (err) {
+      flashToast(err?.response?.data?.detail || 'Failed to delete rule', { kind: 'error' })
+    }
   }
 
   async function saveBroker(e) {
@@ -421,6 +440,8 @@ export default function AdminConfig() {
       setBrokerConnError(data.connection_error)
       setRmqForm({ ...data.rabbitmq, password: '' })
       flashToast('Broker configuration saved — restart the server for this to take effect')
+    } catch (err) {
+      flashToast(err?.response?.data?.detail || 'Failed to save broker configuration', { kind: 'error' })
     } finally {
       setSavingBroker(false)
     }
@@ -436,6 +457,8 @@ export default function AdminConfig() {
       setEmailConfigured(data.configured)
       setEmailForm({ host: data.host, port: data.port, username: data.username, password: '', use_tls: data.use_tls, from_address: data.from_address })
       flashToast('Email configuration saved')
+    } catch (err) {
+      flashToast(err?.response?.data?.detail || 'Failed to save email configuration', { kind: 'error' })
     } finally {
       setSavingEmail(false)
     }
@@ -513,8 +536,6 @@ export default function AdminConfig() {
           <p>Global settings used by the internal event processor — separate from per-org Salesforce connections</p>
         </div>
       </div>
-
-      {toast && <div className="login-hint" style={{ textAlign: 'left', marginBottom: 14, color: 'var(--accent-cyan)' }}>{toast}</div>}
 
       <div className="tabs-row" style={{ padding: 0, marginBottom: 18, borderBottom: '1px solid var(--border)', paddingBottom: 14 }}>
         {TABS.map((t) => (
@@ -1083,8 +1104,12 @@ export default function AdminConfig() {
                 <div className="field"><label>URL</label>
                   <input placeholder="https://…" value={docsForm.docs_url} onChange={(e) => setDocsForm({ ...docsForm, docs_url: e.target.value })} /></div>
                 <button type="button" className="btn btn-primary" onClick={async () => {
-                  await api.put('/admin-config/ui-settings', docsForm)
-                  flashToast('Documentation link saved')
+                  try {
+                    await api.put('/admin-config/ui-settings', docsForm)
+                    flashToast('Documentation link saved')
+                  } catch (err) {
+                    flashToast(err?.response?.data?.detail || 'Failed to save documentation link', { kind: 'error' })
+                  }
                 }}>Save</button>
               </div>
             </div>
