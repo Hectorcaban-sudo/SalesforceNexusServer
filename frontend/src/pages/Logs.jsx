@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Trash2, RefreshCw, X } from 'lucide-react'
 import api from '../lib/api'
 
 export default function Logs() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const txFilter = searchParams.get('tx') || ''
   const [logs, setLogs] = useState([])
   const [level, setLevel] = useState('')
   const [search, setSearch] = useState('')
@@ -10,21 +13,23 @@ export default function Logs() {
   const [selected, setSelected] = useState(null)
 
   async function load() {
-    const { data } = await api.get('/logs', { params: { level: level || undefined, search: search || undefined, limit: 400 } })
+    const { data } = await api.get('/logs', {
+      params: {
+        level: level || undefined,
+        search: search || undefined,
+        transaction_id: txFilter || undefined,
+        limit: 400,
+      },
+    })
     setLogs(data)
   }
 
-  useEffect(() => {
-    load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [level, search])
-
+  useEffect(() => { load() }, [level, search, txFilter])
   useEffect(() => {
     if (!auto) return
     const id = setInterval(load, 4000)
     return () => clearInterval(id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auto, level, search])
+  }, [auto, level, search, txFilter])
 
   async function clearAll() {
     if (!confirm('Clear all stored logs?')) return
@@ -32,19 +37,24 @@ export default function Logs() {
     load()
   }
 
+  function clearTx() {
+    const next = new URLSearchParams(searchParams)
+    next.delete('tx')
+    setSearchParams(next)
+  }
+
   return (
     <div>
       <div className="page-title-row">
         <div>
           <h1>System Logs</h1>
-          <p>Structured application logs from the CometD listener, broker, worker, publisher, and custom processors — click a row to see the full entry</p>
+          <p>Structured application logs from the CometD listener, broker, worker, publisher, and custom processors</p>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button className="btn btn-sm" onClick={load}><RefreshCw size={13} /> Refresh</button>
           <button className="btn btn-sm btn-danger" onClick={clearAll}><Trash2 size={13} /> Clear logs</button>
         </div>
       </div>
-
       <div className="toolbar">
         <div className="filter-row">
           <select value={level} onChange={(e) => setLevel(e.target.value)}>
@@ -55,13 +65,17 @@ export default function Logs() {
             <option value="ERROR">Error</option>
           </select>
           <input placeholder="Search message…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: 240 }} />
+          {txFilter && (
+            <button type="button" className="btn btn-sm" onClick={clearTx} title="Clear transaction filter">
+              tx {txFilter.slice(0, 8)}… <X size={12} />
+            </button>
+          )}
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: 0 }}>
             <input type="checkbox" style={{ width: 15 }} checked={auto} onChange={(e) => setAuto(e.target.checked)} />
             Auto-refresh
           </label>
         </div>
       </div>
-
       <div className="panel">
         <div className="log-row" style={{ fontWeight: 700, color: 'var(--text-muted)', fontFamily: 'var(--font-sans)', fontSize: 11 }}>
           <div>TIME</div><div>LEVEL</div><div>LOGGER</div><div>MESSAGE</div>
@@ -83,7 +97,6 @@ export default function Logs() {
           ))}
         </div>
       </div>
-
       {selected && (
         <div className="modal-overlay" onClick={() => setSelected(null)}>
           <div className="modal-box" onClick={(e) => e.stopPropagation()}>
@@ -98,8 +111,7 @@ export default function Logs() {
               </div>
               <div className="field">
                 <label>Message</label>
-                <div className="field"><label>Project</label><div>{selected.context?.project_name || selected.project_name || '-'}</div></div>
-              <pre className="mono log-detail-block">{selected.message}</pre>
+                <pre className="mono log-detail-block">{selected.message}</pre>
               </div>
               {selected.context && Object.keys(selected.context).length > 0 && (
                 <div className="field">
