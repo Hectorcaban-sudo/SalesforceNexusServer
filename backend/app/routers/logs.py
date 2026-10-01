@@ -12,14 +12,23 @@ router = APIRouter(prefix="/api/logs", tags=["logs"], dependencies=[Depends(get_
 def list_logs(
     level: Optional[str] = None,
     search: Optional[str] = None,
+    transaction_id: Optional[str] = None,
     limit: int = 300,
 ):
     rows = logs_table.all()
     if level:
         rows = [r for r in rows if r["level"] == level.upper()]
+    if transaction_id:
+        tid = str(transaction_id)
+        def matches_tx(r):
+            ctx = r.get("context") or {}
+            if isinstance(ctx, dict) and str(ctx.get("transaction_id") or "") == tid:
+                return True
+            return tid in (r.get("message") or "")
+        rows = [r for r in rows if matches_tx(r)]
     if search:
         s = search.lower()
-        rows = [r for r in rows if s in r["message"].lower()]
+        rows = [r for r in rows if s in (r.get("message") or "").lower()]
     rows.sort(key=lambda r: r["timestamp"], reverse=True)
     return rows[:limit]
 
