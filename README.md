@@ -98,7 +98,8 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   configuration, full transaction history with payload/result inspection, a live log viewer, user
   management, integrations, alerts, and a separate **Admin Configuration** section (organized into
   submenus: Processing mode, DSSClient, Langflow, Payload processors, Message broker, Backup) for
-  global settings.
+  global settings. Every save/create/update/delete action anywhere in the console confirms itself
+  with a toast notification instead of leaving you to guess whether it worked.
 - **Local storage only** — everything is stored in a local **SQLite** database
   (`backend/data/nexus.db`). No external database required to run this (RabbitMQ is optional, for
   the message broker only).
@@ -106,12 +107,23 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   bootstrap account (`admin` / `admin123` — change this immediately, see below).
 - **Structured, rolling logging** — every component logs to a **daily-rotating file**
   (`backend/logs/nexus.log`, configurable — size-based rotation is also available) *and* into
-  SQLite, so the admin UI's Logs page can filter/search without touching the filesystem. **Custom
-  processor scripts** are included — anything they print to stderr shows up here too, tagged with
-  the processor's name. Click any log row to see the full entry (message + context) in a modal.
+  SQLite, so the admin UI's two-pane **Logs** page can filter by org, level, logger, a time window,
+  and free-text search — without touching the filesystem. Click a line to see its full message and
+  context in the detail pane. **Custom processor scripts** are included — anything they print to
+  stderr shows up here too, tagged with the processor's name and (when the run was triggered by a
+  transaction) that transaction's id, so a log line can jump straight back to the transaction that
+  produced it, and a transaction's Inspector can jump straight to its own filtered log view.
 - **Optional publishing** — a subscribed event channel can be configured to process without
   automatically publishing the result back to Salesforce (still runs through the configured
   processor, integrations, and alerts) — useful for one-way "listen and notify" event types.
+- **Toast notifications** — every create/update/delete/toggle action across the admin console (not
+  just Transactions) shows a bottom-corner toast confirming success or surfacing the server's error
+  message, so a save failure is never silent. See "Admin console (React)" below.
+- **Cross-linked Transactions ↔ Logs** — jump from a transaction's Inspector straight to its log
+  lines (`View logs`, filtered to that `transaction_id`), or from a log line's context back to the
+  transaction that produced it (`Open transaction`) — including custom-processor **stderr** output,
+  which is tagged with the triggering transaction's id via `NEXUS_TRANSACTION_ID` so it shows up in
+  that filtered view too. See "Custom payload processors" below.
 
 ## Project layout
 
@@ -463,12 +475,13 @@ From **Admin Configuration** (admin role required), upload a Python script as an
 DSSClient or the local fallback for `process_payload()`. Contract:
 
 ```python
-import sys, json
+import sys, os, json
 
 def process(payload: dict) -> dict:
-    print(f"Received: {list(payload.keys())}", file=sys.stderr)  # shows up in System Logs automatically
+    tx = os.environ.get("NEXUS_TRANSACTION_ID", "")
+    print(f"tx={tx} received keys {list(payload.keys())}", file=sys.stderr)  # shows up in System Logs, filterable by tx
     # your logic here
-    return {"status": "ok", "echo": payload}
+    return {"status": "ok", "echo": payload, "steps": [{"name": "echo", "status": "ok", "ms": 0}]}
 
 if __name__ == "__main__":
     input_payload = json.loads(sys.stdin.read() or "{}")
@@ -478,18 +491,25 @@ if __name__ == "__main__":
 - Read one JSON object from stdin, print one JSON object to stdout.
 - Print any log/diagnostic messages to **stderr** — every line is mirrored into the **System Logs**
   page automatically (tagged with the processor's name as its logger, e.g.
-  `nexus.processor.My Processor`), whether the run succeeds or fails.
+  `nexus.processor.My Processor`, and with the triggering transaction's id when there is one), whether
+  the run succeeds or fails, so a specific run's output can be isolated with the Logs page's tx filter
+  or reached directly via "View logs" on that transaction's Inspector.
 - A non-zero exit code, invalid JSON on stdout, or exceeding a 20-second timeout is treated as a
   processing failure (and falls back to local processing so the pipeline never breaks).
 - Use the **Test** button to run it against a sample payload before activating it.
 - Only one processor is "active" at a time globally, selected from Admin Configuration's mode
   selector — or pin a specific processor to an individual event channel (see "Per-event processor
   override" below).
-- **Download / override** — download any processor's current .py file (e.g. to edit locally or put
+- **The project-level Processors page is read-only by design** — it shows the script's source, which
+  pipelines reference it (with a one-click jump to that pipeline's flow), and a **Replace** action
+  that uploads a new .py to the *same* processor id in place of in-browser editing. Global processors
+  (shared across projects) stay editable only from Admin Configuration.
+- **Download / replace** — download any processor's current .py file (e.g. to edit locally or put
   under version control), and upload a new version back to the *same* processor id to replace its
-  code in place — anything already pointing at it (the global mode, or a per-event override) picks
-  up the new code immediately with no reconfiguration needed. Uploading resets its test history
-  since the old pass/fail no longer describes what's running now.
+  code in place — anything already pointing at it (the global mode, a per-event override, or a
+  pipeline's processor node) picks up the new code immediately with no reconfiguration needed.
+  Replacing resets its test history since the old pass/fail no longer describes what's running now.
+  A **Download sample .py** button on the Processors page gives you a working starting template.
 
 **Security note:** uploaded scripts run in an isolated subprocess (not `exec()`'d in-process), so
 they can't directly touch the running server's memory or already-loaded secrets — but they do run
@@ -507,11 +527,17 @@ imports:
   there's no org context (e.g. a manual test run with no org selected).
 - `NEXUS_ADMIN_CONFIG` — `{"dss_client": {...}, "langflow": {...}, "email": {...},
   "processing_mode": {...}}`, the same (unmasked) configuration the built-in processing modes use.
+- `NEXUS_TRANSACTION_ID` — the id of the transaction that triggered this run (empty string for a
+  manual Test-button run with no transaction). Include it in your stderr output (see the example
+  above) so your own log lines line up with the Logs page's transaction filter and the "View logs" /
+  "Open transaction" cross-links — it's not required, but without it your lines still appear in
+  System Logs, just without a transaction to link back to.
 
 ```python
 import os, json
 org = json.loads(os.environ.get("NEXUS_ORG", "{}"))
 admin_config = json.loads(os.environ.get("NEXUS_ADMIN_CONFIG", "{}"))
+transaction_id = os.environ.get("NEXUS_TRANSACTION_ID", "")
 # e.g. call Salesforce directly using org's credentials, or send your own
 # email via smtplib using admin_config["email"]
 ```
