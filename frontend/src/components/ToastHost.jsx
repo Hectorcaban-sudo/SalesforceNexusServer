@@ -1,10 +1,11 @@
+import { createPortal } from 'react-dom'
 import { CheckCircle2, XCircle, X } from 'lucide-react'
 import { useToast } from '../lib/ToastContext'
 
 export default function ToastHost() {
   const { toasts, dismiss } = useToast()
-  if (!toasts.length) return null
-  return (
+  if (!toasts.length || typeof document === 'undefined') return null
+  return createPortal(
     <div className="toast-stack" aria-live="polite">
       {toasts.map((t) => (
         <div key={t.id} className={`toast-card toast-${t.kind}`}>
@@ -20,6 +21,7 @@ export default function ToastHost() {
           </button>
         </div>
       ))}
-    </div>
+    </div>,
+    document.body,
   )
 }
