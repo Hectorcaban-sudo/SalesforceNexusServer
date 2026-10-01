@@ -1,29 +1,33 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, Cpu, Globe2, Save, ShieldCheck } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Plus, Trash2, Cpu, Globe2, Download, Upload } from 'lucide-react'
 import api from '../lib/api'
 import PythonHighlight from '../components/PythonHighlight'
 import { useProject, isGlobalResource, visibleLibraryItem } from '../lib/ProjectContext'
 import { useToast } from '../lib/ToastContext'
 
 export default function Processors() {
+  const navigate = useNavigate()
   const { projectId, project } = useProject()
   const { toast } = useToast()
+  const replaceRef = useRef(null)
   const [items, setItems] = useState([])
+  const [usage, setUsage] = useState({})
   const [error, setError] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [name, setName] = useState('')
   const [file, setFile] = useState(null)
   const [selected, setSelected] = useState(null)
   const [code, setCode] = useState('')
-  const [syntax, setSyntax] = useState(null)
-  const [savingCode, setSavingCode] = useState(false)
   const [loadingCode, setLoadingCode] = useState(false)
 
   async function load() {
-    const { data } = await api.get('/processors', {
-      params: projectId ? { project_id: projectId, include_global: true } : {},
-    })
+    const [{ data }, u] = await Promise.all([
+      api.get('/processors', { params: projectId ? { project_id: projectId, include_global: true } : {} }),
+      api.get('/processors/usage').catch(() => ({ data: {} })),
+    ])
     setItems(data || [])
+    setUsage(u.data || {})
   }
 
   useEffect(() => { load().catch((e) => setError(e.message)) }, [projectId])
@@ -35,31 +39,50 @@ export default function Processors() {
   const projectOwned = visible.filter((p) => !isGlobalResource(p))
   const globals = visible.filter((p) => isGlobalResource(p))
 
+  async function downloadSample() {
+    const { data } = await api.get('/processors/example')
+    const blob = new Blob([data.code || ''], { type: 'text/x-python' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = 'nexus_processor_sample.py'
+    a.click()
+    URL.revokeObjectURL(a.href)
+    toast('Sample downloaded')
+  }
+
   async function upload(e) {
     e.preventDefault()
     if (!file) return
     if (!projectId) {
-      setError('Select a project in the top bar before uploading a project processor')
+      toast('Select a project before uploading', { kind: 'error' })
       return
     }
     setUploading(true)
-    setError(null)
     try {
       const fd = new FormData()
       fd.append('name', name || file.name)
       fd.append('file', file)
       fd.append('project_id', projectId)
       await api.post('/processors', fd)
-      setName('')
-      setFile(null)
+      setName(''); setFile(null)
       toast('Processor uploaded')
       await load()
     } catch (err) {
-      const detail = err?.response?.data?.detail || err.message
-      setError(detail)
-      toast(detail || 'Failed to upload processor', { kind: 'error' })
-    } finally {
-      setUploading(false)
+      toast(err?.response?.data?.detail || 'Upload failed', { kind: 'error' })
+    } finally { setUploading(false) }
+  }
+
+  async function replaceFile(p, fileObj) {
+    if (!fileObj) return
+    const fd = new FormData()
+    fd.append('file', fileObj)
+    try {
+      await api.post(`/processors/${p.id}/upload`, fd)
+      toast(`Replaced ${p.name}`)
+      await load()
+      if (selected?.id === p.id) openViewer(p)
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Replace failed', { kind: 'error' })
     }
   }
 
@@ -67,91 +90,59 @@ export default function Processors() {
     if (!confirm('Delete this project processor?')) return
     try {
       await api.delete(`/processors/${id}`)
+      if (selected?.id === id) setSelected(null)
       toast('Processor deleted')
       await load()
     } catch (err) {
-      toast(err?.response?.data?.detail || 'Failed to delete processor', { kind: 'error' })
+      toast(err?.response?.data?.detail || 'Delete failed', { kind: 'error' })
     }
   }
 
-  async function openEditor(p) {
+  async function openViewer(p) {
     setSelected(p)
     setLoadingCode(true)
-    setSyntax(null)
     try {
       const { data } = await api.get(`/processors/${p.id}/code`)
       setCode(data.code || '')
-      if (!(data.code || '').trim()) {
-        setError('This processor file is empty on disk. Re-upload the .py or paste the script before saving.')
-      }
     } catch (err) {
       setError(err?.response?.data?.detail || err.message)
       setCode('')
-    } finally {
-      setLoadingCode(false)
-    }
+    } finally { setLoadingCode(false) }
   }
 
-  async function validateCode() {
-    const { data } = await api.post('/processors/validate', { code })
-    setSyntax(data)
-    return data
-  }
-
-  async function saveCode() {
-    if (!selected || isGlobalResource(selected) || loadingCode) return
-    if (!(code || '').trim()) {
-      setError('Cannot save an empty script')
-      return
-    }
-    setSavingCode(true)
-    setError(null)
-    try {
-      const v = await validateCode()
-      if (!v.ok) { setError(v.error); toast(v.error || 'Syntax error', { kind: 'error' }); return }
-      await api.put(`/processors/${selected.id}/code`, { code })
-      toast('Processor saved')
-    } catch (err) {
-      const detail = err?.response?.data?.detail || err.message
-      setError(detail)
-      toast(detail || 'Failed to save processor', { kind: 'error' })
-    } finally {
-      setSavingCode(false)
-    }
-  }
+  function usedBy(id) { return usage[id] || [] }
 
   function Card({ p, global: isGlobal }) {
-    const active = selected?.id === p.id
+    const hits = usedBy(p.id)
     return (
-      <div key={p.id} className="org-card" onClick={() => openEditor(p)} style={{ cursor: 'pointer', outline: active ? '1px solid var(--accent-blue)' : undefined, ...(isGlobal ? { borderColor: 'rgba(56, 189, 248, 0.45)', background: 'rgba(14, 165, 233, 0.06)' } : {}) }}>
+      <div className="org-card" onClick={() => openViewer(p)} style={{ cursor: 'pointer', outline: selected?.id === p.id ? '1px solid #7eb6d6' : undefined }}>
         <div className="org-card-header">
-          {isGlobal ? <Globe2 size={18} style={{ color: '#38bdf8' }} /> : <Cpu size={18} />}
+          {isGlobal ? <Globe2 size={18} /> : <Cpu size={18} />}
           <div>
-            <div className="name" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              {p.name}
-              {isGlobal && <span className="badge badge-blue" style={{ fontSize: 10 }}>Global</span>}
-              {!isGlobal && <span className="badge badge-gray" style={{ fontSize: 10 }}>Project</span>}
-            </div>
-            <div className="url">{p.id}</div>
+            <div className="name">{p.name} {isGlobal && <span className="badge badge-blue">Global</span>}</div>
+            <div className="url">{hits.length ? `Used by ${hits.length} pipeline${hits.length === 1 ? '' : 's'}` : 'Not used by a pipeline'}</div>
           </div>
         </div>
-        <div className="org-card-actions">
-          {isGlobal ? (
-            <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>Read-only · edit in Admin</span>
-          ) : (
-            <button className="btn btn-sm btn-danger" onClick={(e) => { e.stopPropagation(); remove(p.id) }}><Trash2 size={13} /></button>
-          )}
+        <div className="org-card-actions" onClick={(e) => e.stopPropagation()}>
+          <button className="btn btn-sm" onClick={() => replaceRef.current && (replaceRef.current.dataset.id = p.id, replaceRef.current.click())}><Upload size={13} /> Replace</button>
+          {!isGlobal && <button className="btn btn-sm btn-danger" onClick={() => remove(p.id)}><Trash2 size={13} /></button>}
         </div>
       </div>
     )
   }
 
+  const hits = selected ? usedBy(selected.id) : []
+
   return (
     <div>
-      <div className="page-header">
-        <h1>Payload processors</h1>
-        <p className="page-sub">Click a card to view source. Globals are read-only.{project ? <> Active project: <strong>{project.name}</strong></> : null}</p>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-end' }}>
+        <div>
+          <h1>Payload processors</h1>
+          <p className="page-sub">Read-only. Replace a script by uploading a .py. {project ? <>Project: <strong>{project.name}</strong></> : null}</p>
+        </div>
+        <button className="btn btn-sm" onClick={downloadSample}><Download size={13} /> Download sample .py</button>
       </div>
+      <input ref={replaceRef} type="file" accept=".py" hidden onChange={(e) => { const id = replaceRef.current?.dataset.id; const f = e.target.files?.[0]; const p = items.find((x) => x.id === id); if (p && f) replaceFile(p, f); e.target.value = '' }} />
       {error && <div className="panel" style={{ color: 'var(--accent-red)', marginBottom: 12 }}>{String(error)}</div>}
       <div className="panel" style={{ marginBottom: 16 }}>
         <div className="panel-header"><h3><Plus size={15} /> Upload project processor</h3></div>
@@ -159,42 +150,41 @@ export default function Processors() {
           <form onSubmit={upload}>
             <div className="form-row-2">
               <div className="field"><label>Name</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>
-              <div className="field"><label>Python file (.py)</label><input type="file" accept=".py,text/x-python" onChange={(e) => setFile(e.target.files?.[0] || null)} required /></div>
+              <div className="field"><label>Python file (.py)</label><input type="file" accept=".py" onChange={(e) => setFile(e.target.files?.[0] || null)} required /></div>
             </div>
             <button className="btn btn-primary" disabled={uploading || !file || !projectId} style={{ marginTop: 8 }}>{uploading ? 'Uploading…' : 'Upload to this project'}</button>
           </form>
         </div>
       </div>
-      <h3 style={{ fontSize: 14, margin: '8px 0 10px', color: 'var(--text-muted)' }}>This project</h3>
-      <div className="org-grid" style={{ marginBottom: 20 }}>
-        {projectOwned.length === 0 && <div className="panel"><div className="empty-state">No project-specific processors yet.</div></div>}
-        {projectOwned.map((p) => <Card key={p.id} p={p} global={false} />)}
-      </div>
-      <h3 style={{ fontSize: 14, margin: '8px 0 10px', color: 'var(--text-muted)' }}>Global library (read-only)</h3>
-      <div className="org-grid">
-        {globals.length === 0 && <div className="panel"><div className="empty-state">No global processors.</div></div>}
-        {globals.map((p) => <Card key={p.id} p={p} global />)}
-      </div>
-      {selected && (
-        <div className="modal-overlay" onClick={() => setSelected(null)}>
-          <div className="modal-box" style={{ maxWidth: 920, width: '92vw' }} onClick={(e) => e.stopPropagation()}>
-            <div className="panel-header">
-              <h3>{selected.name}.py {isGlobalResource(selected) && <span className="badge badge-blue">Global · read-only</span>}</h3>
-              <div style={{ display: 'flex', gap: 8 }}>
-                {syntax && <span className={syntax.ok ? 'badge badge-green' : 'badge badge-red'}>{syntax.ok ? 'Syntax OK' : syntax.error}</span>}
-                <button type="button" className="btn btn-sm" onClick={validateCode}><ShieldCheck size={13} /> Validate</button>
-                <button type="button" className="btn btn-sm btn-primary" disabled={savingCode || loadingCode || isGlobalResource(selected) || !(code || '').trim()} onClick={saveCode}><Save size={13} /> Save</button>
-                <button type="button" className="btn btn-sm" onClick={() => setSelected(null)}>Close</button>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 1fr) minmax(360px, 1.4fr)', gap: 12 }}>
+        <div>
+          <h3 style={{ fontSize: 13, color: 'var(--text-muted)' }}>This project</h3>
+          <div className="org-grid">{projectOwned.map((p) => <Card key={p.id} p={p} />)}{projectOwned.length === 0 && <div className="empty-state">None yet</div>}</div>
+          <h3 style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 16 }}>Global library</h3>
+          <div className="org-grid">{globals.map((p) => <Card key={p.id} p={p} global />)}</div>
+        </div>
+        <div className="panel">
+          <div className="panel-header">
+            <h3>{selected ? `${selected.name}.py` : 'Viewer'} <span className="badge badge-gray">Read only</span></h3>
+          </div>
+          <div className="panel-body">
+            {!selected && <div className="empty-state">Select a processor</div>}
+            {selected && loadingCode && <div className="empty-state">Loading…</div>}
+            {selected && !loadingCode && <PythonHighlight code={code} readOnly onChange={() => {}} />}
+            {selected && (
+              <div style={{ marginTop: 12 }}>
+                <div className="muted" style={{ marginBottom: 6 }}>Replace by uploading a new .py. Used by:</div>
+                {hits.length === 0 && <div className="muted">No pipelines reference this script.</div>}
+                {hits.map((h) => (
+                  <button key={h.pipeline_id} className="btn btn-sm" style={{ marginRight: 6, marginBottom: 6 }} onClick={() => h.event_id && navigate(`/events/${h.event_id}/pipelines/${h.pipeline_id}/flow`)}>
+                    {h.name}{h.event_name ? ` · ${h.event_name}` : ''}
+                  </button>
+                ))}
               </div>
-            </div>
-            <div className="panel-body">
-              {loadingCode ? <div className="empty-state">Loading…</div> : (
-                <PythonHighlight code={code} readOnly={isGlobalResource(selected)} onChange={(v) => { setCode(v); setSyntax(null) }} />
-              )}
-            </div>
+            )}
           </div>
         </div>
-      )}
+      </div>
     </div>
   )
 }
