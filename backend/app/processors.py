@@ -16,15 +16,18 @@ PROCESSORS_DIR.mkdir(exist_ok=True)
 PROCESSOR_TIMEOUT_SECONDS = settings.processor_timeout_seconds
 
 EXAMPLE_TEMPLATE = '''"""Nexus custom processor.
-print(..., file=sys.stderr) is copied to System Logs with transaction_id.
-NEXUS_TRANSACTION_ID is set for the run.
+Print a line before each long step. Timeout keeps the last stderr lines.
 """
-import sys, os, json, time
+import sys, os, json
+
+def log(msg):
+    print(msg, file=sys.stderr, flush=True)
 
 def process(payload):
-    tx = os.environ.get("NEXUS_TRANSACTION_ID", "")
-    print(f"tx={tx} received keys {list(payload.keys())}", file=sys.stderr)
-    return {"status": "ok", "echo": payload, "steps": [{"name": "echo", "status": "ok", "ms": 0}]}
+    log("start")
+    log("download ContentVersion")
+    log("upload SharePoint")
+    return {"status": "ok", "echo": payload, "steps": [{"name": "upload", "status": "ok"}]}
 
 if __name__ == "__main__":
     print(json.dumps(process(json.loads(sys.stdin.read() or "{}"))))
@@ -63,6 +66,12 @@ def _log_processor_stderr(processor_id: str, name: str, stderr: str, transaction
         if line.strip():
             log_event("info", line.strip(), logger_name=logger_name, **extra)
 
+def _tail(stderr: str, n: int = 8) -> str:
+    lines = [ln.strip() for ln in (stderr or "").splitlines() if ln.strip()]
+    if not lines:
+        return "no stderr before timeout — print a step line before each long call"
+    return " | ".join(lines[-n:])
+
 def _build_processor_env(org_id: Optional[str], transaction_id: Optional[str] = None) -> dict:
     from .database import orgs_table, sharepoint_connections_table, Q as _Q
     from .routers.admin_config import (
@@ -89,6 +98,7 @@ def _build_processor_env(org_id: Optional[str], transaction_id: Optional[str] = 
             "cloud": c.get("cloud") or "gcchigh", "project_id": c.get("project_id"),
         })
     env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
     env["NEXUS_ORG"] = json.dumps(org or {})
     env["NEXUS_ADMIN_CONFIG"] = json.dumps(admin_config)
     env["NEXUS_SHAREPOINT"] = json.dumps(scoped)
@@ -106,7 +116,7 @@ def run_processor(processor_id: str, payload: dict, org_id: Optional[str] = None
     name = record["name"] if record else processor_id
     start = time.time()
     proc = subprocess.Popen(
-        [sys.executable, str(path)],
+        [sys.executable, "-u", str(path)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", env=_build_processor_env(org_id, transaction_id),
     )
@@ -118,8 +128,17 @@ def run_processor(processor_id: str, payload: dict, org_id: Optional[str] = None
             proc.kill(); proc.wait(); cancelled = True; break
         if time.time() - start > PROCESSOR_TIMEOUT_SECONDS:
             proc.kill(); proc.wait()
-            _log_processor_stderr(processor_id, name, proc.stderr.read() or "", transaction_id)
-            raise RuntimeError(f"Processor timed out after {PROCESSOR_TIMEOUT_SECONDS}s")
+            stderr = proc.stderr.read() or ""
+            _log_processor_stderr(processor_id, name, stderr, transaction_id)
+            last = _tail(stderr)
+            log_event(
+                "error",
+                f"Processor timed out after {PROCESSOR_TIMEOUT_SECONDS}s. Last lines: {last}",
+                logger_name=f"nexus.processor.{name}",
+                processor_id=processor_id,
+                transaction_id=transaction_id,
+            )
+            raise RuntimeError(f"Processor timed out after {PROCESSOR_TIMEOUT_SECONDS}s. Last lines: {last}")
         time.sleep(0.1)
     stdout = proc.stdout.read()
     stderr = proc.stderr.read()
