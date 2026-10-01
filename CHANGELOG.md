@@ -1,11 +1,9 @@
 # Changelog
 
-## 1.2.10 — 2026-09-30
+## 1.2.11 — 2026-09-30
 
-### Processors
-- Harden POST `/api/processors` upload (safe filename, empty-file 400, store errors returned as detail)
+### Fix: events stuck after OpenTelemetry removal
+- `start_span()` / `inject_trace_context()` now accept the keyword args the worker still passes (`org_id`, `channel`, `carrier`, `span`, `transaction_id`). The previous no-op stub rejected them and aborted processing, so transactions never left queued and logs stopped updating.
 
-### OpenTelemetry
-- Removed OTEL packages from requirements
-- `tracing.py` is a no-op stub so worker/CometD imports still work
-- FastAPI OTEL instrumentor no longer wraps the app (it could break multipart uploads)
+### UI
+- Toast stack z-index raised so save notifications are not hidden under page chrome.
