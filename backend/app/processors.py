@@ -16,39 +16,19 @@ PROCESSORS_DIR.mkdir(exist_ok=True)
 PROCESSOR_TIMEOUT_SECONDS = settings.processor_timeout_seconds
 
 EXAMPLE_TEMPLATE = '''"""Nexus custom processor.
-
-Env:
-  NEXUS_ORG, NEXUS_ADMIN_CONFIG,
-  NEXUS_SHAREPOINT = [{id,name,tenant_id,client_id,client_secret,cloud}]
-
-Return steps for the Transactions pipeline pane:
-  {"status": "ok", "steps": [{"name": "Upload", "status": "ok", "ms": 1200}]}
+print(..., file=sys.stderr) is copied to System Logs with transaction_id.
+NEXUS_TRANSACTION_ID is set for the run.
 """
 import sys, os, json, time
 
-def step(name, fn, steps):
-    t0 = time.time()
-    try:
-        out = fn()
-        steps.append({"name": name, "status": "ok", "ms": int((time.time()-t0)*1000)})
-        return out
-    except Exception as exc:
-        steps.append({"name": name, "status": "error", "detail": str(exc), "ms": int((time.time()-t0)*1000)})
-        raise
-
 def process(payload):
-    steps = []
-    org = json.loads(os.environ.get("NEXUS_ORG", "{}"))
-    sharepoint = json.loads(os.environ.get("NEXUS_SHAREPOINT", "[]"))
-    print("org", (org or {}).get("name"), file=sys.stderr)
-    print("sharepoint", [c.get("name") for c in sharepoint], file=sys.stderr)
-    step("echo", lambda: payload, steps)
-    return {"status": "ok", "echo": payload, "steps": steps}
+    tx = os.environ.get("NEXUS_TRANSACTION_ID", "")
+    print(f"tx={tx} received keys {list(payload.keys())}", file=sys.stderr)
+    return {"status": "ok", "echo": payload, "steps": [{"name": "echo", "status": "ok", "ms": 0}]}
 
 if __name__ == "__main__":
     print(json.dumps(process(json.loads(sys.stdin.read() or "{}"))))
 '''
-
 
 def _script_path(processor_id: str) -> Path:
     return PROCESSORS_DIR / f"{processor_id}.py"
@@ -72,15 +52,18 @@ def delete_processor_file(processor_id: str):
     if path.exists():
         path.unlink()
 
-def _log_processor_stderr(processor_id: str, name: str, stderr: str):
+def _log_processor_stderr(processor_id: str, name: str, stderr: str, transaction_id: Optional[str] = None):
     if not stderr:
         return
     logger_name = f"nexus.processor.{name or processor_id}"
+    extra = {"processor_id": processor_id}
+    if transaction_id:
+        extra["transaction_id"] = transaction_id
     for line in stderr.strip().splitlines():
         if line.strip():
-            log_event("info", line.strip(), logger_name=logger_name, processor_id=processor_id)
+            log_event("info", line.strip(), logger_name=logger_name, **extra)
 
-def _build_processor_env(org_id: Optional[str]) -> dict:
+def _build_processor_env(org_id: Optional[str], transaction_id: Optional[str] = None) -> dict:
     from .database import orgs_table, sharepoint_connections_table, Q as _Q
     from .routers.admin_config import (
         get_dss_client_config_raw, get_langflow_config_raw, get_email_settings_raw, get_processing_mode_raw,
@@ -97,38 +80,25 @@ def _build_processor_env(org_id: Optional[str]) -> dict:
     for c in sharepoint_connections_table.all():
         if not c.get("enabled", True):
             continue
-        # Exact-match scoping: a connection is only handed to this processor
-        # when its project_id matches the triggering org's project_id (both
-        # None/"" counts as a match - "global, unassigned" connections only
-        # reach orgs that are themselves unassigned). The previous check
-        # ("if project_id and ...") skipped scoping entirely whenever the
-        # org had no project_id - which is the common case for an org
-        # created before project scoping existed, and always true for the
-        # /test endpoint's default org_id=None - handing every processor
-        # EVERY enabled SharePoint connection's plaintext client_secret
-        # across every project, not just the ones it should see.
         conn_project_id = c.get("project_id") or None
         if conn_project_id != (project_id or None):
             continue
         scoped.append({
-            "id": c.get("id"),
-            "name": c.get("name"),
-            "tenant_id": c.get("tenant_id"),
-            "client_id": c.get("client_id"),
-            "client_secret": c.get("client_secret"),
-            "cloud": c.get("cloud") or "gcchigh",
-            "project_id": c.get("project_id"),
+            "id": c.get("id"), "name": c.get("name"), "tenant_id": c.get("tenant_id"),
+            "client_id": c.get("client_id"), "client_secret": c.get("client_secret"),
+            "cloud": c.get("cloud") or "gcchigh", "project_id": c.get("project_id"),
         })
     env = dict(os.environ)
     env["NEXUS_ORG"] = json.dumps(org or {})
     env["NEXUS_ADMIN_CONFIG"] = json.dumps(admin_config)
     env["NEXUS_SHAREPOINT"] = json.dumps(scoped)
+    env["NEXUS_TRANSACTION_ID"] = transaction_id or ""
     return env
 
 class ProcessorCancelled(RuntimeError):
     pass
 
-def run_processor(processor_id: str, payload: dict, org_id: Optional[str] = None, cancel_check=None) -> dict:
+def run_processor(processor_id: str, payload: dict, org_id: Optional[str] = None, cancel_check=None, transaction_id: Optional[str] = None) -> dict:
     path = _script_path(processor_id)
     if not path.exists():
         raise RuntimeError(f"Processor script file not found for id '{processor_id}'")
@@ -138,7 +108,7 @@ def run_processor(processor_id: str, payload: dict, org_id: Optional[str] = None
     proc = subprocess.Popen(
         [sys.executable, str(path)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, encoding="utf-8", env=_build_processor_env(org_id),
+        text=True, encoding="utf-8", env=_build_processor_env(org_id, transaction_id),
     )
     proc.stdin.write(json.dumps(payload))
     proc.stdin.close()
@@ -148,12 +118,12 @@ def run_processor(processor_id: str, payload: dict, org_id: Optional[str] = None
             proc.kill(); proc.wait(); cancelled = True; break
         if time.time() - start > PROCESSOR_TIMEOUT_SECONDS:
             proc.kill(); proc.wait()
-            _log_processor_stderr(processor_id, name, proc.stderr.read() or "")
+            _log_processor_stderr(processor_id, name, proc.stderr.read() or "", transaction_id)
             raise RuntimeError(f"Processor timed out after {PROCESSOR_TIMEOUT_SECONDS}s")
         time.sleep(0.1)
     stdout = proc.stdout.read()
     stderr = proc.stderr.read()
-    _log_processor_stderr(processor_id, name, stderr)
+    _log_processor_stderr(processor_id, name, stderr, transaction_id)
     if cancelled:
         raise ProcessorCancelled(f"Processor '{name}' was cancelled")
     if proc.returncode != 0:
