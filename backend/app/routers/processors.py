@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body
 from fastapi.responses import Response
 from typing import Optional
+import json
 
 from ..auth import require_role
-from ..database import processors_table, Q
+from ..database import processors_table, event_pipelines_table, event_configs_table, Q
 from ..models import ProcessorOut, ProcessorTestRequest, new_id, now_ts
 from ..logging_config import log_event
 from .. import processors as proc_module
@@ -24,6 +25,51 @@ def get_example_template():
     return {"code": proc_module.EXAMPLE_TEMPLATE}
 
 
+@router.get("/example.py")
+def download_example():
+    return Response(
+        content=proc_module.EXAMPLE_TEMPLATE,
+        media_type="text/x-python",
+        headers={"Content-Disposition": 'attachment; filename="nexus_processor_sample.py"'},
+    )
+
+
+def _ids_in_pipeline(row: dict):
+    found = set()
+    if row.get("processor_id"):
+        found.add(row["processor_id"])
+    graph = row.get("flow_graph") or {}
+    if isinstance(graph, str):
+        try:
+            graph = json.loads(graph)
+        except Exception:
+            graph = {}
+    for node in graph.get("nodes") or []:
+        data = node.get("data") or {}
+        for key in ("processor_id", "processorId", "processor"):
+            val = data.get(key)
+            if isinstance(val, str) and val:
+                found.add(val)
+    return found
+
+
+@router.get("/usage")
+def processor_usage():
+    events = {e["id"]: e for e in event_configs_table.all()}
+    out = {}
+    for row in event_pipelines_table.all():
+        ev = events.get(row.get("event_id")) or {}
+        hit = {
+            "pipeline_id": row.get("id"),
+            "name": row.get("name") or "Pipeline",
+            "event_id": row.get("event_id"),
+            "event_name": ev.get("name") or ev.get("channel") or "",
+        }
+        for pid in _ids_in_pipeline(row):
+            out.setdefault(pid, []).append(hit)
+    return out
+
+
 @router.get("/{processor_id}/code")
 def get_processor_code(processor_id: str):
     if not processors_table.get(Q.id == processor_id):
@@ -42,24 +88,7 @@ def validate_processor_code(body: dict = Body(...)):
 
 @router.put("/{processor_id}/code")
 def save_processor_code(processor_id: str, body: dict = Body(...)):
-    existing = processors_table.get(Q.id == processor_id)
-    if not existing:
-        raise HTTPException(404, "Processor not found")
-    code = body.get("code")
-    if code is None or not str(code).strip():
-        raise HTTPException(400, "Code is empty — refused to overwrite the processor with a blank file")
-    if len(code.encode("utf-8")) > MAX_UPLOAD_BYTES:
-        raise HTTPException(400, f"File too large (max {MAX_UPLOAD_BYTES // 1024}KB)")
-    err = proc_module.validate_syntax(code)
-    if err:
-        raise HTTPException(400, f"Not valid Python: {err}")
-    proc_module.save_processor_file(processor_id, code)
-    processors_table.update(
-        {"last_status": None, "last_run_at": None, "last_error": None},
-        Q.id == processor_id,
-    )
-    log_event("info", f"Processor '{existing.get('name')}' code saved", processor_id=processor_id)
-    return {"ok": True, "id": processor_id}
+    raise HTTPException(405, "Inline edits are disabled. Upload a .py to replace this processor.")
 
 
 @router.get("/{processor_id}/download")
@@ -135,7 +164,7 @@ async def override_processor(processor_id: str, name: Optional[str] = Form(None)
     if name:
         updates["name"] = name
     processors_table.update(updates, Q.id == processor_id)
-    log_event("info", f"Processor script '{existing['name']}' overridden", processor_id=processor_id)
+    log_event("info", f"Processor script '{existing['name']}' replaced by upload", processor_id=processor_id)
     return processors_table.get(Q.id == processor_id)
 
 
