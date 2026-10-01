@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { RotateCcw, RefreshCcw, XCircle, Workflow } from 'lucide-react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { RotateCcw, RefreshCcw, XCircle, Workflow, ScrollText } from 'lucide-react'
 import api from '../lib/api'
 import { StatusBadge, fmtTime } from '../components/UI'
 import { useProject } from '../lib/ProjectContext'
@@ -18,14 +18,7 @@ function headerOf(t) {
 function recordId(t) {
   const p = payloadOf(t)
   const h = headerOf(t)
-  return (
-    p.ContentDocumentId ||
-    p.LinkedEntityId ||
-    p.Id ||
-    (Array.isArray(h.recordIds) ? h.recordIds[0] : null) ||
-    t.parent_transaction_id ||
-    t.id
-  )
+  return p.ContentDocumentId || p.LinkedEntityId || p.Id || (Array.isArray(h.recordIds) ? h.recordIds[0] : null) || t.parent_transaction_id || t.id
 }
 function groupTitle(t) {
   const p = payloadOf(t)
@@ -42,12 +35,13 @@ function isUserLink(t) {
 
 export default function Transactions() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { projectId, project } = useProject()
   const { toast } = useToast()
   const [orgs, setOrgs] = useState([])
   const [rows, setRows] = useState([])
   const [filters, setFilters] = useState({ org_id: '', channel: '', window: '3600', hideSkipped: true })
-  const [selectedId, setSelectedId] = useState(null)
+  const [selectedId, setSelectedId] = useState(searchParams.get('tx'))
   const [groupTab, setGroupTab] = useState('pipeline')
   const [inspTab, setInspTab] = useState('result')
   const [reprocessingId, setReprocessingId] = useState(null)
@@ -83,17 +77,14 @@ export default function Transactions() {
       return true
     })
   }, [rows, filters])
-  // If the user has explicitly picked a transaction (selectedId set) but a
-  // refresh/filter change has aged it out of `visible`, fall back to null
-  // (shows "Nothing selected") rather than silently jumping the Inspector -
-  // and its Reprocess/Cancel buttons - to an arbitrary, unrelated row.
-  const selectedFromList = visible.find((r) => r.id === selectedId) || null
+  const selectedFromList = visible.find((r) => r.id === selectedId) || rows.find((r) => r.id === selectedId) || null
   const selected = selectedId ? selectedFromList : visible[0] || null
   const related = useMemo(() => {
     if (!selected) return []
     const key = recordId(selected)
     return visible.filter((r) => recordId(r) === key && r.org_id === selected.org_id)
   }, [visible, selected])
+  const steps = Array.isArray(selected?.result?.steps) ? selected.result.steps : []
 
   function openFlow(t) {
     if (!t) return
@@ -124,9 +115,7 @@ export default function Transactions() {
     if (!confirm('Requeue every failed transaction?')) return
     setBulkBusy(true)
     try {
-      const { data } = await api.post('/transactions/reprocess-failed', null, {
-        params: filters.org_id ? { org_id: filters.org_id } : {},
-      })
+      const { data } = await api.post('/transactions/reprocess-failed', null, { params: filters.org_id ? { org_id: filters.org_id } : {} })
       toast(data.detail)
       await load()
     } finally { setBulkBusy(false) }
@@ -140,9 +129,7 @@ export default function Transactions() {
           <h1>Transactions</h1>
           <p>{project ? `${project.name} · live stream` : 'Watch inbound events by org and channel'}</p>
         </div>
-        <button className="btn btn-sm" onClick={reprocessAllFailed} disabled={bulkBusy}>
-          <RefreshCcw size={13} /> {bulkBusy ? 'Requeuing…' : 'Reprocess all failed'}
-        </button>
+        <button className="btn btn-sm" onClick={reprocessAllFailed} disabled={bulkBusy}><RefreshCcw size={13} /> {bulkBusy ? 'Requeuing…' : 'Reprocess all failed'}</button>
       </div>
       <div className="tx-grid">
         <aside className="tx-pane">
@@ -162,10 +149,7 @@ export default function Transactions() {
               <option value="86400">Last 24h</option>
               <option value="">All time</option>
             </select>
-            <label className="tx-check">
-              <input type="checkbox" checked={filters.hideSkipped} onChange={(e) => setFilters({ ...filters, hideSkipped: e.target.checked })} />
-              Hide skipped
-            </label>
+            <label className="tx-check"><input type="checkbox" checked={filters.hideSkipped} onChange={(e) => setFilters({ ...filters, hideSkipped: e.target.checked })} /> Hide skipped</label>
           </div>
           {watching && <div className="tx-watch">Watching {watching}</div>}
           <div className="tx-stream">
@@ -191,10 +175,7 @@ export default function Transactions() {
                 <div className="tx-related">
                   {related.map((t) => (
                     <button key={t.id} type="button" className={`tx-rel ${selected.id === t.id ? 'active' : ''}`} onClick={() => setSelectedId(t.id)}>
-                      <div>
-                        <strong>{shortChannel(t.channel)}</strong>
-                        <div className="muted">{isUserLink(t) ? 'User library link (005)' : (payloadOf(t).LinkedEntityId || recordId(t))}</div>
-                      </div>
+                      <div><strong>{shortChannel(t.channel)}</strong><div className="muted">{isUserLink(t) ? 'User library link (005)' : (payloadOf(t).LinkedEntityId || recordId(t))}</div></div>
                       <StatusBadge status={t.status} />
                     </button>
                   ))}
@@ -202,9 +183,20 @@ export default function Transactions() {
               ) : (
                 <ol className="tx-steps">
                   <li className="ok"><span>1</span><div><strong>Source</strong><div className="muted">{shortChannel(selected.channel)} received</div></div></li>
-                  <li className={selected.status === 'skipped' ? 'ok' : 'ok'}><span>2</span><div><strong>Gate</strong><div className="muted">{selected.status === 'skipped' ? 'skipped' : 'passed / not configured'}</div></div></li>
-                  <li className={selected.status === 'failed' ? 'bad' : 'ok'}><span>3</span><div><strong>Processor</strong><div className="muted">{selected.pipeline_name || 'Default processing'} · {selected.status}</div></div></li>
-                  <li className={selected.status === 'published' || selected.status === 'processed' ? 'ok' : 'wait'}><span>4</span><div><strong>Publish / integrations</strong><div className="muted">{selected.status === 'failed' ? 'on_failure path' : selected.status}</div></div></li>
+                  <li className="ok"><span>2</span><div><strong>Gate</strong><div className="muted">{selected.status === 'skipped' ? 'skipped' : 'passed / not configured'}</div></div></li>
+                  <li className={selected.status === 'failed' ? 'bad' : 'ok'}>
+                    <span>3</span>
+                    <div>
+                      <strong>Processor</strong>
+                      <div className="muted">{selected.pipeline_name || 'Default processing'} · {selected.status}</div>
+                      {steps.length > 0 && (
+                        <ul className="tx-substeps">
+                          {steps.map((s, i) => <li key={i} className={s.status === 'error' ? 'bad' : 'ok'}>{s.name}{s.ms != null ? ` · ${s.ms}ms` : ''}{s.detail ? <div className="muted">{s.detail}</div> : null}</li>)}
+                        </ul>
+                      )}
+                    </div>
+                  </li>
+                  <li className={selected.status === 'failed' ? 'wait' : 'ok'}><span>4</span><div><strong>Publish / integrations</strong><div className="muted">{selected.status}</div></div></li>
                   <li className={!NON_TERMINAL.includes(selected.status) ? 'ok' : 'wait'}><span>5</span><div><strong>Stop</strong><div className="muted">terminal {selected.status}</div></div></li>
                 </ol>
               )}
@@ -225,12 +217,11 @@ export default function Transactions() {
                 <div><label>Pipeline</label>{selected.pipeline_name || '—'}</div>
                 <div><label>Status</label><StatusBadge status={selected.status} /></div>
               </div>
-              <pre className="tx-json">
-                {inspTab === 'error' ? (selected.error || 'No error') : JSON.stringify(inspTab === 'result' ? (selected.result || { note: 'No result yet' }) : selected.payload, null, 2)}
-              </pre>
+              <pre className="tx-json">{inspTab === 'error' ? (selected.error || 'No error') : JSON.stringify(inspTab === 'result' ? (selected.result || { note: 'No result yet' }) : selected.payload, null, 2)}</pre>
               <div className="tx-actions">
                 <button className="btn btn-sm" onClick={() => reprocess(selected)} disabled={reprocessingId === selected.id}><RotateCcw size={13} /> Reprocess</button>
                 <button className="btn btn-sm" onClick={() => openFlow(selected)} disabled={!selected.event_id}><Workflow size={13} /> Open flow</button>
+                <button className="btn btn-sm" onClick={() => navigate(`/logs?tx=${encodeURIComponent(selected.id)}`)}><ScrollText size={13} /> View logs</button>
                 {NON_TERMINAL.includes(selected.status) && (
                   <button className="btn btn-sm btn-danger" onClick={() => cancel(selected)} disabled={cancellingId === selected.id}><XCircle size={13} /> Cancel</button>
                 )}
