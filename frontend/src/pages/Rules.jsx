@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { Plus, Trash2, ShieldCheck, Pencil, Globe2 } from 'lucide-react'
 import api from '../lib/api'
 import { useProject, isGlobalResource, visibleLibraryItem } from '../lib/ProjectContext'
+import { useToast } from '../lib/ToastContext'
 
 export default function Rules() {
   const { projectId, project } = useProject()
+  const { toast } = useToast()
   const [items, setItems] = useState([])
   const [error, setError] = useState(null)
   const [modal, setModal] = useState(null)
@@ -53,10 +55,13 @@ export default function Rules() {
       } else {
         await api.post('/rules', payload)
       }
+      toast(modal?.id ? 'Rule updated' : 'Rule created')
       setModal(null)
       await load()
     } catch (err) {
-      setError(err?.response?.data?.detail || err.message)
+      const detail = err?.response?.data?.detail || err.message
+      setError(detail)
+      toast(detail || 'Failed to save rule', { kind: 'error' })
     } finally {
       setSaving(false)
     }
@@ -64,8 +69,13 @@ export default function Rules() {
 
   async function remove(id) {
     if (!confirm('Delete this project rule?')) return
-    await api.delete(`/rules/${id}`)
-    await load()
+    try {
+      await api.delete(`/rules/${id}`)
+      toast('Rule deleted')
+      await load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to delete rule', { kind: 'error' })
+    }
   }
 
   function Card({ r, global: isGlobal }) {

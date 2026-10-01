@@ -37,9 +37,7 @@ function RequireAuth({ children }) {
   return (
     <AuthProvider>
       <ProjectProvider>
-        <ToastProvider>
-          <Layout>{children}</Layout>
-        </ToastProvider>
+        <Layout>{children}</Layout>
       </ProjectProvider>
     </AuthProvider>
   )
@@ -61,6 +59,14 @@ function RequireRole({ role, children }) {
 }
 
 export default function App() {
+  return (
+    <ToastProvider>
+      <AppRoutes />
+    </ToastProvider>
+  )
+}
+
+function AppRoutes() {
   return (
     <BrowserRouter>
       <Routes>

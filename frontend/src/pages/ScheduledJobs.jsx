@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Plus, Play, Pencil, Trash2 } from 'lucide-react'
 import api from '../lib/api'
 import { useProject } from '../lib/ProjectContext'
+import { useToast } from '../lib/ToastContext'
 
 const EMPTY = {
   name: '', org_id: '', soql: 'SELECT Id, Name FROM Account LIMIT 10',
@@ -11,6 +12,7 @@ const EMPTY = {
 
 export default function ScheduledJobs() {
   const { projectId, project } = useProject()
+  const { toast } = useToast()
   const [jobs, setJobs] = useState([])
   const [orgs, setOrgs] = useState([])
   const [pipes, setPipes] = useState([])
@@ -61,24 +63,37 @@ export default function ScheduledJobs() {
     try {
       if (editId) await api.put(`/schedules/${editId}`, body)
       else await api.post('/schedules', body)
+      toast(editId ? 'Scheduled job updated' : 'Scheduled job created')
       setOpen(false)
       setEditId(null)
       setForm(EMPTY)
       await load()
     } catch (ex) {
-      setErr(ex?.response?.data?.detail || ex.message)
+      const detail = ex?.response?.data?.detail || ex.message
+      setErr(detail)
+      toast(detail || 'Failed to save scheduled job', { kind: 'error' })
     }
   }
 
   async function toggleEnabled(j) {
-    await api.put(`/schedules/${j.id}`, { enabled: j.enabled === false })
-    await load()
+    try {
+      await api.put(`/schedules/${j.id}`, { enabled: j.enabled === false })
+      toast(j.enabled === false ? 'Job enabled' : 'Job disabled')
+      await load()
+    } catch (ex) {
+      toast(ex?.response?.data?.detail || 'Failed to update job', { kind: 'error' })
+    }
   }
 
   async function remove(j) {
     if (!window.confirm(`Delete scheduled job "${j.name}"?`)) return
-    await api.delete(`/schedules/${j.id}`)
-    await load()
+    try {
+      await api.delete(`/schedules/${j.id}`)
+      toast('Scheduled job deleted')
+      await load()
+    } catch (ex) {
+      toast(ex?.response?.data?.detail || 'Failed to delete job', { kind: 'error' })
+    }
   }
 
   function togglePipe(id) {
@@ -118,7 +133,7 @@ export default function ScheduledJobs() {
                 <td style={{ whiteSpace: 'nowrap' }}>
                   <button className="btn btn-sm" onClick={() => openEdit(j)}><Pencil size={12} /> Edit</button>
                   {' '}
-                  <button className="btn btn-sm" onClick={() => api.post(`/schedules/${j.id}/run`).then(load)}><Play size={12} /> Run</button>
+                  <button className="btn btn-sm" onClick={() => api.post(`/schedules/${j.id}/run`).then(() => { toast('Job run started'); load() }).catch((ex) => toast(ex?.response?.data?.detail || 'Failed to run job', { kind: 'error' }))}><Play size={12} /> Run</button>
                   {' '}
                   <button className="btn btn-sm btn-danger" onClick={() => remove(j)}><Trash2 size={12} /></button>
                 </td>

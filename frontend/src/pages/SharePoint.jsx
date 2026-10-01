@@ -3,6 +3,7 @@ import { Plus, Trash2, Pencil, Cloud, RefreshCw, Search, FlaskConical } from 'lu
 import api from '../lib/api'
 import { useProject, belongsToProject } from '../lib/ProjectContext'
 import { withProject } from '../lib/withProject'
+import { useToast } from '../lib/ToastContext'
 
 const EMPTY_CONN = { name: '', tenant_id: '', client_id: '', client_secret: '', enabled: true }
 const EMPTY_FILE = {
@@ -37,6 +38,7 @@ function parseMap(text) {
 
 export default function SharePoint() {
   const { projectId, project } = useProject()
+  const { toast } = useToast()
   const [tab, setTab] = useState('connections')
   const [conns, setConns] = useState([])
   const visibleConns = useMemo(
@@ -289,10 +291,13 @@ export default function SharePoint() {
         if (id) await api.put(`/sharepoint/list-actions/${id}`, payload)
         else await api.post('/sharepoint/list-actions', withProject(payload, projectId))
       }
+      toast(modal.id ? 'Saved' : 'Created')
       setModal(null)
       await load()
     } catch (err) {
-      setError(err?.response?.data?.detail || err.message)
+      const detail = err?.response?.data?.detail || err.message
+      setError(detail)
+      toast(detail || 'Failed to save', { kind: 'error' })
     } finally {
       setSaving(false)
     }
@@ -303,8 +308,13 @@ export default function SharePoint() {
     const path = kind === 'conn' ? `/sharepoint/connections/${row.id}`
       : kind === 'file' ? `/sharepoint/file-actions/${row.id}`
       : `/sharepoint/list-actions/${row.id}`
-    await api.delete(path)
-    load()
+    try {
+      await api.delete(path)
+      toast('Deleted')
+      load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to delete', { kind: 'error' })
+    }
   }
 
   function setField(key, value) {

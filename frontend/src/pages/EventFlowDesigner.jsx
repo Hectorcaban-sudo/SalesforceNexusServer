@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import api from '../lib/api'
 import { isGlobalResource, useProject } from '../lib/ProjectContext'
+import { useToast } from '../lib/ToastContext'
 
 function libraryOptionLabel(row) {
   if (!row) return ''
@@ -496,6 +497,7 @@ function FlowCanvasInner({ event, refs }) {
   const [testRunning, setTestRunning] = useState(false)
   const navigate = useNavigate()
   const { projectId } = useProject()
+  const { toast } = useToast()
 
   useEffect(() => {
     if (!event) return
@@ -557,9 +559,12 @@ function FlowCanvasInner({ event, refs }) {
       } else {
         await api.put(`/events/${event.id}`, payload)
       }
+      toast('Flow saved')
       setDirty(false)
     } catch (err) {
-      setError(err?.response?.data?.detail || err.message)
+      const detail = err?.response?.data?.detail || err.message
+      setError(detail)
+      toast(detail || 'Failed to save flow', { kind: 'error' })
     } finally {
       setSaving(false)
     }
@@ -577,11 +582,14 @@ function FlowCanvasInner({ event, refs }) {
         placeholders: tplPlaceholders,
         graph: { nodes, edges },
       })
+      toast('Template saved')
       setTplOpen(false)
       setTplName('')
       setTplDesc('')
     } catch (err) {
-      setError(err?.response?.data?.detail || err.message)
+      const detail = err?.response?.data?.detail || err.message
+      setError(detail)
+      toast(detail || 'Failed to save template', { kind: 'error' })
     } finally {
       setTplSaving(false)
     }

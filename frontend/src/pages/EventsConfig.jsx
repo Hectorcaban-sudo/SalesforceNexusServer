@@ -3,12 +3,14 @@ import { useNavigate } from 'react-router-dom'
 import { Plus, Radio, Trash2, Send, ArrowDownToLine, ArrowUpFromLine, Share2, GitBranch, Cpu, BellRing, Workflow, ChevronDown, ChevronRight } from 'lucide-react'
 import api from '../lib/api'
 import { useProject, belongsToProject, isGlobalResource, visibleLibraryItem } from '../lib/ProjectContext'
+import { useToast } from '../lib/ToastContext'
 
 const EMPTY = { org_id: '', channel: '', direction: 'subscribe', enabled: true, description: '', broker_topic: 'default' }
 
 export default function EventsConfig() {
   const navigate = useNavigate()
   const { projectId, project } = useProject()
+  const { toast } = useToast()
   const [orgs, setOrgs] = useState([])
   const [configs, setConfigs] = useState([])
   const [integrations, setIntegrations] = useState([])
@@ -82,22 +84,35 @@ export default function EventsConfig() {
     setSaving(true)
     try {
       await api.post('/events', { ...form, project_id: projectId || undefined })
+      toast('Channel created')
       setModalOpen(false)
       load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to save channel', { kind: 'error' })
     } finally {
       setSaving(false)
     }
   }
 
   async function toggle(cfg) {
-    await api.put(`/events/${cfg.id}`, { enabled: !cfg.enabled })
-    load()
+    try {
+      await api.put(`/events/${cfg.id}`, { enabled: !cfg.enabled })
+      toast(cfg.enabled ? 'Channel disabled' : 'Channel enabled')
+      load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to update channel', { kind: 'error' })
+    }
   }
 
   async function remove(cfg) {
     if (!confirm(`Remove ${cfg.direction} channel "${cfg.channel}"?`)) return
-    await api.delete(`/events/${cfg.id}`)
-    load()
+    try {
+      await api.delete(`/events/${cfg.id}`)
+      toast('Channel removed')
+      load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to remove channel', { kind: 'error' })
+    }
   }
 
   async function sendPublish(e) {
@@ -140,8 +155,11 @@ export default function EventsConfig() {
         rule_id: routingRuleId || '',
         auto_publish: routingAutoPublish,
       })
+      toast('Routing saved')
       setRoutingTarget(null)
       load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to save routing', { kind: 'error' })
     } finally {
       setSavingRouting(false)
     }

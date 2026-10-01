@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Plus, Workflow, Trash2, Pencil, X } from 'lucide-react'
 import api from '../lib/api'
+import { useToast } from '../lib/ToastContext'
 
 export default function EventPipelines() {
   const { eventId } = useParams()
   const navigate = useNavigate()
+  const { toast } = useToast()
   const [event, setEvent] = useState(null)
   const [rows, setRows] = useState([])
   const [creating, setCreating] = useState(false)
@@ -39,7 +41,10 @@ export default function EventPipelines() {
       })
       setName('')
       setDescription('')
+      toast('Pipeline created')
       navigate(`/events/${eventId}/pipelines/${data.id}/flow`)
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to create pipeline', { kind: 'error' })
     } finally {
       setCreating(false)
     }
@@ -60,25 +65,34 @@ export default function EventPipelines() {
         name: editName.trim(),
         description: editDesc.trim(),
       })
+      toast('Pipeline updated')
       setEditing(null)
       await load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to save pipeline', { kind: 'error' })
     } finally {
       setSavingEdit(false)
     }
   }
 
   async function toggle(row) {
-    await api.put(`/events/${eventId}/pipelines/${row.id}`, { enabled: !row.enabled })
-    load()
+    try {
+      await api.put(`/events/${eventId}/pipelines/${row.id}`, { enabled: !row.enabled })
+      toast(row.enabled ? 'Pipeline disabled' : 'Pipeline enabled')
+      load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to update pipeline', { kind: 'error' })
+    }
   }
 
   async function remove(row) {
     if (!confirm(`Delete pipeline "${row.name}"?`)) return
     try {
       await api.delete(`/events/${eventId}/pipelines/${row.id}`)
+      toast('Pipeline deleted')
       load()
     } catch (err) {
-      alert(err?.response?.data?.detail || err.message)
+      toast(err?.response?.data?.detail || 'Failed to delete pipeline', { kind: 'error' })
     }
   }
 

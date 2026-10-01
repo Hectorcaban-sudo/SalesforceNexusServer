@@ -3,6 +3,7 @@ import { Plus, Building2, Wifi, Pencil, Trash2, PlugZap } from 'lucide-react'
 import api from '../lib/api'
 import { useProject, belongsToProject } from '../lib/ProjectContext'
 import { StatusBadge } from '../components/UI'
+import { useToast } from '../lib/ToastContext'
 
 const EMPTY_ORG = {
   name: '', description: '', login_url: 'https://login.salesforce.com',
@@ -12,6 +13,7 @@ const EMPTY_ORG = {
 
 export default function Orgs() {
   const { projectId, project } = useProject()
+  const { toast } = useToast()
   const [orgs, setOrgs] = useState([])
   const visibleOrgs = useMemo(
     () => (orgs || []).filter((row) => belongsToProject(row, projectId, project)),
@@ -62,8 +64,11 @@ export default function Orgs() {
       } else {
         await api.post('/orgs', { ...payload, project_id: projectId || undefined })
       }
+      toast(editing ? 'Org updated' : 'Org created')
       setModalOpen(false)
       load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to save org', { kind: 'error' })
     } finally {
       setSaving(false)
     }
@@ -71,8 +76,13 @@ export default function Orgs() {
 
   async function remove(org) {
     if (!confirm(`Delete org "${org.name}"? This also removes it from all event configs.`)) return
-    await api.delete(`/orgs/${org.id}`)
-    load()
+    try {
+      await api.delete(`/orgs/${org.id}`)
+      toast('Org deleted')
+      load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to delete org', { kind: 'error' })
+    }
   }
 
   async function testConnection(org) {

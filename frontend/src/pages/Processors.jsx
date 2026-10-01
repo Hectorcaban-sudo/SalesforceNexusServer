@@ -3,9 +3,11 @@ import { Plus, Trash2, Cpu, Globe2, Save, ShieldCheck } from 'lucide-react'
 import api from '../lib/api'
 import PythonHighlight from '../components/PythonHighlight'
 import { useProject, isGlobalResource, visibleLibraryItem } from '../lib/ProjectContext'
+import { useToast } from '../lib/ToastContext'
 
 export default function Processors() {
   const { projectId, project } = useProject()
+  const { toast } = useToast()
   const [items, setItems] = useState([])
   const [error, setError] = useState(null)
   const [uploading, setUploading] = useState(false)
@@ -50,9 +52,12 @@ export default function Processors() {
       await api.post('/processors', fd)
       setName('')
       setFile(null)
+      toast('Processor uploaded')
       await load()
     } catch (err) {
-      setError(err?.response?.data?.detail || err.message)
+      const detail = err?.response?.data?.detail || err.message
+      setError(detail)
+      toast(detail || 'Failed to upload processor', { kind: 'error' })
     } finally {
       setUploading(false)
     }
@@ -60,8 +65,13 @@ export default function Processors() {
 
   async function remove(id) {
     if (!confirm('Delete this project processor?')) return
-    await api.delete(`/processors/${id}`)
-    await load()
+    try {
+      await api.delete(`/processors/${id}`)
+      toast('Processor deleted')
+      await load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to delete processor', { kind: 'error' })
+    }
   }
 
   async function openEditor(p) {
@@ -98,10 +108,13 @@ export default function Processors() {
     setError(null)
     try {
       const v = await validateCode()
-      if (!v.ok) { setError(v.error); return }
+      if (!v.ok) { setError(v.error); toast(v.error || 'Syntax error', { kind: 'error' }); return }
       await api.put(`/processors/${selected.id}/code`, { code })
+      toast('Processor saved')
     } catch (err) {
-      setError(err?.response?.data?.detail || err.message)
+      const detail = err?.response?.data?.detail || err.message
+      setError(detail)
+      toast(detail || 'Failed to save processor', { kind: 'error' })
     } finally {
       setSavingCode(false)
     }

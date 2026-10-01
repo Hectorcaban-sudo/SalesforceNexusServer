@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react'
 import { Plus, Trash2, KeyRound, UserCog, LockOpen } from 'lucide-react'
 import api from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
+import { useToast } from '../lib/ToastContext'
 
 const EMPTY = { username: '', password: '', role: 'viewer' }
 
 export default function Users() {
   const { user: currentUser } = useAuth()
+  const { toast } = useToast()
   const [users, setUsers] = useState([])
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState(EMPTY)
@@ -29,37 +31,60 @@ export default function Users() {
     setError('')
     try {
       await api.post('/users', form)
+      toast('User created')
       setModalOpen(false)
       setForm(EMPTY)
       load()
     } catch (err) {
-      setError(err?.response?.data?.detail || 'Failed to create user')
+      const detail = err?.response?.data?.detail || 'Failed to create user'
+      setError(detail)
+      toast(detail, { kind: 'error' })
     } finally {
       setSaving(false)
     }
   }
 
   async function changeRole(username, role) {
-    await api.put(`/users/${username}`, { role })
-    load()
+    try {
+      await api.put(`/users/${username}`, { role })
+      toast('Role updated')
+      load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to update role', { kind: 'error' })
+    }
   }
 
   async function removeUser(username) {
     if (!confirm(`Delete user "${username}"?`)) return
-    await api.delete(`/users/${username}`)
-    load()
+    try {
+      await api.delete(`/users/${username}`)
+      toast('User deleted')
+      load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to delete user', { kind: 'error' })
+    }
   }
 
   async function unlockUser(username) {
-    await api.post(`/users/${username}/unlock`)
-    load()
+    try {
+      await api.post(`/users/${username}/unlock`)
+      toast('User unlocked')
+      load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to unlock user', { kind: 'error' })
+    }
   }
 
   async function submitReset(e) {
     e.preventDefault()
-    await api.put(`/users/${resetTarget}`, { password: resetPassword })
-    setResetTarget(null)
-    setResetPassword('')
+    try {
+      await api.put(`/users/${resetTarget}`, { password: resetPassword })
+      toast('Password reset')
+      setResetTarget(null)
+      setResetPassword('')
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to reset password', { kind: 'error' })
+    }
   }
 
   return (

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ShieldCheck, ScrollText, KeyRound, LockOpen, AlertTriangle } from 'lucide-react'
 import api from '../lib/api'
+import { useToast } from '../lib/ToastContext'
 
 const TABS = [
   { key: 'auth', label: 'Authentication Monitoring', icon: KeyRound },
@@ -28,6 +29,7 @@ const EVENT_TONE = {
 }
 
 export default function Security() {
+  const { toast } = useToast()
   const [tab, setTab] = useState('auth')
   const [summary, setSummary] = useState(null)
   const [authEvents, setAuthEvents] = useState([])
@@ -54,8 +56,13 @@ export default function Security() {
   }, [tab, eventFilter])
 
   async function unlockUser(username) {
-    await api.post(`/users/${username}/unlock`)
-    load()
+    try {
+      await api.post(`/users/${username}/unlock`)
+      toast('User unlocked')
+      load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to unlock user', { kind: 'error' })
+    }
   }
 
   return (
