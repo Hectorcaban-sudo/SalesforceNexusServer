@@ -83,7 +83,12 @@ export default function Transactions() {
       return true
     })
   }, [rows, filters])
-  const selected = visible.find((r) => r.id === selectedId) || visible[0] || null
+  // If the user has explicitly picked a transaction (selectedId set) but a
+  // refresh/filter change has aged it out of `visible`, fall back to null
+  // (shows "Nothing selected") rather than silently jumping the Inspector -
+  // and its Reprocess/Cancel buttons - to an arbitrary, unrelated row.
+  const selectedFromList = visible.find((r) => r.id === selectedId) || null
+  const selected = selectedId ? selectedFromList : visible[0] || null
   const related = useMemo(() => {
     if (!selected) return []
     const key = recordId(selected)

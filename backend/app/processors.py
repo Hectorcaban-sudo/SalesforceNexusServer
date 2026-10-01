@@ -97,7 +97,18 @@ def _build_processor_env(org_id: Optional[str]) -> dict:
     for c in sharepoint_connections_table.all():
         if not c.get("enabled", True):
             continue
-        if project_id and c.get("project_id") not in (None, "", project_id):
+        # Exact-match scoping: a connection is only handed to this processor
+        # when its project_id matches the triggering org's project_id (both
+        # None/"" counts as a match - "global, unassigned" connections only
+        # reach orgs that are themselves unassigned). The previous check
+        # ("if project_id and ...") skipped scoping entirely whenever the
+        # org had no project_id - which is the common case for an org
+        # created before project scoping existed, and always true for the
+        # /test endpoint's default org_id=None - handing every processor
+        # EVERY enabled SharePoint connection's plaintext client_secret
+        # across every project, not just the ones it should see.
+        conn_project_id = c.get("project_id") or None
+        if conn_project_id != (project_id or None):
             continue
         scoped.append({
             "id": c.get("id"),
