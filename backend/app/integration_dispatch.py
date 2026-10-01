@@ -34,13 +34,41 @@ def _matches_trigger(trigger: str, status: str) -> bool:
     return False
 
 
+def _in_scope(cfg: dict, transaction: dict) -> bool:
+    org_id = transaction.get("org_id")
+    if cfg.get("org_id") and org_id and cfg.get("org_id") != org_id:
+        return False
+    project_id = transaction.get("project_id")
+    if cfg.get("project_id") and project_id and cfg.get("project_id") != project_id:
+        return False
+    return True
+
+
 def dispatch_integrations(transaction: dict, only_ids: Optional[list] = None, trace_carrier: Optional[dict] = None):
-    """Fire only the integration IDs in only_ids. None or [] fires none."""
+    """Fan a completed transaction out to matching integration sinks.
+
+    Success path: only_ids restricts dispatch (empty list = fire none).
+    Failure path (status=failed): fire org/project-scoped on_failure + always
+    sinks even when only_ids is empty, so schema / rule-gate / dead-letter
+    can notify Teams/email.
+    """
     status = transaction.get("status")
-    if not only_ids:
-        return
     candidates = integrations_table.search(Q.enabled == True)  # noqa: E712
-    candidates = [c for c in candidates if not c.get("alert_only") and c["id"] in only_ids]
+    candidates = [c for c in candidates if not c.get("alert_only") and _in_scope(c, transaction)]
+
+    if status == "failed":
+        failure_hooks = [c for c in candidates if c.get("trigger") in ("on_failure", "always")]
+        if only_ids:
+            routed = [c for c in candidates if c["id"] in only_ids]
+            by_id = {c["id"]: c for c in failure_hooks + routed}
+            candidates = list(by_id.values())
+        else:
+            candidates = failure_hooks
+    elif only_ids is not None:
+        if not only_ids:
+            return
+        candidates = [c for c in candidates if c["id"] in only_ids]
+
     for cfg in candidates:
         if not _matches_trigger(cfg.get("trigger", "always"), status):
             continue
