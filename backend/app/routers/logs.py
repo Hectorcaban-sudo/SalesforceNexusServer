@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Query
 from typing import Optional, List
+import json
 
 from ..auth import get_current_user, require_role
 from ..database import logs_table
@@ -8,12 +9,22 @@ from ..models import LogEntryOut
 router = APIRouter(prefix="/api/logs", tags=["logs"], dependencies=[Depends(get_current_user)])
 
 
+def _context(row):
+    ctx = row.get("context") or {}
+    if isinstance(ctx, str):
+        try:
+            ctx = json.loads(ctx)
+        except Exception:
+            ctx = {}
+    return ctx if isinstance(ctx, dict) else {}
+
+
 @router.get("", response_model=List[LogEntryOut])
 def list_logs(
     level: Optional[str] = None,
     search: Optional[str] = None,
     transaction_id: Optional[str] = None,
-    limit: int = 300,
+    limit: int = 500,
 ):
     rows = logs_table.all()
     if level:
@@ -21,8 +32,8 @@ def list_logs(
     if transaction_id:
         tid = str(transaction_id)
         def matches_tx(r):
-            ctx = r.get("context") or {}
-            if isinstance(ctx, dict) and str(ctx.get("transaction_id") or "") == tid:
+            ctx = _context(r)
+            if str(ctx.get("transaction_id") or "") == tid:
                 return True
             return tid in (r.get("message") or "")
         rows = [r for r in rows if matches_tx(r)]
