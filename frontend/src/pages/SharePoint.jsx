@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Plus, Trash2, Pencil, Cloud, RefreshCw, Search, FlaskConical } from 'lucide-react'
 import api from '../lib/api'
 import { useProject, belongsToProject } from '../lib/ProjectContext'
+import { withProject } from '../lib/withProject'
 
 const EMPTY_CONN = { name: '', tenant_id: '', client_id: '', client_secret: '', enabled: true }
 const EMPTY_FILE = {
@@ -273,20 +274,20 @@ export default function SharePoint() {
           if (!payload.client_secret) delete payload.client_secret
           await api.put(`/sharepoint/connections/${id}`, payload)
         } else {
-          await api.post('/sharepoint/connections', payload)
+          await api.post('/sharepoint/connections', withProject(payload, projectId))
         }
       } else if (kind === 'file') {
         const payload = { ...form }
         payload.metadata_map = parseMap(form.metadata_map_text)
         delete payload.metadata_map_text
         if (id) await api.put(`/sharepoint/file-actions/${id}`, payload)
-        else await api.post('/sharepoint/file-actions', payload)
+        else await api.post('/sharepoint/file-actions', withProject(payload, projectId))
       } else {
         const payload = { ...form }
         payload.field_map = parseMap(form.field_map_text)
         delete payload.field_map_text
         if (id) await api.put(`/sharepoint/list-actions/${id}`, payload)
-        else await api.post('/sharepoint/list-actions', payload)
+        else await api.post('/sharepoint/list-actions', withProject(payload, projectId))
       }
       setModal(null)
       await load()
