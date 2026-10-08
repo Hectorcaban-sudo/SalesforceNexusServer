@@ -9,8 +9,15 @@ const EMPTY = {
   object_template: 'ContentDocument',
   id_template: '{{ payload.ContentDocumentId }}',
   sharepoint_action_id: '',
+  chroma_processor_id: '',
   replace_existing: true,
   name_prefix: '',
+}
+
+function detail(row) {
+  if (row.type === 'sharepoint_file') return row.replace_existing ? 'Replace existing' : 'Upload'
+  if (row.type === 'chroma') return 'Returns document and metadata'
+  return row.object_template
 }
 
 export default function FlowActions() {
@@ -20,6 +27,7 @@ export default function FlowActions() {
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState(EMPTY)
   const [spActions, setSpActions] = useState([])
+  const [chromaProcessors, setChromaProcessors] = useState([])
 
   async function load() {
     const { data } = await api.get('/flow-actions')
@@ -30,6 +38,7 @@ export default function FlowActions() {
   useEffect(() => { load().catch((e) => toast(e.message || 'Could not load flow actions')) }, [projectId])
   useEffect(() => {
     api.get('/sharepoint/file-actions').then((r) => setSpActions(r.data || [])).catch(() => setSpActions([]))
+    api.get('/chroma/processors').then((r) => setChromaProcessors(r.data || [])).catch(() => setChromaProcessors([]))
   }, [])
 
   function set(key, value) { setForm((f) => ({ ...f, [key]: value })) }
@@ -53,7 +62,7 @@ export default function FlowActions() {
       <div className="page-header">
         <div>
           <h1>Flow actions</h1>
-          <p className="muted">Reusable steps any pipeline can call.</p>
+          <p className="muted">Reusable steps any pipeline can call. A Chroma action returns the hits to the next node.</p>
         </div>
         <button className="btn btn-primary" onClick={() => setOpen(true)}>New action</button>
       </div>
@@ -65,7 +74,7 @@ export default function FlowActions() {
               <tr key={r.id}>
                 <td>{r.name}</td>
                 <td><span className="badge">{r.type}</span></td>
-                <td className="muted">{r.type === 'sharepoint_file' ? (r.replace_existing ? 'Replace existing' : 'Upload') : r.object_template}</td>
+                <td className="muted">{detail(r)}</td>
                 <td><button className="btn btn-ghost" onClick={() => remove(r.id)}>Delete</button></td>
               </tr>
             ))}
@@ -84,9 +93,10 @@ export default function FlowActions() {
                 <option value="salesforce_get">Salesforce get</option>
                 <option value="salesforce_delete">Salesforce delete</option>
                 <option value="sharepoint_file">SharePoint file</option>
+                <option value="chroma">Chroma</option>
               </select>
             </div>
-            {form.type === 'sharepoint_file' ? (
+            {form.type === 'sharepoint_file' && (
               <>
                 <div className="field">
                   <label>SharePoint action</label>
@@ -97,7 +107,17 @@ export default function FlowActions() {
                 </div>
                 <label className="check-row"><input type="checkbox" checked={form.replace_existing} onChange={(e) => set('replace_existing', e.target.checked)} /> Replace existing file</label>
               </>
-            ) : (
+            )}
+            {form.type === 'chroma' && (
+              <div className="field">
+                <label>Chroma processor</label>
+                <select value={form.chroma_processor_id} onChange={(e) => set('chroma_processor_id', e.target.value)}>
+                  <option value="">Select processor</option>
+                  {chromaProcessors.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+            )}
+            {(form.type === 'salesforce_get' || form.type === 'salesforce_delete') && (
               <>
                 <div className="field"><label>Object</label><input value={form.object_template} onChange={(e) => set('object_template', e.target.value)} /></div>
                 <div className="field"><label>Id template</label><input value={form.id_template} onChange={(e) => set('id_template', e.target.value)} /></div>
