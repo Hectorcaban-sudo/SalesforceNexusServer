@@ -28,12 +28,14 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
 - **Pluggable worker/processor** — `app/worker.py:process_payload()` supports interchangeable
   processing modes, switchable globally from Admin Configuration *or* per subscribed event channel:
   a **local fallback**, a **Dataiku DSS LLM** call (via `dataikuapi`), a **Langflow** flow, an
-  **uploaded custom Python script**, or **SharePoint Online** file/list actions (GCC High, Microsoft
-  Graph). A processor script also gets the triggering org's Salesforce credentials and the rest of
+  **uploaded custom Python script**, **SharePoint Online** file/list actions (GCC High, Microsoft
+  Graph), or a **Chroma** vector query (see "Chroma" below). A processor script also gets the triggering org's Salesforce credentials and the rest of
   admin configuration (DSSClient/Langflow/Email) via environment variables, so it can call out to
   Salesforce or send its own email directly (its subprocess timeout is configurable via
   `PROCESSOR_TIMEOUT_SECONDS`, default 20s). See "Custom payload processors", "SharePoint Online",
   and "Per-event processor override" below.
+- **Chroma vector search** — admin page for CA certs, embedding models, and Chroma processors; usable
+  as a processing mode. See "Chroma" below.
 - **Validation rules (GoRules JDM / Zen Engine)** — a *gate*, not a processing mode: assign a
   no-code decision graph to a subscribed event channel to decide whether an event gets processed at
   all before any processing mode runs. See "Rule engine" below.
@@ -815,6 +817,31 @@ refusing to start. Both backends implement the same `publish()`/`consume_forever
 interface, so nothing else in the app (the worker, CometD client, dashboard) needs to know or care
 which one is active.
 
+## Chroma
+
+Admin nav → **Chroma**. Three lists feed a processor:
+
+- **CA certificates** — upload a PEM; stored in `DATA_DIR/certs/<id>.pem` and used for TLS to the
+  embedding endpoint.
+- **Embedding models** — name, URL slug, model id, max tokens (defaults for the company models are
+  seeded on first load).
+- **Processors** — Chroma host/port/SSL/token, collection, CA cert, embedding model + API key,
+  a Jinja query template, and `n_results`. Empty project id = global. Tokens/API keys are masked
+  in API responses.
+
+A processor embeds the query text through an OpenAI-compatible endpoint (custom base URL, CA cert,
+`apikey` header) and queries the collection, returning matches (id, document, metadata, distance).
+
+**Using it:** choose processing mode **Chroma** (and the processor) on a flow's Processor node, per
+event, or globally in Admin Configuration. Unlike the other modes, Chroma has **no local
+fallback** — a failed query fails the transaction.
+
+**API** (admin): `/api/chroma/certs|models|processors`, `POST /api/chroma/processors/{id}/test`,
+and `POST /api/chroma/query` (`processor_id`, `text`, `n_results`). The free-text query is sent
+verbatim (not rendered as a template) and `n_results` overrides the processor default. Settings
+(including tokens/keys, in plaintext) and CA cert PEMs are part of the configuration backup.
+Requires `chromadb` and `openai` (see `requirements.txt`).
+
 ## Configuration backup
 
 Admin Configuration → **Configuration backup** exports the *entire* application configuration as a
@@ -822,7 +849,7 @@ single JSON file (`GET /api/admin-config/export`), and imports it back (`POST /a
 — here or on a different instance:
 
 - Salesforce orgs, event channels/routing, integrations (including SharePoint File/List sinks),
-  SharePoint connections + file/list actions, alerts, rules (including their JDM), and every Admin
+  SharePoint connections + file/list actions, Chroma certs/models/processors, alerts, rules (including their JDM), and every Admin
   Configuration setting (DSSClient, Langflow, Email/SMTP, message broker, processing mode).
 - **Uploaded processor scripts, including their actual code** — not just metadata, so a restored
   instance can run them immediately.

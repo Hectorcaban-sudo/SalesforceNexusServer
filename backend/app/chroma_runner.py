@@ -9,14 +9,16 @@ from typing import Optional
 from .logging_config import log_event
 
 
-def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = None, model: Optional[dict] = None, transaction_id: Optional[str] = None) -> dict:
+def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = None, model: Optional[dict] = None, transaction_id: Optional[str] = None, query_text: Optional[str] = None, n_results: Optional[int] = None) -> dict:
     from .template_renderer import render_template
 
     def _log(msg):
         extra = {"transaction_id": transaction_id} if transaction_id else {}
         log_event("info", msg, logger_name="nexus.chroma", **extra)
 
-    query_text = render_template(processor.get("query_template") or "{{ payload.User_Message__c or payload }}", {"payload": payload or {}})
+    if query_text is None:
+        # Only saved templates are rendered; literal text from the admin query box is used as-is.
+        query_text = render_template(processor.get("query_template") or "{{ payload.User_Message__c or payload }}", {"payload": payload or {}})
     query_text = (query_text or "").strip()
     if not query_text:
         raise RuntimeError("Chroma query text is empty. Set query_template.")
@@ -56,7 +58,7 @@ def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = 
         headers=headers or None,
     )
     collection = chroma.get_collection(processor.get("collection") or "")
-    n = int(processor.get("n_results") or 5)
+    n = int(n_results or processor.get("n_results") or 5)
     raw = collection.query(query_embeddings=[vector], n_results=n, include=["documents", "metadatas", "distances"])
     ids = (raw.get("ids") or [[]])[0]
     docs = (raw.get("documents") or [[]])[0]

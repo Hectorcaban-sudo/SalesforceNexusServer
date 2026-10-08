@@ -51,6 +51,7 @@ export default function AdminConfig() {
 
   // ---- Processors ----
   const [processors, setProcessors] = useState([])
+  const [chromaProcessors, setChromaProcessors] = useState([])
   const [uploadName, setUploadName] = useState('')
   const [uploadFile, setUploadFile] = useState(null)
   const [uploading, setUploading] = useState(false)
@@ -101,7 +102,7 @@ export default function AdminConfig() {
   const globalRules = rules.filter(isGlobalRow)
 
   async function load() {
-    const [dss, lf, pm, procs, brk, email, rls, db, ui] = await Promise.all([
+    const [dss, lf, pm, procs, brk, email, rls, db, ui, chr] = await Promise.all([
       api.get('/admin-config/dss-client'),
       api.get('/admin-config/langflow'),
       api.get('/admin-config/processing-mode'),
@@ -111,6 +112,7 @@ export default function AdminConfig() {
       api.get('/rules'),
       api.get('/admin-config/database'),
       api.get('/admin-config/ui-settings').catch(() => ({ data: {} })),
+      api.get('/chroma/processors').catch(() => ({ data: [] })),
     ])
     setDssForm({ url: dss.data.url, project_name: dss.data.project_name, llm: dss.data.llm, api_key: '' })
     setDssConfigured(dss.data.configured)
@@ -119,6 +121,7 @@ export default function AdminConfig() {
     setMode(pm.data.mode)
     setActiveProcessorId(pm.data.active_processor_id || '')
     setProcessors(procs.data)
+    setChromaProcessors(chr.data || [])
     setRules(rls.data)
     setBrokerType(brk.data.type)
     setRmqForm({ ...brk.data.rabbitmq, password: '' })
@@ -259,7 +262,7 @@ export default function AdminConfig() {
   async function saveMode(newMode, newActiveId) {
     setMode(newMode)
     if (newActiveId !== undefined) setActiveProcessorId(newActiveId)
-    const usesId = newMode === 'custom_script' || newMode === 'rule_engine'
+    const usesId = newMode === 'custom_script' || newMode === 'chroma' || newMode === 'rule_engine'
     try {
       await api.put('/admin-config/processing-mode', {
         mode: newMode,
@@ -557,7 +560,7 @@ export default function AdminConfig() {
                   specific subscribed event channel overrides it (Event Configuration → Route &amp; process).
                 </p>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                  {['local', 'dss_client', 'langflow', 'custom_script'].map((m) => (
+                  {['local', 'dss_client', 'langflow', 'custom_script', 'chroma'].map((m) => (
                     <div
                       key={m}
                       className={`tab-pill ${mode === m ? 'active' : ''}`}
@@ -568,6 +571,7 @@ export default function AdminConfig() {
                       {m === 'dss_client' && 'DSSClient'}
                       {m === 'langflow' && 'Langflow'}
                       {m === 'custom_script' && 'Custom uploaded script'}
+                      {m === 'chroma' && 'Chroma'}
                     </div>
                   ))}
                 </div>
@@ -577,6 +581,15 @@ export default function AdminConfig() {
                     <select value={activeProcessorId} onChange={(e) => saveMode('custom_script', e.target.value)}>
                       <option value="">Select an uploaded processor…</option>
                       {processors.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  </div>
+                )}
+                {mode === 'chroma' && (
+                  <div className="field" style={{ marginTop: 14 }}>
+                    <label>Active Chroma processor</label>
+                    <select value={activeProcessorId} onChange={(e) => saveMode('chroma', e.target.value)}>
+                      <option value="">Select a Chroma processor…</option>
+                      {chromaProcessors.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
                   </div>
                 )}

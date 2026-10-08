@@ -335,6 +335,7 @@ function NodeConfigModal({ node, refs, onClose, onSave, panel }) {
                   <option value="custom_script">Custom script</option>
                   <option value="sharepoint_file">SharePoint File</option>
                   <option value="sharepoint_list">SharePoint List</option>
+                  <option value="chroma">Chroma</option>
                 </select>
               </div>
               {data.processingMode === 'custom_script' && (
@@ -343,6 +344,15 @@ function NodeConfigModal({ node, refs, onClose, onSave, panel }) {
                   <select value={data.processorId || ''} onChange={(e) => setData({ ...data, processorId: e.target.value })}>
                     <option value="">Select…</option>
                     {refs.processors.map((p) => <option key={p.id} value={p.id}>{libraryOptionLabel(p)}</option>)}
+                  </select>
+                </div>
+              )}
+              {data.processingMode === 'chroma' && (
+                <div className="field">
+                  <label>Chroma processor</label>
+                  <select value={data.processorId || ''} onChange={(e) => setData({ ...data, processorId: e.target.value })}>
+                    <option value="">Select…</option>
+                    {(refs.chromaProcessors || []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 </div>
               )}
@@ -832,7 +842,7 @@ export default function EventFlowDesigner() {
   const { projectId } = useProject()
   const [refs, setRefs] = useState({
     rules: [], processors: [], pubs: [], integrations: [], alerts: [],
-    spFileActions: [], spListActions: [],
+    spFileActions: [], spListActions: [], chromaProcessors: [],
   })
 
   useEffect(() => {
@@ -842,7 +852,7 @@ export default function EventFlowDesigner() {
       try {
         const pid = projectId ? { project_id: projectId } : {}
         const lib = projectId ? { project_id: projectId, include_global: true } : {}
-        const [c, r, p, i, a, sf, sl] = await Promise.all([
+        const [c, r, p, i, a, sf, sl, cp] = await Promise.all([
           api.get('/events', { params: pid }),
           api.get('/rules', { params: lib }),
           api.get('/processors', { params: lib }),
@@ -850,6 +860,7 @@ export default function EventFlowDesigner() {
           api.get('/alerts', { params: pid }),
           api.get('/sharepoint/file-actions', { params: pid }).catch(() => ({ data: [] })),
           api.get('/sharepoint/list-actions', { params: pid }).catch(() => ({ data: [] })),
+          api.get('/chroma/processors', { params: pid }).catch(() => ({ data: [] })),
         ])
         if (cancelled) return
         const ev = c.data.find((x) => x.id === eventId)
@@ -873,6 +884,7 @@ export default function EventFlowDesigner() {
           alerts: a.data || [],
           spFileActions: sf.data || [],
           spListActions: sl.data || [],
+          chromaProcessors: cp.data || [],
         })
       } catch (err) {
         if (!cancelled) setError(err?.response?.data?.detail || err.message)

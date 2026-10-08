@@ -447,6 +447,7 @@ class ProcessingMode(str, Enum):
     langflow = "langflow"
     sharepoint_file = "sharepoint_file"
     sharepoint_list = "sharepoint_list"
+    chroma = "chroma"
 
 
 class ProcessingModeConfig(BaseModel):

@@ -445,6 +445,7 @@ def export_configuration():
     )
     from .. import processors as proc_module
     from ..models import now_ts
+    from .chroma import export_cert_files
 
     processors_export = []
     for p in processors_table.all():
@@ -472,6 +473,7 @@ def export_configuration():
         "rules": rules_export,
         "processors": processors_export,
         "admin_settings": admin_settings_table.all(),
+        "chroma_cert_files": export_cert_files(),
         "sharepoint_connections": sharepoint_connections_table.all(),
         "sharepoint_file_actions": sharepoint_file_actions_table.all(),
         "sharepoint_list_actions": sharepoint_list_actions_table.all(),
@@ -497,6 +499,7 @@ async def import_configuration(bundle: dict):
     )
     from .. import processors as proc_module
     from ..cometd_client import cometd_manager
+    from .chroma import import_cert_files
 
     def _upsert(table, rows):
         count = 0
@@ -529,6 +532,7 @@ async def import_configuration(bundle: dict):
         "alerts": _upsert(alerts_table, bundle.get("alerts", [])),
         "rules": _upsert(rules_table, bundle.get("rules", [])),
         "admin_settings": _upsert(admin_settings_table, bundle.get("admin_settings", [])),
+        "chroma_cert_files": import_cert_files(bundle.get("chroma_cert_files", {})),
     }
 
     processor_count = 0

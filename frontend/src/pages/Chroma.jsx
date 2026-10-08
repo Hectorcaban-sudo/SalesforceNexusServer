@@ -3,7 +3,7 @@ import api from '../lib/api'
 import { useToast } from '../lib/ToastContext'
 
 export default function Chroma() {
-  const toast = useToast()
+  const { toast } = useToast()
   const [certs, setCerts] = useState([])
   const [models, setModels] = useState([])
   const [processors, setProcessors] = useState([])
@@ -28,45 +28,55 @@ export default function Chroma() {
     setProcessors(p.data || [])
     if (!processorId && (p.data || [])[0]) setProcessorId(p.data[0].id)
   }
-  useEffect(() => { load().catch((e) => toast.error(e.message)) }, [])
+  const fail = (err, fallback) => toast(err?.response?.data?.detail || err?.message || fallback, { kind: 'error' })
+  useEffect(() => { load().catch((e) => fail(e, 'Failed to load Chroma settings')) }, [])
 
   async function uploadCert(ev) {
     const file = ev.target.files?.[0]
     if (!file) return
     const body = new FormData()
     body.append('file', file)
-    await api.post('/chroma/certs?name=' + encodeURIComponent(file.name), body)
-    toast.success('Certificate stored')
-    load()
+    try {
+      await api.post('/chroma/certs?name=' + encodeURIComponent(file.name), body)
+      toast('Certificate stored')
+      load()
+    } catch (err) { fail(err, 'Certificate upload failed') }
+    ev.target.value = ''
   }
 
   async function addModel(ev) {
     ev.preventDefault()
-    await api.post('/chroma/models', modelForm)
-    toast.success('Model saved')
-    setModelForm({ name: '', url_slug: '', model_id: '', max_tokens: 2048 })
-    load()
+    try {
+      await api.post('/chroma/models', modelForm)
+      toast('Model saved')
+      setModelForm({ name: '', url_slug: '', model_id: '', max_tokens: 2048 })
+      load()
+    } catch (err) { fail(err, 'Failed to save model') }
   }
 
   async function addProcessor(ev) {
     ev.preventDefault()
     const body = { ...procForm, project_id: procForm.project_id || null, port: Number(procForm.port), n_results: Number(procForm.n_results) }
-    await api.post('/chroma/processors', body)
-    toast.success('Chroma processor saved')
-    load()
+    try {
+      await api.post('/chroma/processors', body)
+      toast('Chroma processor saved')
+      load()
+    } catch (err) { fail(err, 'Failed to save processor') }
   }
 
   async function runQuery(ev) {
     ev.preventDefault()
-    const { data } = await api.post('/chroma/query', { processor_id: processorId, text: query, n_results: Number(n) })
-    setResult(data)
-    toast.success((data.matches || []).length + ' hits')
+    try {
+      const { data } = await api.post('/chroma/query', { processor_id: processorId, text: query, n_results: Number(n) })
+      setResult(data)
+      toast((data.matches || []).length + ' hits')
+    } catch (err) { fail(err, 'Query failed') }
   }
 
   return (
     <div className="page">
       <h1>Chroma</h1>
-      <p className="muted">Upload one CA cert, keep the embedding model list, then use a processor in a flow node of type chroma. Query here to see document text and file metadata.</p>
+      <p className="muted">Upload a CA cert, keep the embedding model list, save a Chroma processor, then pick processing mode Chroma on a flow's Processor node (or as the global mode in Admin Configuration). Query here to see document text and file metadata.</p>
 
       <section className="panel">
         <h2>CA certificates</h2>
@@ -89,7 +99,7 @@ export default function Chroma() {
 
       <section className="panel">
         <h2>Processors</h2>
-        <p className="muted">Empty project id = global. In the flow designer add a node with type chroma and data.processorId set to the id.</p>
+        <p className="muted">Empty project id = global. Select it from the Processor node (mode Chroma) in the flow designer, or as the global processing mode.</p>
         <ul>{processors.map((p) => <li key={p.id}><strong>{p.name}</strong> <span className="badge">{p.scope}</span> {p.collection}</li>)}</ul>
         <form onSubmit={addProcessor} className="form-grid">
           <input placeholder="Name" value={procForm.name} onChange={(e) => setProcForm({ ...procForm, name: e.target.value })} required />
