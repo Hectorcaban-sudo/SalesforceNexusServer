@@ -24,6 +24,7 @@ const PROJECT_NAV = [
   { to: '/schedules', label: 'Scheduled jobs', icon: Clock },
   { to: '/integrations', label: 'Integrations', icon: Share2, admin: true },
   { to: '/sharepoint', label: 'SharePoint', icon: Cloud, admin: true },
+  { to: '/flow-actions', label: 'Flow actions', icon: GitBranch, admin: true },
   { to: '/chroma/project', label: 'Chroma processors', icon: Database, admin: true },
   { to: '/processors', label: 'Processors', icon: Cpu, admin: true },
   { to: '/rules', label: 'Rules', icon: GitBranch, admin: true },
