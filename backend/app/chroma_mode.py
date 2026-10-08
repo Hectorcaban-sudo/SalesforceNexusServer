@@ -3,8 +3,28 @@
 The flow processor node already passes processingMode and processorId into
 process_payload. This wrapper handles mode == "chroma" and leaves every
 other mode alone.
+
+The pipeline result is hardcoded to the DSS platform-event schema so publish
+does not depend on the Transform node. The admin Test query still returns
+the raw matches.
 """
 import asyncio
+import json
+
+
+def to_dss_event(payload, raw):
+    hits = []
+    for match in (raw or {}).get("matches") or []:
+        hits.append({
+            "document": match.get("document"),
+            "metadata": match.get("metadata") or {},
+        })
+    source = payload if isinstance(payload, dict) else {}
+    return {
+        "Conversation_Id__c": source.get("Conversation_Id__c") or source.get("conversationId") or "",
+        "Status__c": "Ok" if (raw or {}).get("status") == "ok" else "Error",
+        "Payload_Json__c": json.dumps(hits, default=str),
+    }
 
 
 def install():
@@ -24,7 +44,8 @@ def install():
             from .routers.chroma import run_saved
             if not processor_id:
                 raise RuntimeError("chroma mode requires a chroma processor id")
-            return await asyncio.to_thread(run_saved, processor_id, payload, transaction_id)
+            raw = await asyncio.to_thread(run_saved, processor_id, payload, transaction_id)
+            return to_dss_event(payload, raw)
         return await original(payload, mode_override, processor_id_override, org_id, transaction_id)
 
     worker.process_payload = process_payload
