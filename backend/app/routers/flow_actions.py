@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..auth import get_current_user
+from ..database import Q
 from ..flow_actions import flow_actions_table
 from ..models import new_id, now_ts
 
@@ -38,5 +39,7 @@ def create_action(body: FlowActionIn):
 
 @router.delete("/{action_id}")
 def delete_action(action_id: str):
-    flow_actions_table.remove(doc_ids=[r.doc_id for r in flow_actions_table.search(__import__("..database", fromlist=["Q"]).Q.id == action_id)])
+    removed = flow_actions_table.remove(Q.id == action_id)
+    if not removed:
+        raise HTTPException(404, "Flow action not found")
     return {"ok": True}
