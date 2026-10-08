@@ -1,0 +1,15 @@
+{# Example transformation for Chroma.
+   Paste into the flow Transform node (Jinja2 transform).
+   The node must render valid JSON. payload is the inbound event.
+   result is the Chroma processor output (matches[].document, matches[].metadata).
+   Payload_Json__c is a JSON string, matching the DSS runner schema.
+   Double tojson is required so that field is a string, not an object. #}
+{% set hits = [] %}
+{% for m in result.matches or [] %}
+{% set _ = hits.append({"document": m.document, "metadata": m.metadata or {}}) %}
+{% endfor %}
+{
+  "Conversation_Id__c": {{ (payload.Conversation_Id__c or payload.conversationId or "") | tojson }},
+  "Status__c": {{ ("Ok" if (result.status | default("ok")) == "ok" else "Error") | tojson }},
+  "Payload_Json__c": {{ {"matches": hits} | tojson | tojson }}
+}
