@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+### Chroma
+- Example transform for publishing Chroma document and metadata in the DSS event schema: `examples/chroma_dss_transform.j2`.
+- Chroma processors can be edited and deleted. Add, edit, and test open in dialogs. Administration holds global processors; the project page holds project processors.
+
 ## 1.3.0 — 2026-10-07
 ### Chroma
 - Chroma is now selectable as a processing mode: global mode pill (with processor picker), flow

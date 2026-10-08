@@ -8,6 +8,8 @@ publish, integration, alert, stop, if, switch
 Edges
 -----
 Ordinary nodes fan out to *all* outgoing edges (parallel side-effects).
+Transform and publish map are walked before integrations and publish, so a
+fan-out cannot publish the raw processor result ahead of the transform.
 `if` follows sourceHandle "true" or "false".
 `switch` follows sourceHandle matching the field value, else "default".
 
@@ -25,6 +27,15 @@ from . import transactions as tx
 from .integrations import dispatch_integrations
 from .alerts import fire_alert_for_transaction
 from .broker import broker
+
+_WALK_RANK = {
+    "schema": 0, "rule": 1, "processor": 2, "transform": 3, "publishMap": 4,
+    "if": 5, "switch": 5, "integration": 8, "alert": 8, "publish": 9, "stop": 10,
+}
+
+
+def _ordered(edges, by_id):
+    return sorted(edges or [], key=lambda e: _WALK_RANK.get((by_id.get(e.get("target")) or {}).get("type"), 6))
 
 
 def _dig(root: Any, path: str):
@@ -157,7 +168,7 @@ async def run_flow_graph(
                 "org_id": org_id,
                 "channel": channel,
                 "payload": body,
-                "routed_integration_ids": [],  # hooks already fired in-graph
+                "routed_integration_ids": [],
                 "routed_alert_ids": [],
                 "_trace": parent_carrier,
             },
@@ -224,9 +235,12 @@ async def run_flow_graph(
             if tmpl.strip() and ctx.result is not None:
                 try:
                     ctx.result = apply_result_transform(ctx.result, payload, tmpl)
+                    ctx.publish_payload = None
                     tx.update_transaction(transaction_id, result=ctx.result)
                 except Exception as exc:  # noqa: BLE001
-                    log_event("warning", f"Walker transform failed: {exc}")
+                    tx.update_transaction(transaction_id, status="failed", error=f"Transform failed: {exc}")
+                    ctx.aborted = True
+                    return
 
         elif ntype == "publishMap":
             fmap = {}
@@ -267,7 +281,6 @@ async def run_flow_graph(
             ctx.aborted = True
             rec = tx.get_transaction(transaction_id)
             st = (rec or {}).get("status")
-            # Stop with no processor leaves the tx in queued forever otherwise.
             if st in (None, "queued", "processing"):
                 tx.update_transaction(
                     transaction_id,
@@ -295,14 +308,13 @@ async def run_flow_graph(
                 await visit(e.get("target"))
             return
 
-        for e in outgoing.get(node_id, []):
+        for e in _ordered(outgoing.get(node_id, []), by_id):
             await visit(e.get("target"))
 
     await visit(start.get("id"))
     rec = tx.get_transaction(transaction_id)
     st = (rec or {}).get("status")
     if st in (None, "queued", "processing"):
-        # Graph ended without a processor (or stop already handled). Never leave queued.
         if ctx.aborted and ctx.stop_publish:
             tx.update_transaction(
                 transaction_id,
@@ -436,7 +448,7 @@ def simulate_flow_graph(graph: dict, payload: dict, src_cfg: Optional[dict] = No
         else:
             step(node, "ok", ntype)
 
-        for e in outgoing.get(node_id, []):
+        for e in _ordered(outgoing.get(node_id, []), by_id):
             visit(e.get("target"))
 
     visit(start.get("id"))
