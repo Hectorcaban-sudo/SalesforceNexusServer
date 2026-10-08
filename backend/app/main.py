@@ -1,3 +1,137 @@
+import asyncio
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+from .config import settings
+from .logging_config import setup_logging, log_event
+from .auth import bootstrap_default_admin
+from .database import flush
+from .broker import broker
+from .worker import inbound_worker, outbound_publisher
+from .cometd_client import cometd_manager
+from .routers import auth as auth_router
+from .routers import orgs as orgs_router
+from .routers import events as events_router
+from .routers import transactions as transactions_router
+from .routers import logs as logs_router
+from .routers import dashboard as dashboard_router
+from .routers import admin_config as admin_config_router
+from .routers import users as users_router
+from .routers import integrations as integrations_router
+from .routers import processors as processors_router
+from .routers import alerts as alerts_router
+from .routers import execute as execute_router
+from .routers import rules as rules_router
+from .routers import audit as audit_router
+from .routers import sharepoint as sharepoint_router
+from .routers import projects as projects_router
+from .routers import flow_templates as flow_templates_router
+from .routers import pipelines as pipelines_router
+from .routers import health as health_router
+from .routers import schedules as schedules_router
 from .routers import pipeline_catalog as pipeline_catalog_router
 from .routers import chroma as chroma_router
 from .audit import AuditMiddleware
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+FRONTEND_DIST = BACKEND_DIR.parent / "frontend" / "dist"
+
+background_tasks = []
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    setup_logging()
+    bootstrap_default_admin()
+    from .routers.projects import ensure_default_project
+    ensure_default_project()
+    log_event("info", f"{settings.app_name} starting up")
+
+    await broker.configure_from_settings()
+    log_event("info", f"Message broker backend: {broker.backend_name}")
+
+    background_tasks.append(asyncio.create_task(inbound_worker()))
+    background_tasks.append(asyncio.create_task(outbound_publisher()))
+    await cometd_manager.sync()
+    try:
+        from .scheduler import start_scheduler
+        await start_scheduler()
+    except Exception as exc:
+        log_event("warning", f"Scheduler failed to start: {exc}")
+
+    if getattr(settings, "dss_warmup_on_start", True):
+        async def _dss_warm():
+            try:
+                from .dss_runner import warmup_dss
+                await asyncio.to_thread(warmup_dss)
+            except Exception as exc:
+                log_event("warning", f"DSS warmup skipped: {exc}")
+        background_tasks.append(asyncio.create_task(_dss_warm()))
+
+    log_event("info", f"{settings.app_name} startup complete")
+    yield
+
+    log_event("info", f"{settings.app_name} shutting down")
+    await cometd_manager.stop_all()
+    for t in background_tasks:
+        t.cancel()
+    await broker.close()
+    flush()
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+setup_logging()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.add_middleware(AuditMiddleware)
+
+app.include_router(auth_router.router)
+app.include_router(orgs_router.router)
+app.include_router(events_router.router)
+app.include_router(transactions_router.router)
+app.include_router(logs_router.router)
+app.include_router(dashboard_router.router)
+app.include_router(admin_config_router.router)
+app.include_router(users_router.router)
+app.include_router(integrations_router.router)
+app.include_router(processors_router.router)
+app.include_router(alerts_router.router)
+app.include_router(execute_router.router)
+app.include_router(rules_router.router)
+app.include_router(audit_router.router)
+app.include_router(sharepoint_router.router)
+app.include_router(projects_router.router)
+app.include_router(flow_templates_router.router)
+app.include_router(pipelines_router.router)
+app.include_router(health_router.router)
+app.include_router(schedules_router.router)
+app.include_router(pipeline_catalog_router.router)
+app.include_router(chroma_router.router)
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok", "app": settings.app_name, "version": getattr(settings, "app_version", "1.2.10")}
+
+
+if FRONTEND_DIST.exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+    @app.get("/{full_path:path}")
+    def serve_spa(full_path: str):
+        candidate = FRONTEND_DIST / full_path
+        if full_path and candidate.exists() and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(FRONTEND_DIST / "index.html")
