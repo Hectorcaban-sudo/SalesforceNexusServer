@@ -19,6 +19,7 @@ class FlowActionIn(BaseModel):
     object_template: str = "ContentDocument"
     id_template: str = "{{ payload.ContentDocumentId }}"
     sharepoint_action_id: str = ""
+    chroma_processor_id: str = ""
     replace_existing: bool = False
     name_prefix: str = ""
 
@@ -30,8 +31,10 @@ def list_actions():
 
 @router.post("")
 def create_action(body: FlowActionIn):
-    if body.type not in ("salesforce_get", "salesforce_delete", "sharepoint_file"):
-        raise HTTPException(400, "type must be salesforce_get, salesforce_delete, or sharepoint_file")
+    if body.type not in ("salesforce_get", "salesforce_delete", "sharepoint_file", "chroma"):
+        raise HTTPException(400, "type must be salesforce_get, salesforce_delete, sharepoint_file, or chroma")
+    if body.type == "chroma" and not body.chroma_processor_id:
+        raise HTTPException(400, "chroma action requires chroma_processor_id")
     row = {"id": new_id(), **body.model_dump(), "created_at": str(now_ts())}
     flow_actions_table.insert(row)
     return row
