@@ -21,6 +21,7 @@ export default function Chroma({ scope = 'global' }) {
   const [query, setQuery] = useState('')
   const [n, setN] = useState(5)
   const [result, setResult] = useState(null)
+  const [testing, setTesting] = useState(false)
   const [modelForm, setModelForm] = useState({ name: '', url_slug: '', model_id: '', max_tokens: 2048 })
   const [procForm, setProcForm] = useState(EMPTY_PROC)
   const [showForm, setShowForm] = useState(false)
@@ -41,6 +42,12 @@ export default function Chroma({ scope = 'global' }) {
     if (!processorId && rows[0]) setProcessorId(rows[0].id)
   }
   useEffect(() => { load().catch((e) => fail(e, 'Failed to load Chroma settings')) }, [scope, projectId])
+
+  function openTest(id) {
+    setProcessorId(id)
+    setResult(null)
+    document.getElementById('chroma-test')?.scrollIntoView({ behavior: 'smooth' })
+  }
 
   async function uploadCert(ev) {
     const file = ev.target.files?.[0]
@@ -85,11 +92,13 @@ export default function Chroma({ scope = 'global' }) {
 
   async function runQuery(ev) {
     ev.preventDefault()
+    setTesting(true)
     try {
       const { data } = await api.post('/chroma/query', { processor_id: processorId, text: query, n_results: Number(n) })
       setResult(data)
       toast((data.matches || []).length + ' hits')
     } catch (err) { fail(err, 'Query failed') }
+    finally { setTesting(false) }
   }
 
   const title = isProject ? 'Chroma processors' : 'Chroma'
@@ -146,11 +155,15 @@ export default function Chroma({ scope = 'global' }) {
           <span className="badge">{isProject ? 'PROJECT' : 'GLOBAL'}</span>
         </div>
         <table className="data-table">
-          <thead><tr><th>Name</th><th>Collection</th><th>Host</th><th>Scope</th></tr></thead>
+          <thead><tr><th>Name</th><th>Collection</th><th>Host</th><th>Scope</th><th></th></tr></thead>
           <tbody>
-            {processors.length === 0 && <tr><td colSpan={4} className="muted">None yet</td></tr>}
+            {processors.length === 0 && <tr><td colSpan={5} className="muted">None yet</td></tr>}
             {processors.map((p) => (
-              <tr key={p.id}><td>{p.name}</td><td>{p.collection}</td><td>{p.host}:{p.port}</td><td><span className="badge">{p.scope}</span></td></tr>
+              <tr key={p.id}>
+                <td>{p.name}</td><td>{p.collection}</td><td>{p.host}:{p.port}</td>
+                <td><span className="badge">{p.scope}</span></td>
+                <td><button type="button" className="btn" onClick={() => openTest(p.id)}>Test</button></td>
+              </tr>
             ))}
           </tbody>
         </table>
@@ -180,8 +193,9 @@ export default function Chroma({ scope = 'global' }) {
         )}
       </section>
 
-      <section className="panel">
+      <section className="panel" id="chroma-test">
         <div className="panel-header"><h2>Test query</h2></div>
+        <p className="muted">Runs the selected processor against Chroma and returns the document plus file metadata. This does not start a pipeline.</p>
         <form onSubmit={runQuery} className="form-grid">
           <div className="field"><label>Processor</label>
             <select value={processorId} onChange={(e) => setProcessorId(e.target.value)}>
@@ -190,8 +204,11 @@ export default function Chroma({ scope = 'global' }) {
           </div>
           <div className="field"><label>Results</label><input type="number" value={n} onChange={(e) => setN(e.target.value)} /></div>
           <div className="field" style={{ gridColumn: '1 / -1' }}><label>Query</label><textarea value={query} onChange={(e) => setQuery(e.target.value)} rows={3} required /></div>
-          <button type="submit" className="btn btn-primary">Run query</button>
+          <button type="submit" className="btn btn-primary" disabled={testing}>{testing ? 'Running…' : 'Run test'}</button>
         </form>
+        {result && (
+          <p className="muted">Collection: {JSON.stringify(result.collection_metadata || {})}</p>
+        )}
         {result && (result.matches || []).map((hit) => (
           <article key={hit.id} className="panel" style={{ marginTop: 12 }}>
             <strong>{hit.id}</strong> <span className="muted">distance {hit.distance}</span>
