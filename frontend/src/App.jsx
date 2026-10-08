@@ -81,7 +81,8 @@ function AppRoutes() {
         <Route path="/events/:eventId/pipelines/:pipelineId/flow" element={<RequireAuth><EventFlowDesigner /></RequireAuth>} />
         <Route path="/events/:eventId/flow" element={<RequireAuth><EventFlowDesigner /></RequireAuth>} />
         <Route path="/processors" element={<RequireAuth><RequireRole role="admin"><Processors /></RequireRole></RequireAuth>} />
-        <Route path="/chroma" element={<RequireAuth><RequireRole role="admin"><Chroma /></RequireRole></RequireAuth>} />
+        <Route path="/chroma" element={<RequireAuth><RequireRole role="admin"><Chroma scope="global" /></RequireRole></RequireAuth>} />
+        <Route path="/chroma/project" element={<RequireAuth><RequireRole role="admin"><Chroma scope="project" /></RequireRole></RequireAuth>} />
         <Route path="/rules" element={<RequireAuth><RequireRole role="admin"><Rules /></RequireRole></RequireAuth>} />
         <Route path="/transactions" element={<RequireAuth><Transactions /></RequireAuth>} />
         <Route path="/logs" element={<RequireAuth><Logs /></RequireAuth>} />
