@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Database, FlaskConical } from 'lucide-react'
+import { Plus, Database, FlaskConical, Pencil, Trash2 } from 'lucide-react'
 import api from '../lib/api'
 import { useToast } from '../lib/ToastContext'
 import { useProject } from '../lib/ProjectContext'
@@ -11,6 +11,18 @@ const EMPTY_PROC = {
   embed_header_name: 'apikey', query_template: '{{ payload.User_Message__c }}', n_results: 5,
 }
 
+function Modal({ title, onClose, children, footer }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ width: 640 }}>
+        <div className="panel-header"><h3>{title}</h3></div>
+        <div className="panel-body">{children}</div>
+        <div className="modal-footer">{footer}</div>
+      </div>
+    </div>
+  )
+}
+
 export default function Chroma({ scope = 'global' }) {
   const { toast } = useToast()
   const { project, projectId } = useProject()
@@ -18,14 +30,14 @@ export default function Chroma({ scope = 'global' }) {
   const [certs, setCerts] = useState([])
   const [models, setModels] = useState([])
   const [processors, setProcessors] = useState([])
-  const [processorId, setProcessorId] = useState('')
+  const [modelForm, setModelForm] = useState({ name: '', url_slug: '', model_id: '', max_tokens: 2048 })
+  const [editing, setEditing] = useState(null)
+  const [procForm, setProcForm] = useState(EMPTY_PROC)
+  const [testing, setTesting] = useState(null)
   const [query, setQuery] = useState('')
   const [n, setN] = useState(5)
   const [result, setResult] = useState(null)
-  const [testing, setTesting] = useState(false)
-  const [modelForm, setModelForm] = useState({ name: '', url_slug: '', model_id: '', max_tokens: 2048 })
-  const [procForm, setProcForm] = useState(EMPTY_PROC)
-  const [showForm, setShowForm] = useState(false)
+  const [running, setRunning] = useState(false)
 
   const fail = (err, fallback) => toast(err?.response?.data?.detail || err?.message || fallback, { kind: 'error' })
 
@@ -39,11 +51,24 @@ export default function Chroma({ scope = 'global' }) {
     setCerts(c.data || [])
     setModels(m.data || [])
     const rows = p.data || []
-    const mine = isProject ? rows.filter((r) => r.project_id === projectId) : rows.filter((r) => !r.project_id)
-    setProcessors(mine)
-    if (!processorId && mine[0]) setProcessorId(mine[0].id)
+    setProcessors(isProject ? rows.filter((r) => r.project_id === projectId) : rows.filter((r) => !r.project_id))
   }
   useEffect(() => { load().catch((e) => fail(e, 'Failed to load Chroma settings')) }, [scope, projectId])
+
+  function openNew() {
+    setProcForm(EMPTY_PROC)
+    setEditing('new')
+  }
+  function openEdit(p) {
+    setProcForm({ ...EMPTY_PROC, ...p, embed_api_key: '', chroma_token: '' })
+    setEditing(p.id)
+  }
+  function openTest(p) {
+    setTesting(p)
+    setQuery('')
+    setN(p.n_results || 5)
+    setResult(null)
+  }
 
   async function uploadCert(ev) {
     const file = ev.target.files?.[0]
@@ -68,28 +93,42 @@ export default function Chroma({ scope = 'global' }) {
     } catch (err) { fail(err, 'Failed to save model') }
   }
 
-  async function addProcessor(ev) {
+  async function saveProcessor(ev) {
     ev.preventDefault()
-    if (isProject && !projectId) return fail(new Error('Select a project first'), 'Select a project first')
-    const body = { ...procForm, project_id: isProject ? projectId : null, port: Number(procForm.port), n_results: Number(procForm.n_results) }
+    if (isProject && !projectId && editing === 'new') return fail(new Error('Select a project first'), 'Select a project first')
+    const body = {
+      ...procForm,
+      project_id: isProject ? projectId : null,
+      port: Number(procForm.port),
+      n_results: Number(procForm.n_results),
+    }
     try {
-      await api.post('/chroma/processors', body)
-      toast(isProject ? 'Project processor saved' : 'Global processor saved')
-      setProcForm(EMPTY_PROC)
-      setShowForm(false)
+      if (editing === 'new') await api.post('/chroma/processors', body)
+      else await api.put('/chroma/processors/' + editing, body)
+      toast(editing === 'new' ? 'Processor saved' : 'Processor updated')
+      setEditing(null)
       load()
     } catch (err) { fail(err, 'Failed to save processor') }
   }
 
+  async function remove(p) {
+    if (!confirm('Delete ' + p.name + '?')) return
+    try {
+      await api.delete('/chroma/processors/' + p.id)
+      toast('Processor deleted')
+      load()
+    } catch (err) { fail(err, 'Delete failed') }
+  }
+
   async function runQuery(ev) {
     ev.preventDefault()
-    setTesting(true)
+    setRunning(true)
     try {
-      const { data } = await api.post('/chroma/query', { processor_id: processorId, text: query, n_results: Number(n) })
+      const { data } = await api.post('/chroma/query', { processor_id: testing.id, text: query, n_results: Number(n) })
       setResult(data)
       toast((data.matches || []).length + ' hits')
     } catch (err) { fail(err, 'Query failed') }
-    finally { setTesting(false) }
+    finally { setRunning(false) }
   }
 
   return (
@@ -103,7 +142,7 @@ export default function Chroma({ scope = 'global' }) {
               : 'Shared CA certificate, embedding models, and global processors.'}
           </p>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowForm((v) => !v)}><Plus size={14} /> {isProject ? 'New project processor' : 'New global processor'}</button>
+        <button className="btn btn-primary" onClick={openNew}><Plus size={14} /> {isProject ? 'New project processor' : 'New global processor'}</button>
       </div>
 
       {!isProject && (
@@ -144,76 +183,65 @@ export default function Chroma({ scope = 'global' }) {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 1fr) minmax(360px, 1.2fr)', gap: 12 }}>
-        <div>
-          <h3 style={{ fontSize: 13, color: 'var(--text-muted)' }}>{isProject ? 'This project' : 'Global processors'}</h3>
-          <div className="org-grid">
-            {processors.length === 0 && <div className="empty-state">None yet</div>}
-            {processors.map((p) => (
-              <div key={p.id} className="org-card" style={{ outline: processorId === p.id ? '1px solid #7eb6d6' : undefined }}>
-                <div className="org-card-header">
-                  <Database size={16} />
-                  <div>
-                    <div className="name">{p.name} <span className="badge badge-blue">{isProject ? 'Project' : 'Global'}</span></div>
-                    <div className="url">{p.collection} · {p.host}:{p.port}</div>
-                  </div>
-                </div>
-                <div className="org-card-actions">
-                  <button className="btn btn-sm" onClick={() => { setProcessorId(p.id); setResult(null); document.getElementById('chroma-test')?.scrollIntoView({ behavior: 'smooth' }) }}><FlaskConical size={13} /> Test</button>
-                </div>
-              </div>
-            ))}
-          </div>
-          {showForm && (
-            <div className="panel" style={{ marginTop: 12 }}>
-              <div className="panel-header"><h3>New processor</h3></div>
-              <div className="panel-body">
-                <form onSubmit={addProcessor}>
-                  <div className="form-row-2">
-                    <div className="field"><label>Name</label><input value={procForm.name} onChange={(e) => setProcForm({ ...procForm, name: e.target.value })} required /></div>
-                    <div className="field"><label>Host</label><input value={procForm.host} onChange={(e) => setProcForm({ ...procForm, host: e.target.value })} required /></div>
-                    <div className="field"><label>Port</label><input value={procForm.port} onChange={(e) => setProcForm({ ...procForm, port: e.target.value })} /></div>
-                    <div className="field"><label>Collection</label><input value={procForm.collection} onChange={(e) => setProcForm({ ...procForm, collection: e.target.value })} required /></div>
-                    <div className="field"><label>CA cert</label><select value={procForm.cert_id} onChange={(e) => setProcForm({ ...procForm, cert_id: e.target.value })}><option value="">None</option>{certs.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-                    <div className="field"><label>Embedding model</label><select value={procForm.embedding_model_id} onChange={(e) => setProcForm({ ...procForm, embedding_model_id: e.target.value })}><option value="">Select</option>{models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></div>
-                    <div className="field"><label>Embed API key</label><input type="password" value={procForm.embed_api_key} onChange={(e) => setProcForm({ ...procForm, embed_api_key: e.target.value })} /></div>
-                    <div className="field"><label>Chroma token</label><input type="password" value={procForm.chroma_token} onChange={(e) => setProcForm({ ...procForm, chroma_token: e.target.value })} /></div>
-                  </div>
-                  <div className="field" style={{ marginTop: 8 }}><label>Query template</label><input value={procForm.query_template} onChange={(e) => setProcForm({ ...procForm, query_template: e.target.value })} /></div>
-                  <button className="btn btn-primary" style={{ marginTop: 8 }}>Save</button>
-                </form>
+      <h3 style={{ fontSize: 13, color: 'var(--text-muted)' }}>{isProject ? 'This project' : 'Global processors'}</h3>
+      <div className="org-grid">
+        {processors.length === 0 && <div className="empty-state">None yet</div>}
+        {processors.map((p) => (
+          <div key={p.id} className="org-card">
+            <div className="org-card-header">
+              <Database size={16} />
+              <div>
+                <div className="name">{p.name} <span className="badge badge-blue">{isProject ? 'Project' : 'Global'}</span></div>
+                <div className="url">{p.collection} · {p.host}:{p.port}</div>
               </div>
             </div>
-          )}
-        </div>
-
-        <div className="panel" id="chroma-test">
-          <div className="panel-header"><h3>Test query</h3></div>
-          <div className="panel-body">
-            <p className="muted">Does not start a pipeline. Returns the document and the file metadata.</p>
-            <form onSubmit={runQuery}>
-              <div className="form-row-2">
-                <div className="field"><label>Processor</label>
-                  <select value={processorId} onChange={(e) => setProcessorId(e.target.value)}>
-                    {processors.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-                </div>
-                <div className="field"><label>Results</label><input type="number" value={n} onChange={(e) => setN(e.target.value)} /></div>
-              </div>
-              <div className="field" style={{ marginTop: 8 }}><label>Query</label><textarea value={query} onChange={(e) => setQuery(e.target.value)} rows={3} required /></div>
-              <button className="btn btn-primary" disabled={testing} style={{ marginTop: 8 }}>{testing ? 'Running…' : 'Run test'}</button>
-            </form>
-            {result && <p className="muted">Collection {JSON.stringify(result.collection_metadata || {})}</p>}
-            {(result?.matches || []).map((hit) => (
-              <div key={hit.id} className="org-card" style={{ marginTop: 10 }}>
-                <div className="name">{hit.id} <span className="badge badge-gray">distance {hit.distance}</span></div>
-                <p>{hit.document}</p>
-                <pre className="muted" style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(hit.metadata, null, 2)}</pre>
-              </div>
-            ))}
+            <div className="org-card-actions">
+              <button className="btn btn-sm" onClick={() => openTest(p)}><FlaskConical size={13} /> Test</button>
+              <button className="btn btn-sm" onClick={() => openEdit(p)}><Pencil size={13} /> Edit</button>
+              <button className="btn btn-sm btn-danger" onClick={() => remove(p)}><Trash2 size={13} /> Delete</button>
+            </div>
           </div>
-        </div>
+        ))}
       </div>
+
+      {editing && (
+        <Modal title={editing === 'new' ? 'New processor' : 'Edit processor'} onClose={() => setEditing(null)}
+          footer={<><button className="btn" onClick={() => setEditing(null)}>Cancel</button><button className="btn btn-primary" form="chroma-proc-form">Save</button></>}>
+          <form id="chroma-proc-form" onSubmit={saveProcessor}>
+            <div className="form-row-2">
+              <div className="field"><label>Name</label><input value={procForm.name} onChange={(e) => setProcForm({ ...procForm, name: e.target.value })} required /></div>
+              <div className="field"><label>Host</label><input value={procForm.host} onChange={(e) => setProcForm({ ...procForm, host: e.target.value })} required /></div>
+              <div className="field"><label>Port</label><input value={procForm.port} onChange={(e) => setProcForm({ ...procForm, port: e.target.value })} /></div>
+              <div className="field"><label>Collection</label><input value={procForm.collection} onChange={(e) => setProcForm({ ...procForm, collection: e.target.value })} required /></div>
+              <div className="field"><label>CA cert</label><select value={procForm.cert_id || ''} onChange={(e) => setProcForm({ ...procForm, cert_id: e.target.value })}><option value="">None</option>{certs.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+              <div className="field"><label>Embedding model</label><select value={procForm.embedding_model_id || ''} onChange={(e) => setProcForm({ ...procForm, embedding_model_id: e.target.value })}><option value="">Select</option>{models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></div>
+              <div className="field"><label>Embed API key</label><input type="password" placeholder={editing === 'new' ? '' : 'Leave blank to keep'} value={procForm.embed_api_key} onChange={(e) => setProcForm({ ...procForm, embed_api_key: e.target.value })} /></div>
+              <div className="field"><label>Chroma token</label><input type="password" placeholder={editing === 'new' ? '' : 'Leave blank to keep'} value={procForm.chroma_token} onChange={(e) => setProcForm({ ...procForm, chroma_token: e.target.value })} /></div>
+            </div>
+            <div className="field" style={{ marginTop: 8 }}><label>Query template</label><input value={procForm.query_template} onChange={(e) => setProcForm({ ...procForm, query_template: e.target.value })} /></div>
+          </form>
+        </Modal>
+      )}
+
+      {testing && (
+        <Modal title={'Test ' + testing.name} onClose={() => setTesting(null)} footer={<button className="btn" onClick={() => setTesting(null)}>Close</button>}>
+          <p className="muted">Does not start a pipeline. Returns the document and the file metadata.</p>
+          <form onSubmit={runQuery}>
+            <div className="form-row-2">
+              <div className="field"><label>Results</label><input type="number" value={n} onChange={(e) => setN(e.target.value)} /></div>
+            </div>
+            <div className="field" style={{ marginTop: 8 }}><label>Query</label><textarea value={query} onChange={(e) => setQuery(e.target.value)} rows={3} required /></div>
+            <button className="btn btn-primary" disabled={running} style={{ marginTop: 8 }}>{running ? 'Running…' : 'Run test'}</button>
+          </form>
+          {(result?.matches || []).map((hit) => (
+            <div key={hit.id} className="org-card" style={{ marginTop: 10 }}>
+              <div className="name">{hit.id} <span className="badge badge-gray">distance {hit.distance}</span></div>
+              <p>{hit.document}</p>
+              <pre className="muted" style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(hit.metadata, null, 2)}</pre>
+            </div>
+          ))}
+        </Modal>
+      )}
     </div>
   )
 }
