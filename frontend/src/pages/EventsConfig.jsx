@@ -151,7 +151,7 @@ export default function EventsConfig() {
         route_integration_ids: routingIntegrations,
         route_alert_ids: routingAlerts,
         processing_mode: routingProcessingMode || '',
-        processor_id: ['custom_script', 'sharepoint_file', 'sharepoint_list'].includes(routingProcessingMode) ? routingProcessorId : '',
+        processor_id: ['custom_script', 'sharepoint_file', 'sharepoint_list', 'chroma'].includes(routingProcessingMode) ? routingProcessorId : '',
         rule_id: routingRuleId || '',
         auto_publish: routingAutoPublish,
       })

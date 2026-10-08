@@ -1,10 +1,11 @@
 """Admin-managed Chroma query processors, shared CA certs, and embedding models."""
+import re
 import uuid
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from ..auth import require_role
 from ..config import DATA_DIR
@@ -22,6 +23,8 @@ DEFAULT_MODELS = [
     {"id": "gemma-300m", "name": "EmbeddingGemma 300M", "url_slug": "bae-api-gemma300m", "model_id": "/genai/embeddinggemma-300m", "max_tokens": 2048},
     {"id": "minilm-l6", "name": "All MiniLM L6 V2", "url_slug": "bae-api-all-MiniLM-L6-v2", "model_id": "/genai/all-MiniLM-L6-v2", "max_tokens": 256},
 ]
+
+_SAFE_ID = re.compile(r"^[A-Za-z0-9]{1,64}$")
 
 def _load(key, default):
     row = admin_settings_table.get(Q.id == key) or {}
@@ -55,6 +58,14 @@ class ChromaProcessorIn(BaseModel):
     chroma_token: str = ""
     collection: str
     cert_id: Optional[str] = None
+
+    @field_validator("cert_id")
+    @classmethod
+    def _cert_id_safe(cls, v):
+        if v and not _SAFE_ID.match(v):
+            raise ValueError("invalid cert id")
+        return v or None
+
     embedding_model_id: Optional[str] = None
     embed_base_url: str = "https://devmissionassist.api.us.baesystems.com/{url}/v1"
     embed_header_name: str = "apikey"
@@ -88,19 +99,18 @@ def _resolve(processor_id: str):
     model = next((m for m in models if m.get("id") == row.get("embedding_model_id")), None)
     cert_path = None
     if row.get("cert_id"):
+        if not _SAFE_ID.match(str(row["cert_id"])):
+            raise HTTPException(400, "Invalid CA cert id")
         path = CERT_DIR / f"{row['cert_id']}.pem"
         if not path.exists():
             raise HTTPException(400, "Selected CA cert file is missing")
         cert_path = str(path)
     return row, model, cert_path
 
-def run_saved(processor_id: str, payload: dict, transaction_id: str = None, query_template: str = None):
+def run_saved(processor_id: str, payload: dict, transaction_id: str = None, query_text: str = None, n_results: int = None):
     from ..chroma_runner import run_chroma_query
     row, model, cert_path = _resolve(processor_id)
-    if query_template:
-        row = dict(row)
-        row["query_template"] = query_template
-    result = run_chroma_query(row, payload, cert_path=cert_path, model=model, transaction_id=transaction_id)
+    result = run_chroma_query(row, payload, cert_path=cert_path, model=model, transaction_id=transaction_id, query_text=query_text, n_results=n_results)
     result["collection_metadata"] = _collection_meta(row)
     return result
 
@@ -210,8 +220,26 @@ def test_processor(processor_id: str, body: ChromaTestIn):
 def query_chroma(body: ChromaQueryIn):
     """Free-text query. Each hit includes document text and Chroma file metadata."""
     try:
-        return run_saved(body.processor_id, {"User_Message__c": body.text}, query_template=body.text)
+        return run_saved(body.processor_id, {"User_Message__c": body.text}, query_text=body.text, n_results=body.n_results)
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(400, str(exc))
+
+
+def export_cert_files() -> dict:
+    """CA certs are public PEMs, so they travel with the config backup."""
+    out = {}
+    for c in _load(CERTS_ID, []):
+        path = CERT_DIR / f"{c.get('id')}.pem"
+        if _SAFE_ID.match(str(c.get("id"))) and path.exists():
+            out[c["id"]] = path.read_text(encoding="utf-8", errors="replace")
+    return out
+
+def import_cert_files(files: dict) -> int:
+    n = 0
+    for cert_id, pem in (files or {}).items():
+        if _SAFE_ID.match(str(cert_id)) and isinstance(pem, str) and "BEGIN" in pem:
+            (CERT_DIR / f"{cert_id}.pem").write_text(pem, encoding="utf-8")
+            n += 1
+    return n
