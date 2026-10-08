@@ -17,6 +17,7 @@ import Alerts from './pages/Alerts'
 import SharePoint from './pages/SharePoint'
 import Projects from './pages/Projects'
 import Processors from './pages/Processors'
+import Chroma from './pages/Chroma'
 import Rules from './pages/Rules'
 import PipelineCatalog from './pages/PipelineCatalog'
 import ScheduledJobs from './pages/ScheduledJobs'
@@ -80,6 +81,7 @@ function AppRoutes() {
         <Route path="/events/:eventId/pipelines/:pipelineId/flow" element={<RequireAuth><EventFlowDesigner /></RequireAuth>} />
         <Route path="/events/:eventId/flow" element={<RequireAuth><EventFlowDesigner /></RequireAuth>} />
         <Route path="/processors" element={<RequireAuth><RequireRole role="admin"><Processors /></RequireRole></RequireAuth>} />
+        <Route path="/chroma" element={<RequireAuth><RequireRole role="admin"><Chroma /></RequireRole></RequireAuth>} />
         <Route path="/rules" element={<RequireAuth><RequireRole role="admin"><Rules /></RequireRole></RequireAuth>} />
         <Route path="/transactions" element={<RequireAuth><Transactions /></RequireAuth>} />
         <Route path="/logs" element={<RequireAuth><Logs /></RequireAuth>} />

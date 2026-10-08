@@ -13,6 +13,7 @@ from .auth import bootstrap_default_admin
 from .database import flush
 from .broker import broker
 from .worker import inbound_worker, outbound_publisher
+from .chroma_mode import install as install_chroma_mode
 from .cometd_client import cometd_manager
 from .routers import auth as auth_router
 from .routers import orgs as orgs_router
@@ -35,7 +36,10 @@ from .routers import pipelines as pipelines_router
 from .routers import health as health_router
 from .routers import schedules as schedules_router
 from .routers import pipeline_catalog as pipeline_catalog_router
+from .routers import chroma as chroma_router
 from .audit import AuditMiddleware
+
+install_chroma_mode()
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIST = BACKEND_DIR.parent / "frontend" / "dist"
@@ -117,6 +121,7 @@ app.include_router(pipelines_router.router)
 app.include_router(health_router.router)
 app.include_router(schedules_router.router)
 app.include_router(pipeline_catalog_router.router)
+app.include_router(chroma_router.router)
 
 
 @app.get("/api/health")
