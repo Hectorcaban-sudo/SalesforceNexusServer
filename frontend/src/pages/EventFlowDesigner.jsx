@@ -22,7 +22,8 @@ function libraryOptionLabel(row) {
 const PALETTE = [
   { type: 'schema', label: 'Schema', icon: FileJson, accent: '#06b6d4', once: true },
   { type: 'rule', label: 'Choice / Rule', icon: ShieldCheck, accent: '#a78bfa', once: true },
-  { type: 'processor', label: 'Processor', icon: Cpu, accent: '#3b82f6', once: true },
+  { type: 'processor', label: 'Processor', icon: Cpu, accent: '#3b82f6', once: false },
+  { type: 'flowAction', label: 'Flow action', icon: Cpu, accent: '#0ea5e9', once: false },
   { type: 'transform', label: 'Transform', icon: Wand2, accent: '#eab308', once: true },
   { type: 'publishMap', label: 'Publish map', icon: Map, accent: '#14b8a6', once: true },
   { type: 'publish', label: 'Publish', icon: ArrowUpFromLine, accent: '#22c55e', once: false },
@@ -95,6 +96,7 @@ function BranchNode({ data, selected, accent, icon: Icon, handles }) {
 }
 
 const nodeTypes = Object.fromEntries(PALETTE.filter((p) => !['if', 'switch'].includes(p.type)).map((p) => [p.type, makeNodeComponent(p)]))
+nodeTypes.flowAction = nodeTypes.processor
 nodeTypes.source = makeNodeComponent({ accent: '#f97316', icon: Radio, label: 'Source' })
 nodeTypes.if = function IfFlowNode({ data, selected }) {
   return <BranchNode data={data} selected={selected} accent="#f59e0b" icon={GitBranch}
@@ -323,7 +325,7 @@ function NodeConfigModal({ node, refs, onClose, onSave, panel }) {
               </select>
             </div>
           )}
-          {type === 'processor' && (
+          {(type === 'processor' || type === 'flowAction') && (
             <>
               <div className="field">
                 <label>Processing mode</label>
@@ -336,6 +338,8 @@ function NodeConfigModal({ node, refs, onClose, onSave, panel }) {
                   <option value="sharepoint_file">SharePoint File</option>
                   <option value="sharepoint_list">SharePoint List</option>
                   <option value="chroma">Chroma</option>
+                  <option value="flow_action">Flow action</option>
+                  <option value="pipeline">Pipeline</option>
                 </select>
               </div>
               {data.processingMode === 'custom_script' && (
@@ -363,6 +367,24 @@ function NodeConfigModal({ node, refs, onClose, onSave, panel }) {
                     <option value="">Select…</option>
                     {refs.spFileActions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
+                </div>
+              )}
+              {(data.processingMode === 'flow_action' || type === 'flowAction') && (
+                <div className="field">
+                  <label>Flow action</label>
+                  <select value={data.processorId || ''} onChange={(e) => {
+                    const row = (refs.flowActions || []).find((a) => a.id === e.target.value)
+                    setData({ ...data, processingMode: 'flow_action', processorId: e.target.value, label: row?.name || 'Flow action' })
+                  }}>
+                    <option value="">Select…</option>
+                    {(refs.flowActions || []).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                </div>
+              )}
+              {data.processingMode === 'pipeline' && (
+                <div className="field">
+                  <label>Pipeline id</label>
+                  <input value={data.processorId || ''} onChange={(e) => setData({ ...data, processorId: e.target.value })} />
                 </div>
               )}
               {data.processingMode === 'sharepoint_list' && (
@@ -544,7 +566,7 @@ function FlowCanvasInner({ event, refs }) {
     }
     const position = screenToFlowPosition({ x: e.clientX, y: e.clientY })
     const id = meta.once ? type : `${type}-${Date.now()}`
-    const newNode = { id, type, position, data: { label: meta.label, subtitle: 'Configure…' }, draggable: true }
+    const newNode = { id, type, position, data: { label: meta.label, subtitle: 'Configure…', ...(type === 'flowAction' ? { processingMode: 'flow_action' } : {}) }, draggable: true }
     setNodes((nds) => nds.concat(newNode))
     setDirty(true)
     setModalNode(newNode)
@@ -564,7 +586,9 @@ function FlowCanvasInner({ event, refs }) {
         ...configFromGraph(nodes),
         flow_graph: { nodes, edges },
       }
-      if (event._pipelineId) {
+      if (event._standalone) {
+        await api.put(`/pipeline-catalog/${event._pipelineId}`, { flow_graph: { nodes, edges }, name: event._pipelineName })
+      } else if (event._pipelineId) {
         await api.put(`/events/${event.id}/pipelines/${event._pipelineId}`, { flow_graph: { nodes, edges } })
       } else {
         await api.put(`/events/${event.id}`, payload)
@@ -670,7 +694,7 @@ function FlowCanvasInner({ event, refs }) {
     <div className="flow-page">
       <div className="flow-toolbar">
         <div className="flow-toolbar-left">
-          <button type="button" className="btn btn-sm" onClick={() => navigate(event?.id ? `/events/${event.id}/pipelines` : '/events')}>
+          <button type="button" className="btn btn-sm" onClick={() => navigate(event?._standalone ? '/pipelines' : event?.id ? `/events/${event.id}/pipelines` : '/events')}>
             <ArrowLeft size={14} /> Back to Events
           </button>
           <div>
@@ -842,7 +866,7 @@ export default function EventFlowDesigner() {
   const { projectId } = useProject()
   const [refs, setRefs] = useState({
     rules: [], processors: [], pubs: [], integrations: [], alerts: [],
-    spFileActions: [], spListActions: [], chromaProcessors: [],
+    spFileActions: [], spListActions: [], chromaProcessors: [], flowActions: [],
   })
 
   useEffect(() => {
@@ -863,6 +887,31 @@ export default function EventFlowDesigner() {
           api.get('/chroma/processors', { params: pid }).catch(() => ({ data: [] })),
         ])
         if (cancelled) return
+        if (!eventId && pipelineId) {
+          const one = await api.get(`/pipeline-catalog/${pipelineId}`)
+          const row = one.data
+          if (!row) { setError('Pipeline not found'); return }
+          const fa = await api.get('/flow-actions').catch(() => ({ data: [] }))
+          setEvent({
+            id: '',
+            channel: row.name || 'Standalone pipeline',
+            enabled: row.enabled !== false,
+            direction: 'subscribe',
+            flow_graph: row.flow_graph || { nodes: [], edges: [] },
+            _pipelineId: row.id,
+            _pipelineName: row.name,
+            _standalone: true,
+            _pipelines: [],
+          })
+          setRefs({
+            rules: r.data || [], processors: p.data || [],
+            pubs: (c.data || []).filter((x) => x.direction === 'publish'),
+            integrations: i.data || [], alerts: a.data || [],
+            spFileActions: sf.data || [], spListActions: sl.data || [],
+            chromaProcessors: cp.data || [], flowActions: fa.data || [],
+          })
+          return
+        }
         const ev = c.data.find((x) => x.id === eventId)
         if (!ev) { setError('Event channel not found'); return }
         if (ev.direction !== 'subscribe') { setError('Flow designer is only for subscribe channels'); return }
@@ -885,6 +934,7 @@ export default function EventFlowDesigner() {
           spFileActions: sf.data || [],
           spListActions: sl.data || [],
           chromaProcessors: cp.data || [],
+          flowActions: (await api.get('/flow-actions').catch(() => ({ data: [] }))).data || [],
         })
       } catch (err) {
         if (!cancelled) setError(err?.response?.data?.detail || err.message)
