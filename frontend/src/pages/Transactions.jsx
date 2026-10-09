@@ -40,7 +40,7 @@ export default function Transactions() {
   const { toast } = useToast()
   const [orgs, setOrgs] = useState([])
   const [rows, setRows] = useState([])
-  const [filters, setFilters] = useState({ org_id: '', channel: '', window: '3600', hideSkipped: true })
+  const [filters, setFilters] = useState({ org_id: '', channel: '', window: '3600', from: '', to: '', hideSkipped: true })
   const [selectedId, setSelectedId] = useState(searchParams.get('tx'))
   const [groupTab, setGroupTab] = useState('pipeline')
   const [inspTab, setInspTab] = useState('result')
@@ -49,7 +49,7 @@ export default function Transactions() {
   const [bulkBusy, setBulkBusy] = useState(false)
 
   async function load() {
-    const params = { limit: 300 }
+    const params = { limit: filters.window === 'custom' || !filters.window ? 1000 : 300 }
     if (projectId) params.project_id = projectId
     if (filters.org_id) params.org_id = filters.org_id
     const [o, t] = await Promise.all([
@@ -69,10 +69,17 @@ export default function Transactions() {
   const channels = useMemo(() => [...new Set(rows.map((r) => r.channel).filter(Boolean))].sort(), [rows])
   const visible = useMemo(() => {
     const now = Date.now() / 1000
-    const win = Number(filters.window || 0)
+    const fromTs = filters.from ? Date.parse(filters.from) / 1000 : 0
+    const toTs = filters.to ? Date.parse(filters.to) / 1000 + 86400 : 0
+    const win = filters.window === 'custom' ? 0 : Number(filters.window || 0)
     return rows.filter((r) => {
       if (filters.channel && r.channel !== filters.channel) return false
       if (filters.hideSkipped && r.status === 'skipped') return false
+      if (filters.window === 'custom') {
+        if (fromTs && r.created_at < fromTs) return false
+        if (toTs && r.created_at >= toTs) return false
+        return true
+      }
       if (win && r.created_at && now - r.created_at > win) return false
       return true
     })
@@ -120,7 +127,7 @@ export default function Transactions() {
       await load()
     } finally { setBulkBusy(false) }
   }
-  const watching = [filters.org_id && '1 org', filters.channel && '1 channel'].filter(Boolean).join(' · ')
+  const watching = [filters.org_id && '1 org', filters.channel && '1 channel', filters.window === 'custom' && 'custom range'].filter(Boolean).join(' · ')
 
   return (
     <div className="tx-console">
@@ -147,15 +154,24 @@ export default function Transactions() {
               <option value="900">Last 15m</option>
               <option value="3600">Last 1h</option>
               <option value="86400">Last 24h</option>
-              <option value="">All time</option>
+              <option value="604800">Last 7d</option>
+              <option value="2592000">Last 30d</option>
+              <option value="custom">Custom range</option>
+              <option value="">All loaded</option>
             </select>
+            {filters.window === 'custom' && (
+              <>
+                <input type="date" value={filters.from} onChange={(e) => setFilters({ ...filters, from: e.target.value })} />
+                <input type="date" value={filters.to} onChange={(e) => setFilters({ ...filters, to: e.target.value })} />
+              </>
+            )}
             <label className="tx-check"><input type="checkbox" checked={filters.hideSkipped} onChange={(e) => setFilters({ ...filters, hideSkipped: e.target.checked })} /> Hide skipped</label>
           </div>
           {watching && <div className="tx-watch">Watching {watching}</div>}
           <div className="tx-stream">
             {visible.length === 0 && <div className="empty-state">No transactions match</div>}
             {visible.map((t) => (
-              <button key={t.id} type="button" className={`tx-row ${selected?.id === t.id ? 'active' : ''}`} onClick={() => { setSelectedId(t.id); setInspTab(t.error ? 'error' : t.result ? 'result' : 'payload') }}>
+              <button key={t.id} type="button" className={`tx-row ${selected?.id === t.id ? 'active' : ''}`} onClick={() => { setSelectedId(t.id); setInspTab(t.error ? 'error' : 'result') }}>
                 <div className="tx-row-top"><span className="mono tx-time">{fmtTime(t.created_at)}</span><StatusBadge status={t.status} /></div>
                 <div className="tx-row-ch">{shortChannel(t.channel)}</div>
                 <div className="tx-row-org">{t.org_name || t.org_id}</div>
@@ -182,22 +198,16 @@ export default function Transactions() {
                 </div>
               ) : (
                 <ol className="tx-steps">
-                  <li className="ok"><span>1</span><div><strong>Source</strong><div className="muted">{shortChannel(selected.channel)} received</div></div></li>
-                  <li className="ok"><span>2</span><div><strong>Gate</strong><div className="muted">{selected.status === 'skipped' ? 'skipped' : 'passed / not configured'}</div></div></li>
-                  <li className={selected.status === 'failed' ? 'bad' : 'ok'}>
-                    <span>3</span>
-                    <div>
-                      <strong>Processor</strong>
-                      <div className="muted">{selected.pipeline_name || 'Default processing'} · {selected.status}</div>
-                      {steps.length > 0 && (
-                        <ul className="tx-substeps">
-                          {steps.map((s, i) => <li key={i} className={s.status === 'error' ? 'bad' : 'ok'}>{s.name}{s.ms != null ? ` · ${s.ms}ms` : ''}{s.detail ? <div className="muted">{s.detail}</div> : null}</li>)}
-                        </ul>
-                      )}
-                    </div>
-                  </li>
-                  <li className={selected.status === 'failed' ? 'wait' : 'ok'}><span>4</span><div><strong>Publish / integrations</strong><div className="muted">{selected.status}</div></div></li>
-                  <li className={!NON_TERMINAL.includes(selected.status) ? 'ok' : 'wait'}><span>5</span><div><strong>Stop</strong><div className="muted">terminal {selected.status}</div></div></li>
+                  {(selected.flow_trace || selected.result?.flow_trace || []).length > 0
+                    ? (selected.flow_trace || selected.result.flow_trace).map((s, i) => (
+                      <li key={s.id || i} className={s.status === 'failed' ? 'bad' : 'ok'}><span>{i + 1}</span><div><strong>{s.label || s.type}</strong><div className="muted">{s.status}</div></div></li>
+                    ))
+                    : (
+                      <>
+                        <li className="ok"><span>1</span><div><strong>Source</strong><div className="muted">{shortChannel(selected.channel)} received</div></div></li>
+                        <li className={selected.status === 'failed' ? 'bad' : 'ok'}><span>2</span><div><strong>Processor</strong><div className="muted">{selected.pipeline_name || 'Default processing'} · {selected.status}</div>{steps.length > 0 && <ul className="tx-substeps">{steps.map((s, i) => <li key={i}>{s.name}{s.detail ? <div className="muted">{s.detail}</div> : null}</li>)}</ul>}</div></li>
+                      </>
+                    )}
                 </ol>
               )}
             </>
@@ -211,13 +221,16 @@ export default function Transactions() {
                 <button type="button" className={inspTab === 'payload' ? 'on' : ''} onClick={() => setInspTab('payload')}>Payload</button>
                 <button type="button" className={inspTab === 'result' ? 'on' : ''} onClick={() => setInspTab('result')}>Result</button>
                 <button type="button" className={inspTab === 'error' ? 'on' : ''} onClick={() => setInspTab('error')}>Error</button>
+                <button type="button" className={inspTab === 'trace' ? 'on' : ''} onClick={() => setInspTab('trace')}>Trace</button>
               </div>
               <div className="tx-meta">
                 <div><label>Org</label>{selected.org_name || '—'}</div>
                 <div><label>Pipeline</label>{selected.pipeline_name || '—'}</div>
                 <div><label>Status</label><StatusBadge status={selected.status} /></div>
               </div>
-              <pre className="tx-json">{inspTab === 'error' ? (selected.error || 'No error') : JSON.stringify(inspTab === 'result' ? (selected.result || { note: 'No result yet' }) : selected.payload, null, 2)}</pre>
+              {inspTab === 'trace' ? <TracePane tx={selected} /> : (
+                <pre className="tx-json">{inspTab === 'error' ? (selected.error || 'No error') : JSON.stringify(inspTab === 'result' ? (selected.result || { note: 'No result yet' }) : selected.payload, null, 2)}</pre>
+              )}
               <div className="tx-actions">
                 <button className="btn btn-sm" onClick={() => reprocess(selected)} disabled={reprocessingId === selected.id}><RotateCcw size={13} /> Reprocess</button>
                 <button className="btn btn-sm" onClick={() => openFlow(selected)} disabled={!selected.event_id}><Workflow size={13} /> Open flow</button>
@@ -230,6 +243,30 @@ export default function Transactions() {
           ) : <div className="empty-state">Nothing selected</div>}
         </aside>
       </div>
+    </div>
+  )
+}
+
+function TracePane({ tx }) {
+  const [open, setOpen] = useState(null)
+  const trace = tx.flow_trace || tx.result?.flow_trace || tx.result?.steps || []
+  if (!trace.length) return <div className="empty-state">No node trace on this transaction yet</div>
+  return (
+    <div className="tx-trace">
+      {trace.map((step, i) => (
+        <div key={step.id || i} className="tx-trace-step">
+          <button type="button" className="tx-trace-head" onClick={() => setOpen(open === i ? null : i)}>
+            <strong>{step.label || step.name || step.type}</strong>
+            <span className="muted">{step.status || 'ok'}</span>
+          </button>
+          {open === i && (
+            <div className="tx-trace-body">
+              <div><label>Input</label><pre className="tx-json">{JSON.stringify(step.input || step, null, 2)}</pre></div>
+              <div><label>Output</label><pre className="tx-json">{JSON.stringify(step.output || step.detail || null, null, 2)}</pre></div>
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   )
 }
