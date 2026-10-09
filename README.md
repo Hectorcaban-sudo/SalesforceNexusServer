@@ -29,7 +29,8 @@ Salesforce Org N ──┘   (subscribe)   (broker)   (internal function)  (brok
   processing modes, switchable globally from Admin Configuration *or* per subscribed event channel:
   a **local fallback**, a **Dataiku DSS LLM** call (via `dataikuapi`), a **Langflow** flow, an
   **uploaded custom Python script**, **SharePoint Online** file/list actions (GCC High, Microsoft
-  Graph), or a **Chroma** vector query (see "Chroma" below). A processor script also gets the triggering org's Salesforce credentials and the rest of
+  Graph), a **Chroma** vector query (see "Chroma" below), a reusable **flow action**, or another
+  saved **pipeline** run as a sub-flow (see "Flow actions and sub-pipelines" below). A processor script also gets the triggering org's Salesforce credentials and the rest of
   admin configuration (DSSClient/Langflow/Email) via environment variables, so it can call out to
   Salesforce or send its own email directly (its subprocess timeout is configurable via
   `PROCESSOR_TIMEOUT_SECONDS`, default 20s). See "Custom payload processors", "SharePoint Online",
@@ -159,7 +160,11 @@ sfnexus/
 │   │   │                         (with org/admin-config context passed via env vars)
 │   │   ├── rules.py                GoRules JDM decision graph storage + evaluation (Zen Engine)
 │   │   ├── alerts.py               Alert rules - fire on success/failure, deliver via an integration sink
-│   │   ├── flow_walker.py         Walks a saved Event Flow graph (if/switch/stop/hooks)
+│   │   ├── flow_walker.py         Walks a saved Event Flow graph (if/switch/stop/hooks, node trace)
+│   │   ├── flow_actions.py        Reusable flow actions (Salesforce get/delete, SharePoint file, Chroma)
+│   │   ├── flow_actions_mode.py   Installs processing mode "flow_action"
+│   │   ├── pipeline_mode.py       Installs processing mode "pipeline" (run another pipeline)
+│   │   ├── chroma_runner.py / chroma_mode.py   Chroma query + processing mode
 │   │   ├── projects.py            Multi-project scoping + default project bootstrap
 │   │   ├── worker.py             The "internal function": processes inbound events
 │   │   │                         (via DSSClient/Langflow/custom script/SharePoint/rule gate),
@@ -622,7 +627,8 @@ Subscribe → Schema → Rule → Processor → Transform → Publish map
 |------|---------|
 | Schema | Validate sample/schema (`off` / `warn` / `reject`) |
 | Rule | GoRules gate; `process=false` skips the event |
-| Processor | Local / DSS / Langflow / custom script / SharePoint |
+| Processor | Local / DSS / Langflow / custom script / SharePoint / Chroma / Flow action / Pipeline |
+| Flow action | Palette shortcut for a Processor node in mode Flow action |
 | Transform | Jinja2 reshape of the processor result |
 | Publish map | Map result fields onto the Salesforce publish payload |
 | Integration / Alert / Publish | Run **when that node is reached**, not only at the end |
@@ -630,6 +636,10 @@ Subscribe → Schema → Rule → Processor → Transform → Publish map
 | Switch | Field value selects a named handle; unmatched uses **default** |
 | Stop | Hard abort. Hooks already visited have fired. Later publish nodes do not run |
 | Parallel edges | From a non-branch node, every outgoing edge is followed |
+| Ordering | Outgoing edges run schema → rule → processor/action → transform → publish map → branches → integration/alert → publish → stop |
+| Deferred publish | A Publish node on the continuing path waits until that path finishes |
+| Side / isolated edge | An edge with handle `side` or `isolated` runs as its own child transaction |
+| Node trace | Every visited node is stored on the transaction as `flow_trace` (input, output, status) |
 
 Events without `flow_graph.nodes` keep the legacy linear worker.
 
@@ -817,6 +827,31 @@ refusing to start. Both backends implement the same `publish()`/`consume_forever
 interface, so nothing else in the app (the worker, CometD client, dashboard) needs to know or care
 which one is active.
 
+## Flow actions and sub-pipelines
+
+**Flow actions** (`/flow-actions`, admin) are saved, reusable steps that a Processor node (mode
+**Flow action**) or the palette's **Flow action** node runs and hands to the next node:
+
+| Type | What it does |
+|------|--------------|
+| `salesforce_get` | Read one record (object and id are Jinja templates, e.g. `{{ payload.ContentDocumentId }}`) |
+| `salesforce_delete` | Delete one record |
+| `sharepoint_file` | Run a saved SharePoint file action; optional **replace existing** deletes a same-named file first |
+| `chroma` | Run a saved Chroma processor and return the hits (document + metadata) |
+
+API: `GET/POST /api/flow-actions`, `DELETE /api/flow-actions/{id}`.
+
+Processing mode **Pipeline** runs another saved pipeline with the same payload; its result becomes
+the step's result. A cycle fails the step.
+
+**Standalone pipelines.** On the Pipelines page, **New pipeline** creates a pipeline with no event
+(source shows as *standalone*), blank or from the **NBF ContentDocument** template
+(`examples/nbf_content_document_pipeline.json`: ContentDocumentLink create → skip user library →
+get Opportunity → upload to SharePoint → if NBF file, delete the ContentDocument).
+
+**Templates** (`/templates`, nav → Templates) lists, imports, edits and deletes reusable flow graph
+templates (`/api/flow-templates`), global or per project.
+
 ## Chroma
 
 Admin nav → **Chroma**. Three lists feed a processor:
@@ -834,7 +869,14 @@ A processor embeds the query text through an OpenAI-compatible endpoint (custom 
 
 **Using it:** choose processing mode **Chroma** (and the processor) on a flow's Processor node, per
 event, or globally in Admin Configuration. Unlike the other modes, Chroma has **no local
-fallback** — a failed query fails the transaction.
+fallback** — a failed query fails the transaction. In a pipeline the result is published in the
+DSS platform-event schema (`Conversation_Id__c`, `Status__c`, `Payload_Json__c` = JSON list of
+`{document, metadata}`), so publish doesn't depend on a Transform; an example transform is in
+`examples/chroma_dss_transform.j2`. The admin test query still returns the raw matches.
+
+Global processors are managed at **Chroma** (admin); project processors at **Chroma processors**
+in the project navigation. Add, edit and test open in dialogs; processors can be edited and
+deleted (`PUT|DELETE /api/chroma/processors/{id}`; a masked token/key left unchanged is kept).
 
 **API** (admin): `/api/chroma/certs|models|processors`, `POST /api/chroma/processors/{id}/test`,
 and `POST /api/chroma/query` (`processor_id`, `text`, `n_results`). The free-text query is sent

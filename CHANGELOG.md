@@ -1,6 +1,13 @@
 # Changelog
 
 ## 1.4.0 — 2026-10-08
+### Flow designer and transactions
+- Publish nodes on the continuing path wait until it finishes; `side` / `isolated` edges run as child transactions.
+- Each visited node is recorded as `flow_trace`; Transactions has a **Trace** tab (input/output per node) and the timeline follows the trace.
+- Transactions time filter adds Last 7d, Last 30d and a custom date range.
+- **Flow action** node in the palette; Templates page (`/templates`) to list, import, edit and delete flow templates.
+- Chroma pipeline results are published in the DSS event schema.
+
 ### Flow actions
 - Reusable flow actions: Salesforce get, Salesforce delete, SharePoint file (optional replace existing), and Chroma.
 - A Chroma action calls the saved Chroma processor and returns the hits, including document and metadata, to the next node.
