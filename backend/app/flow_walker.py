@@ -167,8 +167,10 @@ async def run_flow_graph(
         node = by_id.get(node_id)
         if not node:
             return
-        visited_nodes.add(node_id)
         ntype = node.get("type")
+        if ntype != "publish":
+            # Publish nodes stay out of visited_nodes: they are deferred and must still run at the end.
+            visited_nodes.add(node_id)
         data = node.get("data") or {}
         incoming = {"payload": payload, "result": ctx.result}
         if ntype == "publish":
@@ -294,8 +296,10 @@ async def run_flow_graph(
             status="processing", payload=payload, parent_transaction_id=transaction_id,
         )
         saved = ctx.result
+        start = len(ctx.trace)
         await visit(node_id)
-        tx.update_transaction(child["id"], status="processed", result=ctx.result, flow_trace=list(ctx.trace))
+        failed = ctx.aborted and not ctx.stop_publish
+        tx.update_transaction(child["id"], status="failed" if failed else "processed", result=ctx.result, flow_trace=list(ctx.trace[start:]))
         ctx.result = saved
 
     await visit(start.get("id"))
