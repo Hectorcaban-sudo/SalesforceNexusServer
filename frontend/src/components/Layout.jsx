@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, Radio, ListTree, ScrollText, Search, LogOut, Settings,
   Users as UsersIcon, Share2, BellRing, ShieldCheck, Cloud,
-  FolderKanban, Cpu, GitBranch, Plus, Minus, Bell, CircleHelp, Workflow, Clock, Database,
+  FolderKanban, Cpu, GitBranch, Plus, Minus, Bell, CircleHelp, Workflow, Clock, Database, LayoutTemplate,
 } from 'lucide-react'
 import api, { logout } from '../lib/api'
 import { useAuth, hasRole } from '../lib/AuthContext'
@@ -21,6 +21,7 @@ const PROJECT_NAV = [
   { to: '/orgs', label: 'Salesforce Orgs', icon: Building2 },
   { to: '/events', label: 'Events & flows', icon: Radio },
   { to: '/pipelines', label: 'Pipelines', icon: Workflow },
+  { to: '/templates', label: 'Templates', icon: LayoutTemplate },
   { to: '/schedules', label: 'Scheduled jobs', icon: Clock },
   { to: '/integrations', label: 'Integrations', icon: Share2, admin: true },
   { to: '/sharepoint', label: 'SharePoint', icon: Cloud, admin: true },
