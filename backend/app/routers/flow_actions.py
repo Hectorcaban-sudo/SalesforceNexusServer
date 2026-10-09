@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..auth import get_current_user
+from ..auth import get_current_user, require_role
 from ..database import Q
 from ..flow_actions import flow_actions_table
 from ..models import new_id, now_ts
@@ -29,7 +29,7 @@ def list_actions():
     return flow_actions_table.all()
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_role("admin"))])
 def create_action(body: FlowActionIn):
     if body.type not in ("salesforce_get", "salesforce_delete", "sharepoint_file", "chroma"):
         raise HTTPException(400, "type must be salesforce_get, salesforce_delete, sharepoint_file, or chroma")
@@ -40,7 +40,7 @@ def create_action(body: FlowActionIn):
     return row
 
 
-@router.delete("/{action_id}")
+@router.delete("/{action_id}", dependencies=[Depends(require_role("admin"))])
 def delete_action(action_id: str):
     removed = flow_actions_table.remove(Q.id == action_id)
     if not removed:
