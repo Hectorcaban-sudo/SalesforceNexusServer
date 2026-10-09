@@ -1,20 +1,8 @@
 """Walk a saved Event Flow graph instead of the linear Events routing form.
 
-Node types
-----------
-source, schema, rule, processor, transform, publishMap,
-publish, integration, alert, stop, if, switch
-
-Edges
------
-Ordinary nodes fan out to *all* outgoing edges (parallel side-effects).
-Transform and publish map are walked before integrations and publish, so a
-fan-out cannot publish the raw processor result ahead of the transform.
-`if` follows sourceHandle "true" or "false".
-`switch` follows sourceHandle matching the field value, else "default".
-
-Stop aborts the rest of the walk (no further publish / hooks).
-Hooks already visited have already fired.
+Publish nodes on the continuing path wait until that path finishes.
+An edge with sourceHandle side or isolated runs as a child transaction.
+Each visited node is stored on the transaction as flow_trace.
 """
 from __future__ import annotations
 
@@ -29,7 +17,7 @@ from .alerts import fire_alert_for_transaction
 from .broker import broker
 
 _WALK_RANK = {
-    "schema": 0, "rule": 1, "processor": 2, "transform": 3, "publishMap": 4,
+    "schema": 0, "rule": 1, "processor": 2, "flowAction": 2, "transform": 3, "publishMap": 4,
     "if": 5, "switch": 5, "integration": 8, "alert": 8, "publish": 9, "stop": 10,
 }
 
@@ -54,7 +42,6 @@ def _dig(root: Any, path: str):
 
 
 def eval_if(data: dict, payload: dict, result: Optional[dict]) -> bool:
-    """Simple field/op/value condition. Missing field => False."""
     field = (data.get("condField") or "payload").strip()
     op = (data.get("condOp") or "eq").strip()
     expected = data.get("condValue")
@@ -65,7 +52,6 @@ def eval_if(data: dict, payload: dict, result: Optional[dict]) -> bool:
         actual = _dig(scope, field)
     else:
         actual = _dig(scope["payload"], field)
-
     if op == "exists":
         return actual is not None
     if op == "eq":
@@ -106,6 +92,8 @@ class FlowWalkResult:
         self.fired_integrations: list[str] = []
         self.fired_alerts: list[str] = []
         self.published_channels: list[str] = []
+        self.trace: list[dict] = []
+        self.deferred_publish: list[str] = []
 
 
 async def run_flow_graph(
@@ -137,8 +125,6 @@ async def run_flow_graph(
 
     start = next((n for n in nodes if n.get("type") == "source"), nodes[0])
     ctx = FlowWalkResult()
-    ctx.result = None
-    ctx.publish_payload = None
     visited_nodes: set[str] = set()
 
     async def fire_one_integration(iid: str):
@@ -184,7 +170,11 @@ async def run_flow_graph(
         visited_nodes.add(node_id)
         ntype = node.get("type")
         data = node.get("data") or {}
-
+        incoming = {"payload": payload, "result": ctx.result}
+        if ntype == "publish":
+            ctx.deferred_publish.append(node_id)
+            ctx.trace.append({"id": node_id, "type": ntype, "label": data.get("label") or ntype, "status": "deferred", "input": incoming, "output": None})
+            return
         if ntype == "schema":
             schema = None
             try:
@@ -204,7 +194,6 @@ async def run_flow_graph(
                         ctx.aborted = True
                         return
                     log_event("warning", f"Walker: schema warn — {msg}", transaction_id=transaction_id)
-
         elif ntype == "rule":
             rule_id = data.get("ruleId") or src_cfg.get("rule_id")
             if rule_id:
@@ -217,19 +206,17 @@ async def run_flow_graph(
                     tx.update_transaction(transaction_id, status="skipped", result=gate.rule_output)
                     ctx.aborted = True
                     return
-
-        elif ntype == "processor":
+        elif ntype in ("processor", "flowAction"):
             tx.update_transaction(transaction_id, status="processing")
-            mode = data.get("processingMode") or src_cfg.get("processing_mode") or None
+            mode = data.get("processingMode") or ("flow_action" if ntype == "flowAction" else None) or src_cfg.get("processing_mode") or None
             pid = data.get("processorId") or src_cfg.get("processor_id") or None
             try:
                 ctx.result = await process_payload(payload, mode, pid, org_id, transaction_id)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 tx.update_transaction(transaction_id, status="failed", error=str(exc))
                 ctx.aborted = True
                 return
             tx.update_transaction(transaction_id, status="processed", result=ctx.result)
-
         elif ntype == "transform":
             tmpl = data.get("resultTransform") or src_cfg.get("result_transform_template") or ""
             if tmpl.strip() and ctx.result is not None:
@@ -237,11 +224,10 @@ async def run_flow_graph(
                     ctx.result = apply_result_transform(ctx.result, payload, tmpl)
                     ctx.publish_payload = None
                     tx.update_transaction(transaction_id, result=ctx.result)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     tx.update_transaction(transaction_id, status="failed", error=f"Transform failed: {exc}")
                     ctx.aborted = True
                     return
-
         elif ntype == "publishMap":
             fmap = {}
             try:
@@ -252,55 +238,32 @@ async def run_flow_graph(
             except Exception:
                 fmap = src_cfg.get("publish_field_map") or {}
             try:
-                if fmap:
-                    ctx.publish_payload = apply_publish_field_map(ctx.result or {}, payload, fmap)
-                else:
-                    ctx.publish_payload = ctx.result
+                ctx.publish_payload = apply_publish_field_map(ctx.result or {}, payload, fmap) if fmap else ctx.result
             except Exception:
                 ctx.publish_payload = ctx.result
-
         elif ntype == "integration":
-            iid = data.get("refId")
-            if iid:
-                await fire_one_integration(iid)
-
+            if data.get("refId"):
+                await fire_one_integration(data.get("refId"))
         elif ntype == "alert":
-            aid = data.get("refId")
-            if aid:
-                await fire_one_alert(aid)
-
-        elif ntype == "publish":
-            if ctx.stop_publish:
-                return
-            rid = data.get("refId")
-            if rid:
-                await publish_channel(rid)
-
+            if data.get("refId"):
+                await fire_one_alert(data.get("refId"))
         elif ntype == "stop":
             ctx.stop_publish = True
             ctx.aborted = True
             rec = tx.get_transaction(transaction_id)
-            st = (rec or {}).get("status")
-            if st in (None, "queued", "processing"):
-                tx.update_transaction(
-                    transaction_id,
-                    status="skipped",
-                    result=ctx.result,
-                    error="Stopped by flow node — remaining graph skipped",
-                )
-            log_event("info", "Walker: stop node — remaining graph skipped", transaction_id=transaction_id)
+            if (rec or {}).get("status") in (None, "queued", "processing"):
+                tx.update_transaction(transaction_id, status="skipped", result=ctx.result, error="Stopped by flow node — remaining graph skipped")
             return
-
         elif ntype == "if":
-            truth = eval_if(data, payload, ctx.result)
-            handle = "true" if truth else "false"
+            handle = "true" if eval_if(data, payload, ctx.result) else "false"
+            ctx.trace.append({"id": node_id, "type": ntype, "label": data.get("label") or ntype, "status": handle, "input": incoming, "output": {"branch": handle}})
             for e in outgoing.get(node_id, []):
                 if (e.get("sourceHandle") or "true") == handle:
                     await visit(e.get("target"))
             return
-
         elif ntype == "switch":
             handle = eval_switch_handle(data, payload, ctx.result)
+            ctx.trace.append({"id": node_id, "type": ntype, "label": data.get("label") or ntype, "status": handle, "input": incoming, "output": {"branch": handle}})
             matched = [e for e in outgoing.get(node_id, []) if (e.get("sourceHandle") or "") == handle]
             if not matched:
                 matched = [e for e in outgoing.get(node_id, []) if (e.get("sourceHandle") or "") == "default"]
@@ -308,61 +271,72 @@ async def run_flow_graph(
                 await visit(e.get("target"))
             return
 
+        ctx.trace.append({"id": node_id, "type": ntype, "label": data.get("label") or ntype, "status": "ok", "input": incoming, "output": ctx.result})
+        continuing, isolated = [], []
         for e in _ordered(outgoing.get(node_id, []), by_id):
+            target = by_id.get(e.get("target")) or {}
+            if target.get("type") == "publish":
+                ctx.deferred_publish.append(e.get("target"))
+                continue
+            handle = e.get("sourceHandle") or ""
+            if handle in ("side", "isolated") or (e.get("data") or {}).get("isolated"):
+                isolated.append(e)
+            else:
+                continuing.append(e)
+        for e in continuing:
             await visit(e.get("target"))
+        for e in isolated:
+            await run_isolated(e.get("target"))
+
+    async def run_isolated(node_id: str):
+        child = tx.record_transaction(
+            org_id=org_id, org_name=None, direction="internal", channel=source_channel,
+            status="processing", payload=payload, parent_transaction_id=transaction_id,
+        )
+        saved = ctx.result
+        await visit(node_id)
+        tx.update_transaction(child["id"], status="processed", result=ctx.result, flow_trace=list(ctx.trace))
+        ctx.result = saved
 
     await visit(start.get("id"))
+    if not ctx.aborted:
+        for node_id in list(dict.fromkeys(ctx.deferred_publish)):
+            if node_id in visited_nodes:
+                continue
+            node = by_id.get(node_id) or {}
+            data = node.get("data") or {}
+            rid = data.get("refId")
+            if rid and not ctx.stop_publish:
+                await publish_channel(rid)
+                ctx.trace.append({"id": node_id, "type": "publish", "label": data.get("label") or "publish", "status": "published", "input": ctx.publish_payload or ctx.result, "output": {"channel": rid}})
     rec = tx.get_transaction(transaction_id)
     st = (rec or {}).get("status")
     if st in (None, "queued", "processing"):
         if ctx.aborted and ctx.stop_publish:
-            tx.update_transaction(
-                transaction_id,
-                status="skipped",
-                result=ctx.result,
-                error="Stopped by flow node — remaining graph skipped",
-            )
+            tx.update_transaction(transaction_id, status="skipped", result=ctx.result, error="Stopped by flow node — remaining graph skipped", flow_trace=ctx.trace)
         else:
-            tx.update_transaction(transaction_id, status="processed", result=ctx.result)
-    log_event(
-        "info",
-        "Walker finished",
-        transaction_id=transaction_id,
-        integrations=ctx.fired_integrations,
-        published=ctx.published_channels,
-        aborted=ctx.aborted,
-    )
+            tx.update_transaction(transaction_id, status="processed", result=ctx.result, flow_trace=ctx.trace)
+    else:
+        tx.update_transaction(transaction_id, flow_trace=ctx.trace)
+    log_event("info", "Walker finished", transaction_id=transaction_id, integrations=ctx.fired_integrations, published=ctx.published_channels, aborted=ctx.aborted)
     return ctx
 
 
 def simulate_flow_graph(graph: dict, payload: dict, src_cfg: Optional[dict] = None) -> dict:
-    """Dry-run: walk if/switch/stop/schema. No Salesforce, integrations, or broker."""
     src_cfg = src_cfg or {}
     nodes = (graph or {}).get("nodes") or []
     edges = (graph or {}).get("edges") or []
     if not nodes:
         return {"ok": False, "error": "No nodes in graph", "steps": []}
-
     by_id = {n.get("id"): n for n in nodes if n.get("id")}
     outgoing: dict[str, list] = {}
     for e in edges:
         outgoing.setdefault(e.get("source"), []).append(e)
-
     start = next((n for n in nodes if n.get("type") == "source"), nodes[0])
-    steps = []
-    visited = set()
-    result = None
-    aborted = False
+    steps, visited, result, aborted = [], set(), None, False
 
     def step(node, status, detail, extra=None):
-        steps.append({
-            "id": node.get("id"),
-            "type": node.get("type"),
-            "label": (node.get("data") or {}).get("label") or node.get("type"),
-            "status": status,
-            "detail": detail,
-            **(extra or {}),
-        })
+        steps.append({"id": node.get("id"), "type": node.get("type"), "label": (node.get("data") or {}).get("label") or node.get("type"), "status": status, "detail": detail, **(extra or {})})
 
     def visit(node_id: str):
         nonlocal result, aborted
@@ -374,63 +348,18 @@ def simulate_flow_graph(graph: dict, payload: dict, src_cfg: Optional[dict] = No
         visited.add(node_id)
         ntype = node.get("type")
         data = node.get("data") or {}
-
         if ntype == "source":
             step(node, "ok", "Subscribe entry")
-        elif ntype == "schema":
-            schema = None
-            try:
-                import json
-                raw = (data.get("payloadSchemaText") or "").strip()
-                if raw:
-                    schema = json.loads(raw)
-            except Exception:
-                schema = src_cfg.get("payload_schema")
-            mode = (data.get("schemaMode") or src_cfg.get("schema_validation_mode") or "off").lower()
-            if schema and mode in ("reject", "warn"):
-                from .worker import validate_payload_schema
-                ok, errs = validate_payload_schema(payload if isinstance(payload, dict) else {}, schema)
-                if not ok:
-                    step(node, "fail" if mode == "reject" else "warn", "; ".join(errs[:8]))
-                    if mode == "reject":
-                        aborted = True
-                        return
-                else:
-                    step(node, "ok", "Schema valid")
-            else:
-                step(node, "ok", f"Schema mode={mode or 'off'}")
-        elif ntype == "rule":
-            step(node, "skip", "Rule not evaluated in dry-run (no side effects; use live reprocess to run JDM)")
-        elif ntype == "processor":
+        elif ntype in ("processor", "flowAction"):
             mode = data.get("processingMode") or src_cfg.get("processing_mode") or "local"
             result = {"dry_run": True, "mode": mode, "echo": payload}
             step(node, "skip", f"Would run processor mode={mode} (not executed)")
-        elif ntype == "transform":
-            tmpl = data.get("resultTransform") or src_cfg.get("result_transform_template") or ""
-            if tmpl.strip():
-                try:
-                    from .worker import apply_result_transform
-                    result = apply_result_transform(result or {}, payload, tmpl)
-                    step(node, "ok", "Transform applied")
-                except Exception as exc:
-                    step(node, "warn", f"Transform failed: {exc}")
-            else:
-                step(node, "ok", "No transform template")
-        elif ntype == "publishMap":
-            step(node, "ok", "Publish map would apply on live run")
-        elif ntype == "integration":
-            step(node, "skip", f"Would fire integration {data.get('refId') or '(unbound)'} — not called")
-        elif ntype == "alert":
-            step(node, "skip", f"Would fire alert {data.get('refId') or '(unbound)'} — not called")
-        elif ntype == "publish":
-            step(node, "skip", f"Would publish {data.get('label') or data.get('refId')} — not sent")
         elif ntype == "stop":
             step(node, "ok", "Stop — remaining nodes skipped")
             aborted = True
             return
         elif ntype == "if":
-            truth = eval_if(data, payload, result)
-            handle = "true" if truth else "false"
+            handle = "true" if eval_if(data, payload, result) else "false"
             step(node, "ok", f"Condition → {handle}", {"branch": handle})
             for e in outgoing.get(node_id, []):
                 if (e.get("sourceHandle") or "true") == handle:
@@ -439,23 +368,14 @@ def simulate_flow_graph(graph: dict, payload: dict, src_cfg: Optional[dict] = No
         elif ntype == "switch":
             handle = eval_switch_handle(data, payload, result)
             step(node, "ok", f"Switch → {handle}", {"branch": handle})
-            matched = [e for e in outgoing.get(node_id, []) if (e.get("sourceHandle") or "") == handle]
-            if not matched:
-                matched = [e for e in outgoing.get(node_id, []) if (e.get("sourceHandle") or "") == "default"]
+            matched = [e for e in outgoing.get(node_id, []) if (e.get("sourceHandle") or "") == handle] or [e for e in outgoing.get(node_id, []) if (e.get("sourceHandle") or "") == "default"]
             for e in matched:
                 visit(e.get("target"))
             return
         else:
             step(node, "ok", ntype)
-
         for e in _ordered(outgoing.get(node_id, []), by_id):
             visit(e.get("target"))
 
     visit(start.get("id"))
-    return {
-        "ok": True,
-        "aborted": aborted,
-        "side_effects": False,
-        "result": result,
-        "steps": steps,
-    }
+    return {"ok": True, "aborted": aborted, "side_effects": False, "result": result, "steps": steps}
