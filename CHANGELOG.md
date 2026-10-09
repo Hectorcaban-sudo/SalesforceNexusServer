@@ -1,9 +1,15 @@
 # Changelog
 
-## Unreleased
-### Chroma
-- Example transform for publishing Chroma document and metadata in the DSS event schema: `examples/chroma_dss_transform.j2`.
-- Chroma processors can be edited and deleted. Add, edit, and test open in dialogs. Administration holds global processors; the project page holds project processors.
+## 1.4.0 — 2026-10-08
+### Flow actions
+- Reusable flow actions: Salesforce get, Salesforce delete, SharePoint file (optional replace existing), and Chroma.
+- A Chroma action calls the saved Chroma processor and returns the hits, including document and metadata, to the next node.
+- Flow actions page at `/flow-actions`, under the project navigation.
+- Processor mode `flow_action` runs one saved action. Processor mode `pipeline` runs another saved pipeline and returns its result.
+
+### Pipelines
+- A pipeline can be created from the Pipelines page with no event. Source shows as standalone.
+- NBF ContentDocument template: `examples/nbf_content_document_pipeline.json`. New pipeline can start from that template.
 
 ## 1.3.0 — 2026-10-07
 ### Chroma
@@ -14,6 +20,8 @@
   export/import.
 - Chroma page uses the toast system correctly and reports load/save errors.
 - Removed dead `chroma_flow.py`.
+- Example transform for publishing Chroma document and metadata in the DSS event schema: `examples/chroma_dss_transform.j2`.
+- Chroma processors can be edited and deleted. Add, edit, and test open in dialogs. Administration holds global processors; the project page holds project processors.
 
 ### Admin console
 - Toasts on saves across the admin console; read-only Processors viewer; two-pane Logs with
