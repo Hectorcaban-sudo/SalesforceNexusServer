@@ -198,8 +198,8 @@ export default function Transactions() {
                 </div>
               ) : (
                 <ol className="tx-steps">
-                  {(selected.flow_trace || selected.result?.flow_trace || []).length > 0
-                    ? (selected.flow_trace || selected.result.flow_trace).map((s, i) => (
+                  {(selected.flow_trace || selected.result?.flow_trace || selected.result?._flow_trace || []).length > 0
+                    ? (selected.flow_trace || selected.result?.flow_trace || selected.result?._flow_trace).map((s, i) => (
                       <li key={s.id || i} className={s.status === 'failed' ? 'bad' : 'ok'}><span>{i + 1}</span><div><strong>{s.label || s.type}</strong><div className="muted">{s.status}</div></div></li>
                     ))
                     : (
@@ -249,7 +249,7 @@ export default function Transactions() {
 
 function TracePane({ tx }) {
   const [open, setOpen] = useState(null)
-  const trace = tx.flow_trace || tx.result?.flow_trace || tx.result?._steps || tx.result?.steps || []
+  const trace = tx.flow_trace || tx.result?.flow_trace || tx.result?._flow_trace || tx.result?._steps || tx.result?.steps || []
   if (!trace.length) return <div className="empty-state">No node trace on this transaction yet</div>
   return (
     <div className="tx-trace">
