@@ -1,0 +1,8 @@
+{# Transform that mirrors its input.
+   Paste into a flow Transform node. It must render valid JSON.
+   payload is the inbound event. result is the processor output.
+   The integration downstream of this node receives both. #}
+{
+  "payload": {{ payload | tojson }},
+  "result": {{ result | tojson }}
+}
