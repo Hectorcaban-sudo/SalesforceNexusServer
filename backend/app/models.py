@@ -307,6 +307,7 @@ class TransactionOut(BaseModel):
     pipeline_id: Optional[str] = None
     pipeline_name: Optional[str] = None
     event_id: Optional[str] = None
+    flow_trace: Optional[list] = None
     cancel_requested: bool = False   # set while an in-flight cancellation is pending - see routers/transactions.py:cancel_transaction
     created_at: float
     updated_at: float
