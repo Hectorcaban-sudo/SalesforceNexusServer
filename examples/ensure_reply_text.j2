@@ -1,0 +1,29 @@
+{# Ensure replyText exists, then mirror the input.
+   Paste into a flow Transform node. It must render valid JSON.
+   DSS: Payload_Json__c is already {"replyText": "..."}.
+   Chroma: Payload_Json__c is [{document, metadata}] — documents are joined.
+   The downstream integration receives payload, result, and replyText. #}
+{% set ns = namespace(reply='') %}
+{% set raw = result.Payload_Json__c | default('') | fromjson %}
+{% if raw is mapping and raw.replyText %}
+{% set ns.reply = raw.replyText %}
+{% elif raw is sequence and raw is not string and raw is not mapping %}
+{% set docs = [] %}
+{% for hit in raw %}
+{% if hit is mapping and hit.document %}
+{% set _ = docs.append(hit.document) %}
+{% endif %}
+{% endfor %}
+{% set ns.reply = docs | join('\n\n') %}
+{% elif result.replyText %}
+{% set ns.reply = result.replyText %}
+{% endif %}
+{
+  "payload": {{ payload | tojson }},
+  "result": {
+    "Conversation_Id__c": {{ (result.Conversation_Id__c or payload.Conversation_Id__c or "") | tojson }},
+    "Status__c": {{ (result.Status__c or "Ok") | tojson }},
+    "Payload_Json__c": {{ {"replyText": ns.reply} | tojson }}
+  },
+  "replyText": {{ ns.reply | tojson }}
+}
