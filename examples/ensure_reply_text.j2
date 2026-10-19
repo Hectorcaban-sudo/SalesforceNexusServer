@@ -23,7 +23,7 @@
   "result": {
     "Conversation_Id__c": {{ (result.Conversation_Id__c or payload.Conversation_Id__c or "") | tojson }},
     "Status__c": {{ (result.Status__c or "Ok") | tojson }},
-    "Payload_Json__c": {{ {"replyText": ns.reply} | tojson }}
+    "Payload_Json__c": {{ {"replyText": ns.reply} | tojson | tojson }}
   },
   "replyText": {{ ns.reply | tojson }}
 }
