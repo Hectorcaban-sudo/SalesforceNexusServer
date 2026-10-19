@@ -1,0 +1,45 @@
+{# Chroma (or DSS) -> Agentforce replyText.
+   Paste into the Transform node on the integration branch.
+   DSS: Payload_Json__c already has replyText, so it is kept.
+   Chroma: each hit becomes a readable block with a markdown link
+   from metadata.link, plus the other metadata fields.
+   Payload_Json__c stays a JSON string, same as DSS. #}
+{% set ns = namespace(reply='') %}
+{% set raw = result.Payload_Json__c | default('') | fromjson %}
+{% if raw is mapping and raw.replyText %}
+{% set ns.reply = raw.replyText %}
+{% elif raw is sequence and raw is not string and raw is not mapping %}
+{% set blocks = [] %}
+{% for hit in raw %}
+{% if hit is mapping %}
+{% set meta = hit.metadata or {} %}
+{% set title = meta.source or meta.name or meta.LinkFilename or ('Result ' ~ loop.index) %}
+{% set link = meta.link or meta.Link or '' %}
+{% set lines = [] %}
+{% if link %}
+{% set _ = lines.append('**[' ~ title ~ '](' ~ link ~ ')**') %}
+{% else %}
+{% set _ = lines.append('**' ~ title ~ '**') %}
+{% endif %}
+{% if hit.document %}
+{% set _ = lines.append(hit.document) %}
+{% endif %}
+{% for key, value in meta.items() if key not in ['link', 'Link', 'source', 'name', 'LinkFilename'] and value %}
+{% set _ = lines.append(key ~ ': ' ~ value) %}
+{% endfor %}
+{% set _ = blocks.append(lines | join('\n')) %}
+{% endif %}
+{% endfor %}
+{% set ns.reply = blocks | join('\n\n') %}
+{% elif result.replyText %}
+{% set ns.reply = result.replyText %}
+{% endif %}
+{
+  "payload": {{ payload | tojson }},
+  "result": {
+    "Conversation_Id__c": {{ (result.Conversation_Id__c or payload.Conversation_Id__c or "") | tojson }},
+    "Status__c": {{ (result.Status__c or "Ok") | tojson }},
+    "Payload_Json__c": {{ {"replyText": ns.reply} | tojson | tojson }}
+  },
+  "replyText": {{ ns.reply | tojson }}
+}
