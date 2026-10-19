@@ -228,15 +228,28 @@ async def run_flow_graph(
             tx.update_transaction(transaction_id, status="processed", result=ctx.result)
         elif ntype == "transform":
             tmpl = data.get("resultTransform") or src_cfg.get("result_transform_template") or ""
-            if tmpl.strip() and ctx.result is not None:
+            saved = ctx.result
+            transformed = saved
+            if tmpl.strip() and saved is not None:
                 try:
-                    ctx.result = apply_result_transform(ctx.result, payload, tmpl)
-                    ctx.publish_payload = None
-                    tx.update_transaction(transaction_id, result=ctx.result)
+                    transformed = apply_result_transform(saved, payload, tmpl)
                 except Exception as exc:
-                    tx.update_transaction(transaction_id, status="failed", error=f"Transform failed: {exc}")
-                    ctx.aborted = True
+                    msg = f"Transform failed: {exc}"
+                    log_event("error", msg, transaction_id=transaction_id)
+                    ctx.trace.append({"id": node_id, "type": ntype, "label": data.get("label") or ntype, "status": "failed", "input": incoming, "output": {"error": msg}})
                     return
+            ctx.trace.append({"id": node_id, "type": ntype, "label": data.get("label") or ntype, "status": "ok", "input": incoming, "output": transformed})
+            # Only nodes downstream of this transform see the new result.
+            # Sibling branches, including publish, keep the original.
+            ctx.result = transformed
+            tx.update_transaction(transaction_id, result=transformed)
+            try:
+                for edge in _ordered(outgoing.get(node_id, []), by_id):
+                    await visit(edge.get("target"))
+            finally:
+                ctx.result = saved
+                tx.update_transaction(transaction_id, result=saved)
+            return
         elif ntype == "publishMap":
             fmap = {}
             try:

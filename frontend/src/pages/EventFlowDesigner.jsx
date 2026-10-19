@@ -24,7 +24,7 @@ const PALETTE = [
   { type: 'rule', label: 'Choice / Rule', icon: ShieldCheck, accent: '#a78bfa', once: true },
   { type: 'processor', label: 'Processor', icon: Cpu, accent: '#3b82f6', once: false },
   { type: 'flowAction', label: 'Flow action', icon: Cpu, accent: '#0ea5e9', once: false },
-  { type: 'transform', label: 'Transform', icon: Wand2, accent: '#eab308', once: true },
+  { type: 'transform', label: 'Transform', icon: Wand2, accent: '#eab308', once: false },
   { type: 'publishMap', label: 'Publish map', icon: Map, accent: '#14b8a6', once: true },
   { type: 'publish', label: 'Publish', icon: ArrowUpFromLine, accent: '#22c55e', once: false },
   { type: 'integration', label: 'Integration', icon: Share2, accent: '#8b5cf6', once: false },
@@ -566,7 +566,7 @@ function FlowCanvasInner({ event, refs }) {
     }
     const position = screenToFlowPosition({ x: e.clientX, y: e.clientY })
     const id = meta.once ? type : `${type}-${Date.now()}`
-    const newNode = { id, type, position, data: { label: meta.label, subtitle: 'Configure…', ...(type === 'flowAction' ? { processingMode: 'flow_action' } : {}) }, draggable: true }
+    const newNode = { id, type, position, data: { label: meta.label, subtitle: 'Configure…', ...(type === 'flowAction' ? { processingMode: 'flow_action' } : {}), ...(type === 'transform' ? { resultTransform: '' } : {}) }, draggable: true }
     setNodes((nds) => nds.concat(newNode))
     setDirty(true)
     setModalNode(newNode)

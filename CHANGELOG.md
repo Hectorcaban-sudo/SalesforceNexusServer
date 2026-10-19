@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.2 — 2026-10-19
+### Flow transform
+- A Transform node only changes the result for nodes downstream of it. Sibling branches, including publish, keep the original processor result.
+- You can drop more than one Transform node. Each one keeps its own Jinja2 template.
+- A transform that does not render valid JSON no longer adds `transformed_text` to the result. The error stays on that branch.
+- `tojson` is not HTML-escaped, and `fromjson` can parse a JSON string such as Chroma `Payload_Json__c`.
+
 ## 1.4.1 — 2026-10-19
 ### Salesforce connections
 - A failed CometD handshake drops the cached Salesforce session and retries with a fresh login. `last_error` stores Salesforce's failure reason instead of the generic handshake message.
