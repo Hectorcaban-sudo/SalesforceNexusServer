@@ -33,6 +33,7 @@ _env = Environment(
 
 # Helpful filters
 _env.filters["tojson"] = lambda v, **kw: json.dumps(v, default=str, **kw)
+_env.filters["fromjson"] = lambda v: json.loads(v) if isinstance(v, str) and v.strip() else (v or [])
 _env.filters["default"] = lambda v, d="": v if v is not None else d
 
 
