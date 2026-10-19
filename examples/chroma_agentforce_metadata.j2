@@ -1,0 +1,50 @@
+{# Chroma hits as source material for Agentforce.
+   Paste into the Transform node on the integration branch.
+   Every metadata field is included so Agentforce can analyze the
+   hit and look up related records (Project, contract, link, ids).
+   DSS replyText is passed through unchanged. #}
+{% set ns = namespace(reply='') %}
+{% set raw = result.Payload_Json__c | default('') | fromjson %}
+{% if raw is mapping and raw.replyText %}
+{% set ns.reply = raw.replyText %}
+{% elif raw is sequence and raw is not string and raw is not mapping %}
+{% set blocks = [] %}
+{% for hit in raw %}
+{% if hit is mapping %}
+{% set meta = hit.metadata or {} %}
+{% set title = meta.source or meta.name or meta.LinkFilename or meta.FileLeafRef or ('Result ' ~ loop.index) %}
+{% set link = meta.link or meta.Link or '' %}
+{% set fields = [] %}
+{% for key, value in meta.items() if value %}
+{% set _ = fields.append('- ' ~ key ~ ': ' ~ value) %}
+{% endfor %}
+{% set _ = blocks.append([
+  'Result ' ~ loop.index,
+  'Title: ' ~ title,
+  'Link: ' ~ link,
+  'Text: ' ~ (hit.document or ''),
+  'Metadata:',
+  fields | join('\n')
+] | join('\n')) %}
+{% endif %}
+{% endfor %}
+{% set ns.reply = [
+  'Question: ' ~ (payload.User_Message__c or ''),
+  'Conversation: ' ~ (payload.Conversation_Id__c or result.Conversation_Id__c or ''),
+  '',
+  'Retrieved documents. Use Title, Link, Text, and every Metadata field for analysis and for lookups on related records.',
+  '',
+  blocks | join('\n\n')
+] | join('\n') %}
+{% elif result.replyText %}
+{% set ns.reply = result.replyText %}
+{% endif %}
+{
+  "payload": {{ payload | tojson }},
+  "result": {
+    "Conversation_Id__c": {{ (result.Conversation_Id__c or payload.Conversation_Id__c or "") | tojson }},
+    "Status__c": {{ (result.Status__c or "Ok") | tojson }},
+    "Payload_Json__c": {{ {"replyText": ns.reply} | tojson | tojson }}
+  },
+  "replyText": {{ ns.reply | tojson }}
+}
