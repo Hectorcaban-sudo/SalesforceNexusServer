@@ -212,9 +212,12 @@ def apply_result_transform(result: dict, payload: dict, template: str) -> dict:
     import json
     rendered = render_template(template, {"payload": payload or {}, "result": result or {}})
     try:
-        return json.loads(rendered)
-    except Exception:
-        return {**(result or {}), "transformed_text": rendered}
+        parsed = json.loads(rendered)
+    except Exception as exc:
+        raise ValueError(f"Transform did not render valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("Transform must render a JSON object")
+    return parsed
 
 
 def validate_payload_schema(payload: dict, schema: dict) -> tuple:

@@ -1,3 +1,9 @@
+## 1.4.2 — 2026-10-19
+### Flow transform
+- A Transform node only changes the result for nodes downstream of it. Sibling branches, including publish, keep the original processor result.
+- A transform that does not render valid JSON no longer adds `transformed_text` to the result. The error stays on that branch.
+- `tojson` is not HTML-escaped, and `fromjson` can parse a JSON string such as Chroma `Payload_Json__c`.
+
 # Changelog
 
 ## 1.4.2 — 2026-10-19
