@@ -368,6 +368,11 @@ async def run_flow_graph(
             tx.update_transaction(transaction_id, status="processed", result=ctx.result, flow_trace=ctx.trace)
     else:
         tx.update_transaction(transaction_id, flow_trace=ctx.trace)
+    # Keep a copy on the result so the Trace tab can show the integration
+    # branch even if an older client only reads result fields.
+    if isinstance(ctx.result, dict):
+        ctx.result = {**ctx.result, "_flow_trace": ctx.trace}
+        tx.update_transaction(transaction_id, result=ctx.result, flow_trace=ctx.trace)
     log_event("info", "Walker finished", transaction_id=transaction_id, integrations=ctx.fired_integrations, published=ctx.published_channels, aborted=ctx.aborted)
     return ctx
 
