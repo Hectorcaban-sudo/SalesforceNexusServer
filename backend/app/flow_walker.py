@@ -41,6 +41,13 @@ def _dig(root: Any, path: str):
     return cur
 
 
+def _publishable(body):
+    """Drop trace-only fields so a processor can record steps without publishing them."""
+    if not isinstance(body, dict):
+        return body
+    return {key: value for key, value in body.items() if not str(key).startswith("_")}
+
+
 def eval_if(data: dict, payload: dict, result: Optional[dict]) -> bool:
     field = (data.get("condField") or "payload").strip()
     op = (data.get("condOp") or "eq").strip()
@@ -143,6 +150,7 @@ async def run_flow_graph(
             return
         channel = cfg["channel"]
         body = ctx.publish_payload if ctx.publish_payload is not None else (ctx.result or payload)
+        body = _publishable(body)
         fanout = tx.record_transaction(
             org_id=org_id, org_name=None, direction="publish", channel=channel,
             status="queued", payload=body, parent_transaction_id=transaction_id,
@@ -169,7 +177,6 @@ async def run_flow_graph(
             return
         ntype = node.get("type")
         if ntype != "publish":
-            # Publish nodes stay out of visited_nodes: they are deferred and must still run at the end.
             visited_nodes.add(node_id)
         data = node.get("data") or {}
         incoming = {"payload": payload, "result": ctx.result}

@@ -91,7 +91,7 @@ export default function Transactions() {
     const key = recordId(selected)
     return visible.filter((r) => recordId(r) === key && r.org_id === selected.org_id)
   }, [visible, selected])
-  const steps = Array.isArray(selected?.result?.steps) ? selected.result.steps : []
+  const steps = Array.isArray(selected?.result?._steps) ? selected.result._steps : (Array.isArray(selected?.result?.steps) ? selected.result.steps : [])
 
   function openFlow(t) {
     if (!t) return
@@ -249,7 +249,7 @@ export default function Transactions() {
 
 function TracePane({ tx }) {
   const [open, setOpen] = useState(null)
-  const trace = tx.flow_trace || tx.result?.flow_trace || tx.result?.steps || []
+  const trace = tx.flow_trace || tx.result?.flow_trace || tx.result?._steps || tx.result?.steps || []
   if (!trace.length) return <div className="empty-state">No node trace on this transaction yet</div>
   return (
     <div className="tx-trace">
