@@ -21,6 +21,7 @@ from typing import Optional, Dict
 from .logging_config import log_event
 
 REQUEST_TIMEOUT = 15.0
+SESSION_TTL_SECONDS = 90 * 60
 
 
 class SalesforceAuthError(Exception):
@@ -35,7 +36,11 @@ class SalesforceSession:
         self.obtained_at: float = 0
 
     def is_valid(self) -> bool:
-        return bool(self.access_token and self.instance_url)
+        if not (self.access_token and self.instance_url):
+            return False
+        # Salesforce access tokens are typically valid for ~2 hours. Drop the
+        # cache before that so a handshake is not attempted with a dead token.
+        return (time.time() - self.obtained_at) < SESSION_TTL_SECONDS
 
 
 class SalesforceClient:
@@ -89,6 +94,10 @@ class SalesforceClient:
         log_event("info", f"Authenticated to Salesforce org '{org['name']}'", org_id=org["id"])
         return session
 
+    def invalidate(self, org_id: str) -> None:
+        """Drop a cached session so the next get_session logs in again."""
+        self._sessions.pop(org_id, None)
+
     async def get_session(self, org: dict, force_refresh: bool = False) -> SalesforceSession:
         session = self._sessions.get(org["id"])
         if session and session.is_valid() and not force_refresh:
@@ -112,7 +121,6 @@ class SalesforceClient:
             resp = await client.post(url, json=payload, headers=headers)
 
             if resp.status_code == 401:
-                # token expired mid-flight - refresh once and retry
                 session = await self.get_session(org, force_refresh=True)
                 headers["Authorization"] = f"Bearer {session.access_token}"
                 resp = await client.post(url, json=payload, headers=headers)
@@ -164,7 +172,6 @@ class SalesforceClient:
         if resp.status_code >= 400:
             raise RuntimeError(f"ContentVersion download failed ({resp.status_code})")
         return resp.content
-
 
 
 sf_client = SalesforceClient()
