@@ -22,6 +22,7 @@ import json
 from typing import Any, Optional, Union
 
 from jinja2 import Environment, BaseLoader, select_autoescape, TemplateError
+from markupsafe import Markup
 
 # Restricted environment – no filesystem access, no arbitrary Python imports.
 _env = Environment(
@@ -32,7 +33,7 @@ _env = Environment(
 )
 
 # Helpful filters
-_env.filters["tojson"] = lambda v, **kw: json.dumps(v, default=str, **kw)
+_env.filters["tojson"] = lambda v, **kw: Markup(json.dumps(v, default=str, **kw))
 _env.filters["fromjson"] = lambda v: json.loads(v) if isinstance(v, str) and v.strip() else (v or [])
 _env.filters["default"] = lambda v, d="": v if v is not None else d
 
