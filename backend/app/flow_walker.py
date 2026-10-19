@@ -7,6 +7,7 @@ Each visited node is stored on the transaction as flow_trace.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Optional
 
 from .database import event_configs_table, Q
@@ -103,6 +104,21 @@ class FlowWalkResult:
         self.deferred_publish: list[str] = []
 
 
+def _step(node_id, ntype, label, status, incoming, output, started):
+    finished = time.time()
+    return {
+        "id": node_id,
+        "type": ntype,
+        "label": label,
+        "status": status,
+        "input": incoming,
+        "output": output,
+        "started_at": started,
+        "finished_at": finished,
+        "duration_ms": round((finished - started) * 1000, 1),
+    }
+
+
 async def run_flow_graph(
     *,
     src_cfg: dict,
@@ -180,9 +196,12 @@ async def run_flow_graph(
             visited_nodes.add(node_id)
         data = node.get("data") or {}
         incoming = {"payload": payload, "result": ctx.result}
+        started = time.time()
+        def note(status, output=None, label=None):
+            ctx.trace.append(_step(node_id, ntype, label or data.get("label") or ntype, status, incoming, output, started))
         if ntype == "publish":
             ctx.deferred_publish.append(node_id)
-            ctx.trace.append({"id": node_id, "type": ntype, "label": data.get("label") or ntype, "status": "deferred", "input": incoming, "output": None})
+            note("deferred", None)
             return
         if ntype == "schema":
             schema = None
@@ -201,6 +220,7 @@ async def run_flow_graph(
                     if mode == "reject":
                         tx.update_transaction(transaction_id, status="failed", error=msg)
                         ctx.aborted = True
+                        note("failed", {"error": msg})
                         return
                     log_event("warning", f"Walker: schema warn — {msg}", transaction_id=transaction_id)
         elif ntype == "rule":
@@ -210,10 +230,12 @@ async def run_flow_graph(
                 if gate.error:
                     tx.update_transaction(transaction_id, status="failed", error=f"Rule gate failed: {gate.error}")
                     ctx.aborted = True
+                    note("failed", {"error": gate.error})
                     return
                 if not gate.should_process:
                     tx.update_transaction(transaction_id, status="skipped", result=gate.rule_output)
                     ctx.aborted = True
+                    note("skipped", gate.rule_output)
                     return
         elif ntype in ("processor", "flowAction"):
             tx.update_transaction(transaction_id, status="processing")
@@ -224,6 +246,7 @@ async def run_flow_graph(
             except Exception as exc:
                 tx.update_transaction(transaction_id, status="failed", error=str(exc))
                 ctx.aborted = True
+                note("failed", {"error": str(exc)})
                 return
             tx.update_transaction(transaction_id, status="processed", result=ctx.result)
         elif ntype == "transform":
@@ -236,9 +259,9 @@ async def run_flow_graph(
                 except Exception as exc:
                     msg = f"Transform failed: {exc}"
                     log_event("error", msg, transaction_id=transaction_id)
-                    ctx.trace.append({"id": node_id, "type": ntype, "label": data.get("label") or ntype, "status": "failed", "input": incoming, "output": {"error": msg}})
+                    ctx.trace.append(_step(node_id, ntype, data.get("label") or ntype, "failed", incoming, {"error": msg}, started))
                     return
-            ctx.trace.append({"id": node_id, "type": ntype, "label": data.get("label") or ntype, "status": "ok", "input": incoming, "output": transformed})
+            ctx.trace.append(_step(node_id, ntype, data.get("label") or ntype, "ok", incoming, transformed, started))
             # Only nodes downstream of this transform see the new result.
             # Sibling branches, including publish, keep the original.
             ctx.result = transformed
@@ -278,14 +301,14 @@ async def run_flow_graph(
             return
         elif ntype == "if":
             handle = "true" if eval_if(data, payload, ctx.result) else "false"
-            ctx.trace.append({"id": node_id, "type": ntype, "label": data.get("label") or ntype, "status": handle, "input": incoming, "output": {"branch": handle}})
+            ctx.trace.append(_step(node_id, ntype, data.get("label") or ntype, handle, incoming, {"branch": handle}, started))
             for e in outgoing.get(node_id, []):
                 if (e.get("sourceHandle") or "true") == handle:
                     await visit(e.get("target"))
             return
         elif ntype == "switch":
             handle = eval_switch_handle(data, payload, ctx.result)
-            ctx.trace.append({"id": node_id, "type": ntype, "label": data.get("label") or ntype, "status": handle, "input": incoming, "output": {"branch": handle}})
+            ctx.trace.append(_step(node_id, ntype, data.get("label") or ntype, handle, incoming, {"branch": handle}, started))
             matched = [e for e in outgoing.get(node_id, []) if (e.get("sourceHandle") or "") == handle]
             if not matched:
                 matched = [e for e in outgoing.get(node_id, []) if (e.get("sourceHandle") or "") == "default"]
@@ -293,7 +316,7 @@ async def run_flow_graph(
                 await visit(e.get("target"))
             return
 
-        ctx.trace.append({"id": node_id, "type": ntype, "label": data.get("label") or ntype, "status": "ok", "input": incoming, "output": ctx.result})
+        ctx.trace.append(_step(node_id, ntype, data.get("label") or ntype, "ok", incoming, ctx.result, started))
         continuing, isolated = [], []
         for e in _ordered(outgoing.get(node_id, []), by_id):
             target = by_id.get(e.get("target")) or {}
@@ -332,7 +355,7 @@ async def run_flow_graph(
             rid = data.get("refId")
             if rid and not ctx.stop_publish:
                 await publish_channel(rid)
-                ctx.trace.append({"id": node_id, "type": "publish", "label": data.get("label") or "publish", "status": "published", "input": ctx.publish_payload or ctx.result, "output": {"channel": rid}})
+                ctx.trace.append(_step(node_id, "publish", data.get("label") or "publish", "published", {"payload": payload, "result": ctx.result}, {"channel": rid}, time.time()))
     rec = tx.get_transaction(transaction_id)
     st = (rec or {}).get("status")
     if st in (None, "queued", "processing"):
