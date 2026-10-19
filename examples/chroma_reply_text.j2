@@ -1,0 +1,14 @@
+{# Chroma result -> { "replyText": "..." }
+   Paste into the flow Transform node. It must render valid JSON.
+   result.Payload_Json__c is a JSON string of [{document, metadata}].
+   Documents are joined with a blank line. #}
+{% set hits = result.Payload_Json__c | default('[]') | fromjson %}
+{% set docs = [] %}
+{% for hit in hits %}
+{% if hit.document %}
+{% set _ = docs.append(hit.document) %}
+{% endif %}
+{% endfor %}
+{
+  "replyText": {{ docs | join('\n\n') | tojson }}
+}
