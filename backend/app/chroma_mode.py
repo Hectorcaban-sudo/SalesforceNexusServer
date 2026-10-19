@@ -45,7 +45,14 @@ def install():
             if not processor_id:
                 raise RuntimeError("chroma mode requires a chroma processor id")
             raw = await asyncio.to_thread(run_saved, processor_id, payload, transaction_id)
-            return to_dss_event(payload, raw)
+            event = to_dss_event(payload, raw)
+            # Underscore fields are kept for the transaction trace and stripped before publish.
+            event["_steps"] = (raw or {}).get("steps") or []
+            event["_chroma"] = {
+                "status": (raw or {}).get("status"),
+                "matches": (raw or {}).get("matches") or [],
+            }
+            return event
         return await original(payload, mode_override, processor_id_override, org_id, transaction_id)
 
     worker.process_payload = process_payload
