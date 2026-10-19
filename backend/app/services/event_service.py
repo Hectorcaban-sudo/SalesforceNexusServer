@@ -20,7 +20,7 @@ async def create_config(cfg: EventConfigCreate):
     record["id"] = new_id()
     event_configs_table.insert(record)
     log_event("info", f"Event config created: {record['direction']} '{record['channel']}'", org_id=cfg.org_id)
-    await cometd_manager.sync()
+    await cometd_manager.sync([cfg.org_id])
     return record
 
 
@@ -34,7 +34,7 @@ async def update_config(config_id: str, updates: EventConfigUpdate):
             data[field] = None
     event_configs_table.update(data, Q.id == config_id)
     log_event("info", f"Event config '{config_id}' updated", fields=list(data.keys()))
-    await cometd_manager.sync()
+    await cometd_manager.sync([existing["org_id"]])
     return event_configs_table.get(Q.id == config_id)
 
 
@@ -44,7 +44,7 @@ async def delete_config(config_id: str):
         raise HTTPException(404, "Event config not found")
     event_configs_table.remove(Q.id == config_id)
     log_event("warning", f"Event config '{config_id}' deleted")
-    await cometd_manager.sync()
+    await cometd_manager.sync([existing["org_id"]])
     return {"detail": "deleted"}
 
 

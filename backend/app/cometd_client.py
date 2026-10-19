@@ -20,12 +20,9 @@ import asyncio
 from typing import Dict, Optional
 
 try:
-    # Primary target: aiocometd_ng (actively maintained fork, required on
-    # newer Python versions where the original `aiocometd` package may not
-    # install cleanly).
     from aiocometd_ng import Client, ConnectionType
     from aiocometd_ng.extensions import AuthExtension
-except ImportError:  # pragma: no cover - fallback for environments with the original package
+except ImportError:  # pragma: no cover
     from aiocometd import Client, ConnectionType
     from aiocometd.extensions import AuthExtension
 
@@ -55,18 +52,28 @@ class SalesforceAuthHeaderExtension(AuthExtension):
         return None
 
 
-class OrgStreamManager:
-    """Owns the CometD connection + subscription task for a single org.
+def _salesforce_failure_detail(exc: Exception) -> str:
+    """aiocometd reports every failed handshake as 'Handshake request failed.'
+    Salesforce puts the useful reason on the Bayeux response."""
+    response = getattr(exc, "response", None)
+    if response is None and len(getattr(exc, "args", ())) > 1:
+        response = exc.args[1]
+    if isinstance(response, dict):
+        reason = ((response.get("ext") or {}).get("sfdc") or {}).get("failureReason")
+        error = response.get("error")
+        detail = " · ".join(part for part in (error, reason) if part)
+        if detail:
+            return detail
+    return str(exc)
 
-    Runs a persistent supervisor loop: if the connection is lost or fails to
-    establish for any reason (network blip, Salesforce-side restart, auth
-    token expiry, etc.) it is retried automatically with exponential backoff
-    rather than giving up - the org just shows as "error"/"connecting" in the
-    admin UI until it recovers. Every blocking call (Salesforce OAuth login)
-    is offloaded to a thread so a slow/hanging network call here can never
-    freeze the rest of the web app, which keeps running and stays fully
-    navigable throughout.
-    """
+
+def _looks_like_auth_failure(detail: str) -> bool:
+    text = detail.lower()
+    return any(token in text for token in ("handshake", "401", "403", "authentication", "denied"))
+
+
+class OrgStreamManager:
+    """Owns the CometD connection + subscription task for a single org."""
 
     def __init__(self, org: dict):
         self.org = org
@@ -108,31 +115,26 @@ class OrgStreamManager:
         return [r["channel"] for r in rows]
 
     async def _run_forever(self):
-        """Supervisor loop: keep trying to (re)connect with exponential
-        backoff until `stop()` is called. A successful connection that later
-        drops resets the backoff delay back to the minimum."""
         delay = settings.cometd_reconnect_min_delay_seconds
-
         while not self._stopped:
             channels = self._subscribed_channels()
             if not channels:
                 log_event("info", f"CometD: no subscribe channels configured for org '{self.org['name']}'", org_id=self.org["id"])
                 orgs_table.update({"status": "disconnected"}, Q.id == self.org["id"])
-                return  # nothing to do until sync() restarts this manager with new config
+                return
 
             connected_at_least_once = await self._connect_and_stream(channels)
-
             if self._stopped:
                 return
 
             if connected_at_least_once:
-                self._alert_fired_for_current_outage = False  # a fresh outage after this would alert again
+                self._alert_fired_for_current_outage = False
                 delay = settings.cometd_reconnect_min_delay_seconds
             else:
                 delay = min(delay * settings.cometd_reconnect_backoff_factor, settings.cometd_reconnect_max_delay_seconds)
                 if not self._alert_fired_for_current_outage:
                     self._alert_fired_for_current_outage = True
-                    from .alerts import fire_alert  # local import avoids a circular import at module load time
+                    from .alerts import fire_alert
                     org_row = orgs_table.get(Q.id == self.org["id"]) or {}
                     fire_alert(
                         "connection_failed",
@@ -143,11 +145,7 @@ class OrgStreamManager:
                         org_id=self.org["id"],
                     )
 
-            log_event(
-                "info",
-                f"CometD: will retry connecting to org '{self.org['name']}' in {delay:.0f}s",
-                org_id=self.org["id"],
-            )
+            log_event("info", f"CometD: will retry connecting to org '{self.org['name']}' in {delay:.0f}s", org_id=self.org["id"])
             orgs_table.update({"status": "error"}, Q.id == self.org["id"])
             try:
                 await asyncio.sleep(delay)
@@ -155,15 +153,9 @@ class OrgStreamManager:
                 return
 
     async def _connect_and_stream(self, channels) -> bool:
-        """One connection attempt. Returns True if the connection was
-        successfully established at any point (even if it later dropped),
-        so the caller knows whether to reset backoff or keep increasing it."""
         org = self.org
         connected = False
         try:
-            # Native async now (httpx) - no thread needed; this also means a
-            # cancelled/shutting-down connection attempt actually stops here
-            # instead of a background thread continuing to run unsupervised.
             session = await sf_client.get_session(org)
         except SalesforceAuthError as exc:
             log_event("error", f"CometD: auth failed for org '{org['name']}': {exc}", org_id=org["id"])
@@ -183,53 +175,39 @@ class OrgStreamManager:
                     Q.id == org["id"],
                 )
                 log_event("info", f"CometD: connected to org '{org['name']}'", org_id=org["id"])
-
                 for channel in channels:
                     await client.subscribe(channel)
                     log_event("info", f"CometD: subscribed to '{channel}' on org '{org['name']}'", org_id=org["id"], channel=channel)
-
                 async for message in client:
                     await self._handle_message(message)
-
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            log_event("error", f"CometD: connection error for org '{org['name']}': {exc}", org_id=org["id"])
-            orgs_table.update({"status": "error", "last_error": str(exc)}, Q.id == org["id"])
+            detail = _salesforce_failure_detail(exc)
+            if _looks_like_auth_failure(detail):
+                sf_client.invalidate(org["id"])
+                log_event("warning", f"CometD: dropped cached session for '{org['name']}' after handshake failure", org_id=org["id"])
+            log_event("error", f"CometD: connection error for org '{org['name']}': {detail}", org_id=org["id"])
+            orgs_table.update({"status": "error", "last_error": detail}, Q.id == org["id"])
         finally:
             self._running = False
-
         return connected
 
     async def _handle_message(self, message: dict):
         org = self.org
         channel = message.get("channel", "unknown")
         payload = message.get("data", {}).get("payload", message.get("data", {}))
-
         with start_span("cometd.receive_event", org_id=org["id"], channel=channel) as span:
             record = tx.record_transaction(
-                org_id=org["id"],
-                org_name=org["name"],
-                direction="subscribe",
-                channel=channel,
-                status="received",
-                payload=payload,
+                org_id=org["id"], org_name=org["name"], direction="subscribe",
+                channel=channel, status="received", payload=payload,
             )
             log_event("info", f"CometD: event received on '{channel}' from org '{org['name']}'", org_id=org["id"], channel=channel)
-
             tx.update_transaction(record["id"], status="queued")
-            # Captures this span's trace context so every downstream stage
-            # (worker processing, Salesforce publish, integration fan-out -
-            # each running in a separate asyncio task at a later point in
-            # time, on the other side of the broker) attaches as a child of
-            # THIS span instead of starting a disconnected trace of its own.
             trace_carrier = inject_trace_context(span=span)
             await broker.publish(
                 "inbound",
-                {
-                    "transaction_id": record["id"], "org_id": org["id"], "channel": channel,
-                    "payload": payload, "_trace": trace_carrier,
-                },
+                {"transaction_id": record["id"], "org_id": org["id"], "channel": channel, "payload": payload, "_trace": trace_carrier},
             )
 
 
@@ -239,21 +217,22 @@ class CometDManager:
     def __init__(self):
         self._managers: Dict[str, OrgStreamManager] = {}
 
-    async def sync(self):
+    async def sync(self, org_ids: Optional[list] = None):
         """Reconcile running connections against the current org configuration.
-        Call this after any org/event-config change so the admin UI can hot-apply
-        subscription changes without a server restart."""
-        active_orgs = {o["id"]: o for o in orgs_table.search(Q.active == True)}  # noqa: E712
 
-        # stop managers for orgs that were removed/deactivated
+        org_ids limits the restart to those orgs. Inactive or deleted orgs are
+        always stopped. Omit org_ids for a full restart (startup, resync, import).
+        """
+        active_orgs = {o["id"]: o for o in orgs_table.search(Q.active == True)}  # noqa: E712
         for org_id in list(self._managers.keys()):
             if org_id not in active_orgs:
                 await self._managers[org_id].stop()
                 del self._managers[org_id]
-
-        # (re)start managers for active orgs; simplest approach is to restart
-        # whenever sync() is called so channel changes take effect immediately
-        for org_id, org in active_orgs.items():
+        if org_ids is None:
+            targets = active_orgs
+        else:
+            targets = {org_id: active_orgs[org_id] for org_id in org_ids if org_id in active_orgs}
+        for org_id, org in targets.items():
             if org_id in self._managers:
                 await self._managers[org_id].stop()
             manager = OrgStreamManager(org)

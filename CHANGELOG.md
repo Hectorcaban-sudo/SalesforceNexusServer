@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.1 — 2026-10-19
+### Salesforce connections
+- A failed CometD handshake drops the cached Salesforce session and retries with a fresh login. `last_error` stores Salesforce's failure reason instead of the generic handshake message.
+- Cached sessions expire after 90 minutes.
+- Enabling, disabling, or editing one org restarts only that org. Event channel changes restart only the org that owns the channel. Manual resync and config import still restart every active org.
+
 ## 1.4.0 — 2026-10-08
 ### Flow designer and transactions
 - Publish nodes on the continuing path wait until it finishes; `side` / `isolated` edges run as child transactions.

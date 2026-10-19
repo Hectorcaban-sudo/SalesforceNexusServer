@@ -34,7 +34,7 @@ async def create_org(org: OrgCreate):
     record.update({"id": new_id(), "status": "disconnected", "last_error": None, "last_connected_at": None})
     orgs_table.insert(record)
     log_event("info", f"Org '{record['name']}' created", org_id=record["id"])
-    await cometd_manager.sync()
+    await cometd_manager.sync([record["id"]])
     return _mask(record)
 
 
@@ -46,7 +46,7 @@ async def update_org(org_id: str, updates: OrgUpdate):
     data = {k: v for k, v in updates.model_dump().items() if v is not None}
     orgs_table.update(data, Q.id == org_id)
     log_event("info", f"Org '{existing['name']}' updated", org_id=org_id, fields=list(data.keys()))
-    await cometd_manager.sync()
+    await cometd_manager.sync([org_id])
     return _mask(orgs_table.get(Q.id == org_id))
 
 
@@ -57,19 +57,19 @@ async def delete_org(org_id: str):
         raise HTTPException(404, "Org not found")
     orgs_table.remove(Q.id == org_id)
     log_event("warning", f"Org '{existing['name']}' deleted", org_id=org_id)
-    await cometd_manager.sync()
+    await cometd_manager.sync([org_id])
     return {"detail": "deleted"}
 
 
 @router.post("/{org_id}/test-connection", dependencies=[Depends(require_role("operator"))])
-def test_connection(org_id: str):
+async def test_connection(org_id: str):
     from ..salesforce_client import sf_client, SalesforceAuthError
 
     org = orgs_table.get(Q.id == org_id)
     if not org:
         raise HTTPException(404, "Org not found")
     try:
-        session = sf_client.get_session(org, force_refresh=True)
+        session = await sf_client.get_session(org, force_refresh=True)
         return {"detail": "Connection successful", "instance_url": session.instance_url}
     except SalesforceAuthError as exc:
         raise HTTPException(400, str(exc))
