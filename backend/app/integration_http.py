@@ -34,7 +34,12 @@ def _send_webhook(cfg: dict, transaction: dict) -> dict:
     url = cfg["config"]["url"]
     secret = cfg["config"].get("secret", "")
     custom = build_integration_body(cfg, transaction)
-    body_obj = transaction if custom is None else custom
+    if custom is not None:
+        body_obj = custom
+    elif transaction.get("_flow_body") is not None:
+        body_obj = transaction["_flow_body"]
+    else:
+        body_obj = transaction
     body = json.dumps(body_obj, default=str) if not isinstance(body_obj, str) else body_obj
     headers = dict(cfg["config"].get("headers", {}))
     headers.setdefault("Content-Type", "application/json")
@@ -53,7 +58,12 @@ def _send_custom_api(cfg: dict, transaction: dict) -> dict:
     if c.get("auth_header"):
         headers["Authorization"] = c["auth_header"]
     custom = build_integration_body(cfg, transaction)
-    payload = transaction if custom is None else custom
+    if custom is not None:
+        payload = custom
+    elif transaction.get("_flow_body") is not None:
+        payload = transaction["_flow_body"]
+    else:
+        payload = transaction
     if isinstance(payload, str):
         headers.setdefault("Content-Type", "application/json")
         resp = requests.request(method, c["url"], data=payload, headers=headers, timeout=requests_timeout(), verify=False)
@@ -68,6 +78,8 @@ def _send_slack(cfg: dict, transaction: dict) -> dict:
     custom = build_integration_body(cfg, transaction)
     if custom is not None:
         body = custom if isinstance(custom, dict) else {"text": str(custom)}
+    elif transaction.get("_flow_body") is not None:
+        body = transaction["_flow_body"] if isinstance(transaction["_flow_body"], dict) else {"text": str(transaction["_flow_body"])}
     else:
         status_emoji = {"published": "\u2705", "failed": "\u274c"}.get(transaction.get("status"), "\u2139\ufe0f")
         text = (
@@ -88,6 +100,8 @@ def _send_teams(cfg: dict, transaction: dict) -> dict:
     custom = build_integration_body(cfg, transaction)
     if custom is not None:
         card = custom if isinstance(custom, dict) else json.loads(custom)
+    elif transaction.get("_flow_body") is not None:
+        card = transaction["_flow_body"] if isinstance(transaction["_flow_body"], dict) else {"text": str(transaction["_flow_body"])}
     else:
         status = transaction.get("status")
         color = {"published": "33D685", "failed": "FF5470"}.get(status, "3D8BFD")

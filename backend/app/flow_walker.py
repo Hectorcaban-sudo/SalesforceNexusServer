@@ -150,8 +150,11 @@ async def run_flow_graph(
     ctx = FlowWalkResult()
     visited_nodes: set[str] = set()
 
-    async def fire_one_integration(iid: str):
-        rec = tx.get_transaction(transaction_id)
+    async def fire_one_integration(iid: str, body=None):
+        rec = dict(tx.get_transaction(transaction_id) or {})
+        if body is not None:
+            rec["result"] = body
+            rec["_flow_body"] = body
         await asyncio.to_thread(dispatch_integrations, rec, [iid], parent_carrier)
         ctx.fired_integrations.append(iid)
 
@@ -288,7 +291,7 @@ async def run_flow_graph(
                 ctx.publish_payload = ctx.result
         elif ntype == "integration":
             if data.get("refId"):
-                await fire_one_integration(data.get("refId"))
+                await fire_one_integration(data.get("refId"), ctx.result)
         elif ntype == "alert":
             if data.get("refId"):
                 await fire_one_alert(data.get("refId"))
