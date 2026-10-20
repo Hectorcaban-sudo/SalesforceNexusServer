@@ -6,6 +6,8 @@
 - You can drop more than one Transform node. Each one keeps its own Jinja2 template.
 - A transform that does not render valid JSON no longer adds `transformed_text` to the result. The error stays on that branch.
 - `tojson` is not HTML-escaped, and `fromjson` can parse a JSON string such as Chroma `Payload_Json__c`.
+- Example passthrough transform: `examples/mirror_input.j2`.
+- Example that guarantees `replyText` for both DSS and Chroma: `examples/ensure_reply_text.j2`.
 
 ## 1.4.1 — 2026-10-19
 ### Salesforce connections

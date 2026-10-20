@@ -1,0 +1,52 @@
+{# Chroma hits in the same layout Agentforce shows for DSS.
+   Paste into the Transform node on the integration branch.
+   This formats structure only: intro, numbered results, document links.
+   It does not summarize or analyze. That still needs the DSS agent.
+   DSS replyText is passed through unchanged. #}
+{% set ns = namespace(reply='') %}
+{% set raw = result.Payload_Json__c | default('') | fromjson %}
+{% if raw is mapping and raw.replyText %}
+{% set ns.reply = raw.replyText %}
+{% elif raw is sequence and raw is not string and raw is not mapping %}
+{% set items = [] %}
+{% set links = [] %}
+{% for hit in raw %}
+{% if hit is mapping %}
+{% set meta = hit.metadata or {} %}
+{% set title = meta.source or meta.name or meta.LinkFilename or meta.FileLeafRef or ('Result ' ~ loop.index) %}
+{% set link = meta.link or meta.Link or '' %}
+{% set body = hit.document or '' %}
+{% set _ = items.append(loop.index ~ '. **' ~ title ~ ':** ' ~ body) %}
+{% if link %}
+{% set _ = links.append('- [' ~ title ~ '](' ~ link ~ ')') %}
+{% else %}
+{% set _ = links.append('- ' ~ title) %}
+{% endif %}
+{% endif %}
+{% endfor %}
+{% set question = payload.User_Message__c or '' %}
+{% set ns.reply = [
+  "Here's what was found based on your request:",
+  '',
+  'Related Experience:',
+  '',
+  items | join('\n\n'),
+  '',
+  'Document Links:',
+  '',
+  links | join('\n'),
+  '',
+  'These documents were retrieved for: ' ~ question
+] | join('\n') %}
+{% elif result.replyText %}
+{% set ns.reply = result.replyText %}
+{% endif %}
+{
+  "payload": {{ payload | tojson }},
+  "result": {
+    "Conversation_Id__c": {{ (result.Conversation_Id__c or payload.Conversation_Id__c or "") | tojson }},
+    "Status__c": {{ (result.Status__c or "Ok") | tojson }},
+    "Payload_Json__c": {{ {"replyText": ns.reply} | tojson | tojson }}
+  },
+  "replyText": {{ ns.reply | tojson }}
+}

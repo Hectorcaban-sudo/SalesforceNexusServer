@@ -254,10 +254,10 @@ function TracePane({ tx }) {
   return (
     <div className="tx-trace">
       {trace.map((step, i) => (
-        <div key={step.id || i} className="tx-trace-step">
+        <div key={step.id || i} className={`tx-trace-step${step.status === 'failed' ? ' bad' : ''}`}>
           <button type="button" className="tx-trace-head" onClick={() => setOpen(open === i ? null : i)}>
             <strong>{step.label || step.name || step.type}</strong>
-            <span className="muted">{step.status || 'ok'}{step.duration_ms != null ? ` · ${step.duration_ms} ms` : ''}{step.started_at ? ` · ${new Date(step.started_at * 1000).toLocaleTimeString()}` : ''}</span>
+            <span className="muted">{step.status || 'ok'}{step.duration_ms != null ? ` · ${(step.duration_ms / 1000).toFixed(1)} s` : ''}{step.started_at ? ` · ${new Date(step.started_at * 1000).toLocaleTimeString()}` : ''}</span>
           </button>
           {open === i && (
             <div className="tx-trace-body">
