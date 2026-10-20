@@ -51,13 +51,22 @@ def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = 
     headers = {}
     if processor.get("chroma_token"):
         headers[processor.get("chroma_header") or "Authorization"] = processor.get("chroma_token")
-    chroma = chromadb.HttpClient(
-        host=processor.get("host") or "localhost",
-        port=int(processor.get("port") or 8000),
-        ssl=bool(processor.get("ssl")),
-        headers=headers or None,
-    )
-    collection = chroma.get_collection(processor.get("collection") or "")
+    try:
+        chroma = chromadb.HttpClient(
+            host=processor.get("host") or "localhost",
+            port=int(processor.get("port") or 8000),
+            ssl=bool(processor.get("ssl")),
+            headers=headers or None,
+        )
+        collection = chroma.get_collection(processor.get("collection") or "")
+    except KeyError as exc:
+        if str(exc).strip("'") == "_type":
+            raise RuntimeError(
+                "Chroma client/server version mismatch (KeyError: _type). "
+                f"This app uses chromadb {getattr(chromadb, '__version__', 'unknown')}. "
+                "Install the same chromadb version as the Chroma server, then rebuild."
+            ) from exc
+        raise
     n = int(n_results or processor.get("n_results") or 5)
     raw = collection.query(query_embeddings=[vector], n_results=n, include=["documents", "metadatas", "distances"])
     ids = (raw.get("ids") or [[]])[0]
