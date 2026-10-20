@@ -9,6 +9,19 @@ from typing import Optional
 from .logging_config import log_event
 
 
+def _chroma_server_version(host: str, port: int, ssl: bool) -> str:
+    import httpx
+    scheme = "https" if ssl else "http"
+    for path in ("/api/v2/version", "/api/v1/version"):
+        try:
+            resp = httpx.get(f"{scheme}://{host}:{port}{path}", timeout=5.0, verify=False)
+            if resp.status_code == 200 and resp.text.strip():
+                return resp.text.strip().strip('"')
+        except Exception:
+            continue
+    return ""
+
+
 def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = None, model: Optional[dict] = None, transaction_id: Optional[str] = None, query_text: Optional[str] = None, n_results: Optional[int] = None) -> dict:
     from .template_renderer import render_template
 
@@ -51,20 +64,27 @@ def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = 
     headers = {}
     if processor.get("chroma_token"):
         headers[processor.get("chroma_header") or "Authorization"] = processor.get("chroma_token")
+    host = processor.get("host") or "localhost"
+    port = int(processor.get("port") or 8000)
     try:
         chroma = chromadb.HttpClient(
-            host=processor.get("host") or "localhost",
-            port=int(processor.get("port") or 8000),
+            host=host,
+            port=port,
             ssl=bool(processor.get("ssl")),
             headers=headers or None,
         )
         collection = chroma.get_collection(processor.get("collection") or "")
     except KeyError as exc:
         if str(exc).strip("'") == "_type":
+            server_version = _chroma_server_version(host, port, bool(processor.get("ssl")))
+            where = f"{host}:{port}"
+            hint = " In Docker, localhost is the Nexus container, not the Chroma box." if host in ("localhost", "127.0.0.1") else ""
             raise RuntimeError(
                 "Chroma client/server version mismatch (KeyError: _type). "
-                f"This app uses chromadb {getattr(chromadb, '__version__', 'unknown')}. "
-                "Install the same chromadb version as the Chroma server, then rebuild."
+                f"Client chromadb {getattr(chromadb, '__version__', 'unknown')} talking to {where}"
+                f"{f' (server {server_version})' if server_version else ''}. "
+                "The deployed image must use the same chromadb version as that server."
+                + hint
             ) from exc
         raise
     n = int(n_results or processor.get("n_results") or 5)
