@@ -1,7 +1,8 @@
-"""Query a Chroma collection with a company embedding endpoint.
+"""Query Chroma, or Postgres, or both, following the vel_lab paths.
 
-The OpenAI SDK is only the HTTP client for the embedding API (custom base URL,
-ca cert, apikey header). It does not summarize the Chroma hits.
+sql_only: Postgres only, returns drive_id and the row.
+docs_only: embed the question and search Chroma.
+sql_and_docs: Postgres for the project's drive_ids, then Chroma filtered by those ids.
 """
 import json
 import re
@@ -11,46 +12,54 @@ from .logging_config import log_event
 
 _PROJECT_ID = re.compile(r"\b(\d{4,8})\b")
 _LAST_N = re.compile(r"\b(?:last|latest|newest)\s+(\d+)?", re.I)
-_DOC_WORDS = ("modification", "mod", "sow", "pws", "contract", "drawing", "attachment")
+_CONTENT = ("about", "regarding", "summarize", "summary", "explain", "what does", "hvac", "sow", "pws")
 
 
-def _metadata_filter(question: str, processor: dict) -> Optional[dict]:
-    """Build a Chroma where clause from the processor's metadata field list."""
-    text = question or ""
-    lowered = text.lower()
-    fields = processor.get("metadata_fields") or []
-    clauses = []
-    date_field = ""
-    for item in fields:
-        name = (item.get("field") or "").strip()
-        how = (item.get("read_as") or "").strip()
-        hint = (item.get("keyword") or "").strip()
-        if not name or not how:
-            continue
-        if how == "project_number":
-            found = _PROJECT_ID.search(text)
-            if found:
-                clauses.append({name: found.group(1)})
-        elif how == "keyword":
-            words = [w.strip().lower() for w in (hint or "modification,sow,pws,contract").split(",") if w.strip()]
-            for word in words:
-                if word in lowered:
-                    clauses.append({name: {"$contains": word}})
-                    break
-        elif how == "after_word":
-            marker = hint or "by"
-            found = re.search(rf"\b{re.escape(marker)}\s+([A-Za-z0-9][A-Za-z0-9 .'-]*)", text, re.I)
-            if found:
-                clauses.append({name: found.group(1).strip()})
-        elif how == "sort_date":
-            date_field = name
-    if not clauses and not date_field:
-        return None
-    content_words = ("about", "regarding", "describe", "explain", "what is", "how does")
-    if any(w in lowered for w in content_words) and not clauses:
-        return None
-    where = clauses[0] if len(clauses) == 1 else ({"$and": clauses} if clauses else None)
-    return {"where": where, "date_field": date_field, "latest": bool(_LAST_N.search(lowered))}
+def classify_route(question: str) -> str:
+    """Same idea as vel_lab classify_question, without the LLM call."""
+    text = (question or "").lower()
+    has_project = bool(_PROJECT_ID.search(question or ""))
+    wants_content = any(word in text for word in _CONTENT)
+    if has_project and wants_content:
+        return "sql_and_docs"
+    if has_project or any(word in text for word in ("latest", "last", "project", "modified")):
+        return "sql_only"
+    return "docs_only"
+
+
+def _postgres_rows(processor: dict, project_id: Optional[str], limit: int) -> list:
+    from .routers.databases import _load
+    connection = next((r for r in _load() if r.get("id") == processor.get("database_id")), None)
+    if not connection:
+        raise RuntimeError("No database connection selected on this processor")
+    table = processor.get("metadata_table") or "contracts_dataset_meta_prepared"
+    project_col = processor.get("project_column") or "Project"
+    date_col = processor.get("date_column") or "lastModifiedDateTime"
+    drive_col = processor.get("drive_id_column") or "drive_id"
+    import psycopg
+    conn = psycopg.connect(
+        host=connection.get("host"),
+        port=int(connection.get("port") or 5432),
+        dbname=connection.get("database"),
+        user=connection.get("username") or None,
+        password=connection.get("password") or None,
+        sslmode="require" if connection.get("ssl") else "prefer",
+        connect_timeout=8,
+    )
+    try:
+        sql = f'SELECT "{drive_col}", "{project_col}", "{date_col}", link, name FROM "{table}"'
+        params = []
+        if project_id:
+            sql += f' WHERE "{project_col}" = %s'
+            params.append(project_id)
+        sql += f' ORDER BY "{date_col}" DESC NULLS LAST LIMIT %s'
+        params.append(limit)
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    finally:
+        conn.close()
 
 
 def _chroma_server_version(host: str, port: int, ssl: bool) -> str:
@@ -117,36 +126,30 @@ def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = 
             ) from exc
         raise
     n = int(n_results or processor.get("n_results") or 5)
-    meta = _metadata_filter(query_text, processor)
-    if meta and meta.get("where"):
-        _log(f"chroma metadata get where={meta['where']}")
-        raw = collection.get(where=meta["where"], limit=max(n, 25), include=["documents", "metadatas"])
-        ids = raw.get("ids") or []
-        docs = raw.get("documents") or []
-        metas = raw.get("metadatas") or []
-        rows = []
-        for i, hit_id in enumerate(ids):
-            rows.append({
-                "id": hit_id,
-                "document": docs[i] if i < len(docs) else None,
-                "metadata": metas[i] if i < len(metas) else None,
-                "distance": None,
-            })
-        if meta.get("latest") and meta.get("date_field"):
-            field = meta["date_field"]
-            rows.sort(key=lambda r: str((r.get("metadata") or {}).get(field) or ""), reverse=True)
-        matches = rows[:n]
-        _log(f"chroma metadata hits={len(matches)}")
+    route = classify_route(query_text)
+    project = _PROJECT_ID.search(query_text)
+    project_id = project.group(1) if project else None
+    _log(f"route={route} project={project_id}")
+
+    if route == "sql_only":
+        rows = _postgres_rows(processor, project_id, n)
+        matches = [{"id": r.get(processor.get("drive_id_column") or "drive_id"), "document": r.get("name"), "metadata": r, "distance": None} for r in rows]
         return {
             "status": "ok",
-            "path": "query_files",
+            "path": "sql_only",
             "query": query_text,
-            "where": meta["where"],
             "model": None,
             "collection": processor.get("collection"),
             "matches": matches,
-            "steps": [{"name": "metadata filter", "status": "ok", "detail": f"{len(matches)} hits"}],
+            "steps": [{"name": "postgres", "status": "ok", "detail": f"{len(matches)} rows"}],
         }
+
+    file_ids = []
+    if route == "sql_and_docs":
+        rows = _postgres_rows(processor, project_id, 200)
+        drive_col = processor.get("drive_id_column") or "drive_id"
+        file_ids = [str(r.get(drive_col)) for r in rows if r.get(drive_col)]
+        _log(f"postgres drive_ids={len(file_ids)}")
 
     _log(f"embed start model={model.get('name') or slug}")
     import httpx
@@ -163,7 +166,8 @@ def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = 
     finally:
         http_client.close()
 
-    raw = collection.query(query_embeddings=[vector], n_results=n, include=["documents", "metadatas", "distances"])
+    where = {"drive_id": {"$in": file_ids}} if file_ids else None
+    raw = collection.query(query_embeddings=[vector], n_results=n, where=where, include=["documents", "metadatas", "distances"])
     ids = (raw.get("ids") or [[]])[0]
     docs = (raw.get("documents") or [[]])[0]
     metas = (raw.get("metadatas") or [[]])[0]
@@ -179,7 +183,7 @@ def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = 
     _log(f"chroma hits={len(matches)}")
     return {
         "status": "ok",
-        "path": "semantic_search",
+        "path": route,
         "query": query_text,
         "model": model.get("name") or model_id,
         "collection": processor.get("collection"),

@@ -7,6 +7,7 @@
 - "Latest" / "last N" sorts the filtered hits by the configured date field.
 - Other questions still embed and use semantic search.
 - Administration has a Databases page. Postgres connections can be saved and tested. A Chroma processor can select one. Other engines can be added later.
+- Chroma questions follow the vel_lab paths. Metadata-only queries Postgres and returns the drive id. Meaning-only embeds and searches Chroma. A question with both runs Postgres first, then searches Chroma limited to those drive ids.
 
 ## 1.4.2 — 2026-10-19
 ### Flow transform
