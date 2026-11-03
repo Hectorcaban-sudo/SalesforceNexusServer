@@ -129,10 +129,10 @@ export default function Chroma({ scope = 'global' }) {
     ev.preventDefault()
     setRunning(true)
     try {
-      const { data } = await api.post('/chroma/query', { processor_id: testing.id, text: query, n_results: Number(n) })
+      const { data } = await api.post('/chroma/query', { processor_id: testing.id, text: query, n_results: Number(n) }, { timeout: 90000 })
       setResult(data)
       toast((data.matches || []).length + ' hits')
-    } catch (err) { fail(err, 'Query failed') }
+    } catch (err) { fail(err.code === 'ECONNABORTED' ? new Error('Query timed out') : err, 'Query failed') }
     finally { setRunning(false) }
   }
 
