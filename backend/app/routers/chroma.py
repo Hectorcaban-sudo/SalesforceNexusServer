@@ -72,8 +72,11 @@ class ChromaProcessorIn(BaseModel):
     embed_api_key: str = ""
     query_template: str = "{{ payload.User_Message__c or payload.Description or payload }}"
     n_results: int = 5
-    metadata_fields: list = []
     database_id: Optional[str] = None
+    metadata_table: str = "contracts_dataset_meta_prepared"
+    project_column: str = "Project"
+    date_column: str = "lastModifiedDateTime"
+    drive_id_column: str = "drive_id"
     enabled: bool = True
 
 class ChromaTestIn(BaseModel):
