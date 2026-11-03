@@ -39,6 +39,7 @@ from .routers import health as health_router
 from .routers import schedules as schedules_router
 from .routers import pipeline_catalog as pipeline_catalog_router
 from .routers import chroma as chroma_router
+from .routers import databases as databases_router
 from .routers import flow_actions as flow_actions_router
 from .audit import AuditMiddleware
 
@@ -127,6 +128,7 @@ app.include_router(health_router.router)
 app.include_router(schedules_router.router)
 app.include_router(pipeline_catalog_router.router)
 app.include_router(chroma_router.router)
+app.include_router(databases_router.router)
 app.include_router(flow_actions_router.router)
 
 

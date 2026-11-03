@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+### Chroma metadata filter
+- A Chroma processor can name the metadata fields for project, date, author, and document type.
+- Questions that only name those fields ("latest modification for project 1234") use `collection.get(where=...)` and skip the embedding. Several fields are combined with `$and`.
+- "Latest" / "last N" sorts the filtered hits by the configured date field.
+- Other questions still embed and use semantic search.
+- Administration has a Databases page. Postgres connections can be saved and tested. A Chroma processor can select one. Other engines can be added later.
+
 ## 1.4.2 — 2026-10-19
 ### Flow transform
 - A Transform node only changes the result for nodes downstream of it. Sibling branches, including publish, keep the original processor result.
