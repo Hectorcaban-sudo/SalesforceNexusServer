@@ -4,9 +4,46 @@ The OpenAI SDK is only the HTTP client for the embedding API (custom base URL,
 ca cert, apikey header). It does not summarize the Chroma hits.
 """
 import json
+import re
 from typing import Optional
 
 from .logging_config import log_event
+
+_PROJECT_ID = re.compile(r"\b(\d{4,8})\b")
+_LAST_N = re.compile(r"\b(?:last|latest|newest)\s+(\d+)?", re.I)
+_DOC_WORDS = ("modification", "mod", "sow", "pws", "contract", "drawing", "attachment")
+
+
+def _metadata_filter(question: str, processor: dict) -> Optional[dict]:
+    """Build a Chroma where clause when the question is only about metadata."""
+    text = question or ""
+    lowered = text.lower()
+    clauses = []
+    project_field = (processor.get("project_field") or "").strip()
+    date_field = (processor.get("date_field") or "").strip()
+    author_field = (processor.get("author_field") or "").strip()
+    doc_field = (processor.get("doc_type_field") or "").strip()
+
+    project = _PROJECT_ID.search(text)
+    if project and project_field:
+        clauses.append({project_field: project.group(1)})
+    for word in _DOC_WORDS:
+        if word in lowered and doc_field:
+            clauses.append({doc_field: {"$contains": word}})
+            break
+    # Author is only used when the question names one after "by" or "author".
+    author = re.search(r"\b(?:by|author)\s+([A-Z][A-Za-z.'-]+)", text)
+    if author and author_field:
+        clauses.append({author_field: author.group(1)})
+
+    if not clauses:
+        return None
+    # Metadata-only when we found a project/doc/author and no open content words.
+    content_words = ("about", "regarding", "describe", "explain", "what is", "how does")
+    if any(w in lowered for w in content_words) and not project:
+        return None
+    where = clauses[0] if len(clauses) == 1 else {"$and": clauses}
+    return {"where": where, "date_field": date_field, "latest": bool(_LAST_N.search(lowered))}
 
 
 def _chroma_server_version(host: str, port: int, ssl: bool) -> str:
@@ -43,21 +80,6 @@ def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = 
     header_name = processor.get("embed_header_name") or "apikey"
     model_id = model.get("model_id") or processor.get("embed_model_id") or ""
 
-    _log(f"embed start model={model.get('name') or slug}")
-    import httpx
-    import openai
-
-    http_client = httpx.Client(verify=cert_path or True, headers={header_name: api_key} if api_key else None, timeout=60.0)
-    try:
-        client = openai.OpenAI(api_key=api_key or "unused", base_url=base, http_client=http_client)
-        if not model_id:
-            listed = client.models.list()
-            model_id = listed.data[0].id
-        embedded = client.embeddings.create(input=[query_text], model=model_id)
-        vector = embedded.data[0].embedding
-    finally:
-        http_client.close()
-
     _log(f"chroma query collection={processor.get('collection')}")
     import chromadb
 
@@ -88,6 +110,52 @@ def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = 
             ) from exc
         raise
     n = int(n_results or processor.get("n_results") or 5)
+    meta = _metadata_filter(query_text, processor)
+    if meta:
+        _log(f"chroma metadata get where={meta['where']}")
+        raw = collection.get(where=meta["where"], limit=max(n, 25), include=["documents", "metadatas"])
+        ids = raw.get("ids") or []
+        docs = raw.get("documents") or []
+        metas = raw.get("metadatas") or []
+        rows = []
+        for i, hit_id in enumerate(ids):
+            rows.append({
+                "id": hit_id,
+                "document": docs[i] if i < len(docs) else None,
+                "metadata": metas[i] if i < len(metas) else None,
+                "distance": None,
+            })
+        if meta.get("latest") and meta.get("date_field"):
+            field = meta["date_field"]
+            rows.sort(key=lambda r: str((r.get("metadata") or {}).get(field) or ""), reverse=True)
+        matches = rows[:n]
+        _log(f"chroma metadata hits={len(matches)}")
+        return {
+            "status": "ok",
+            "path": "query_files",
+            "query": query_text,
+            "where": meta["where"],
+            "model": None,
+            "collection": processor.get("collection"),
+            "matches": matches,
+            "steps": [{"name": "metadata filter", "status": "ok", "detail": f"{len(matches)} hits"}],
+        }
+
+    _log(f"embed start model={model.get('name') or slug}")
+    import httpx
+    import openai
+
+    http_client = httpx.Client(verify=cert_path or True, headers={header_name: api_key} if api_key else None, timeout=60.0)
+    try:
+        client = openai.OpenAI(api_key=api_key or "unused", base_url=base, http_client=http_client)
+        if not model_id:
+            listed = client.models.list()
+            model_id = listed.data[0].id
+        embedded = client.embeddings.create(input=[query_text], model=model_id)
+        vector = embedded.data[0].embedding
+    finally:
+        http_client.close()
+
     raw = collection.query(query_embeddings=[vector], n_results=n, include=["documents", "metadatas", "distances"])
     ids = (raw.get("ids") or [[]])[0]
     docs = (raw.get("documents") or [[]])[0]
@@ -104,6 +172,7 @@ def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = 
     _log(f"chroma hits={len(matches)}")
     return {
         "status": "ok",
+        "path": "semantic_search",
         "query": query_text,
         "model": model.get("name") or model_id,
         "collection": processor.get("collection"),

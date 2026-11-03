@@ -9,6 +9,7 @@ const EMPTY_PROC = {
   chroma_token: '', cert_id: '', embedding_model_id: '', embed_api_key: '',
   embed_base_url: 'https://devmissionassist.api.us.baesystems.com/{url}/v1',
   embed_header_name: 'apikey', query_template: '{{ payload.User_Message__c }}', n_results: 5,
+  project_field: '', date_field: '', author_field: '', doc_type_field: '',
 }
 
 function Modal({ title, onClose, children, footer }) {
@@ -219,6 +220,13 @@ export default function Chroma({ scope = 'global' }) {
               <div className="field"><label>Chroma token</label><input type="password" placeholder={editing === 'new' ? '' : 'Leave blank to keep'} value={procForm.chroma_token} onChange={(e) => setProcForm({ ...procForm, chroma_token: e.target.value })} /></div>
             </div>
             <div className="field" style={{ marginTop: 8 }}><label>Query template</label><input value={procForm.query_template} onChange={(e) => setProcForm({ ...procForm, query_template: e.target.value })} /></div>
+            <p className="muted" style={{ marginTop: 12 }}>Metadata fields. Used for “latest for project 1234” style questions. Leave blank to always do a semantic search.</p>
+            <div className="form-row-2">
+              <div className="field"><label>Project field</label><input placeholder="Project" value={procForm.project_field || ''} onChange={(e) => setProcForm({ ...procForm, project_field: e.target.value })} /></div>
+              <div className="field"><label>Date field</label><input placeholder="Modified" value={procForm.date_field || ''} onChange={(e) => setProcForm({ ...procForm, date_field: e.target.value })} /></div>
+              <div className="field"><label>Author field</label><input placeholder="Author" value={procForm.author_field || ''} onChange={(e) => setProcForm({ ...procForm, author_field: e.target.value })} /></div>
+              <div className="field"><label>Doc type field</label><input placeholder="doc_type" value={procForm.doc_type_field || ''} onChange={(e) => setProcForm({ ...procForm, doc_type_field: e.target.value })} /></div>
+            </div>
           </form>
         </Modal>
       )}
