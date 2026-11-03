@@ -76,6 +76,7 @@ class ChromaProcessorIn(BaseModel):
     date_field: str = ""
     author_field: str = ""
     doc_type_field: str = ""
+    database_id: Optional[str] = None
     enabled: bool = True
 
 class ChromaTestIn(BaseModel):

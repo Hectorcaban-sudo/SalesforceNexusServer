@@ -34,6 +34,7 @@ const PROJECT_NAV = [
 const ADMIN_NAV = [
   { to: '/projects', label: 'Projects', icon: FolderKanban },
   { to: '/chroma', label: 'Chroma', icon: Database },
+  { to: '/databases', label: 'Databases', icon: Database },
   { to: '/alerts', label: 'Alerts', icon: BellRing },
   { to: '/users', label: 'Users', icon: UsersIcon },
   { to: '/security', label: 'Security', icon: ShieldCheck },
