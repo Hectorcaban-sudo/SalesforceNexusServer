@@ -15,34 +15,41 @@ _DOC_WORDS = ("modification", "mod", "sow", "pws", "contract", "drawing", "attac
 
 
 def _metadata_filter(question: str, processor: dict) -> Optional[dict]:
-    """Build a Chroma where clause when the question is only about metadata."""
+    """Build a Chroma where clause from the processor's metadata field list."""
     text = question or ""
     lowered = text.lower()
+    fields = processor.get("metadata_fields") or []
     clauses = []
-    project_field = (processor.get("project_field") or "").strip()
-    date_field = (processor.get("date_field") or "").strip()
-    author_field = (processor.get("author_field") or "").strip()
-    doc_field = (processor.get("doc_type_field") or "").strip()
-
-    project = _PROJECT_ID.search(text)
-    if project and project_field:
-        clauses.append({project_field: project.group(1)})
-    for word in _DOC_WORDS:
-        if word in lowered and doc_field:
-            clauses.append({doc_field: {"$contains": word}})
-            break
-    # Author is only used when the question names one after "by" or "author".
-    author = re.search(r"\b(?:by|author)\s+([A-Z][A-Za-z.'-]+)", text)
-    if author and author_field:
-        clauses.append({author_field: author.group(1)})
-
-    if not clauses:
+    date_field = ""
+    for item in fields:
+        name = (item.get("field") or "").strip()
+        how = (item.get("read_as") or "").strip()
+        hint = (item.get("keyword") or "").strip()
+        if not name or not how:
+            continue
+        if how == "project_number":
+            found = _PROJECT_ID.search(text)
+            if found:
+                clauses.append({name: found.group(1)})
+        elif how == "keyword":
+            words = [w.strip().lower() for w in (hint or "modification,sow,pws,contract").split(",") if w.strip()]
+            for word in words:
+                if word in lowered:
+                    clauses.append({name: {"$contains": word}})
+                    break
+        elif how == "after_word":
+            marker = hint or "by"
+            found = re.search(rf"\b{re.escape(marker)}\s+([A-Za-z0-9][A-Za-z0-9 .'-]*)", text, re.I)
+            if found:
+                clauses.append({name: found.group(1).strip()})
+        elif how == "sort_date":
+            date_field = name
+    if not clauses and not date_field:
         return None
-    # Metadata-only when we found a project/doc/author and no open content words.
     content_words = ("about", "regarding", "describe", "explain", "what is", "how does")
-    if any(w in lowered for w in content_words) and not project:
+    if any(w in lowered for w in content_words) and not clauses:
         return None
-    where = clauses[0] if len(clauses) == 1 else {"$and": clauses}
+    where = clauses[0] if len(clauses) == 1 else ({"$and": clauses} if clauses else None)
     return {"where": where, "date_field": date_field, "latest": bool(_LAST_N.search(lowered))}
 
 
@@ -111,7 +118,7 @@ def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = 
         raise
     n = int(n_results or processor.get("n_results") or 5)
     meta = _metadata_filter(query_text, processor)
-    if meta:
+    if meta and meta.get("where"):
         _log(f"chroma metadata get where={meta['where']}")
         raw = collection.get(where=meta["where"], limit=max(n, 25), include=["documents", "metadatas"])
         ids = raw.get("ids") or []

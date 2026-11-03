@@ -72,10 +72,7 @@ class ChromaProcessorIn(BaseModel):
     embed_api_key: str = ""
     query_template: str = "{{ payload.User_Message__c or payload.Description or payload }}"
     n_results: int = 5
-    project_field: str = ""
-    date_field: str = ""
-    author_field: str = ""
-    doc_type_field: str = ""
+    metadata_fields: list = []
     database_id: Optional[str] = None
     enabled: bool = True
 
