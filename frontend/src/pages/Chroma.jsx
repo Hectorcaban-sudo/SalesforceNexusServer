@@ -9,7 +9,7 @@ const EMPTY_PROC = {
   chroma_token: '', cert_id: '', embedding_model_id: '', embed_api_key: '',
   embed_base_url: 'https://devmissionassist.api.us.baesystems.com/{url}/v1',
   embed_header_name: 'apikey', query_template: '{{ payload.User_Message__c }}', n_results: 5,
-  project_field: '', date_field: '', author_field: '', doc_type_field: '', database_id: '',
+  metadata_fields: [], database_id: '',
 }
 
 function Modal({ title, onClose, children, footer }) {
@@ -223,14 +223,17 @@ export default function Chroma({ scope = 'global' }) {
               <div className="field"><label>Chroma token</label><input type="password" placeholder={editing === 'new' ? '' : 'Leave blank to keep'} value={procForm.chroma_token} onChange={(e) => setProcForm({ ...procForm, chroma_token: e.target.value })} /></div>
             </div>
             <div className="field" style={{ marginTop: 8 }}><label>Query template</label><input value={procForm.query_template} onChange={(e) => setProcForm({ ...procForm, query_template: e.target.value })} /></div>
-            <p className="muted" style={{ marginTop: 12 }}>Metadata fields. Used for “latest for project 1234” style questions. Leave blank to always do a semantic search.</p>
+            <p className="muted" style={{ marginTop: 12 }}>Metadata fields. Each row maps a Chroma field to how the question names it.</p>
             <div className="field"><label>Database</label><select value={procForm.database_id || ''} onChange={(e) => setProcForm({ ...procForm, database_id: e.target.value })}><option value="">None</option>{databases.map((d) => <option key={d.id} value={d.id}>{d.name} ({d.engine})</option>)}</select></div>
-            <div className="form-row-2">
-              <div className="field"><label>Project field</label><input placeholder="Project" value={procForm.project_field || ''} onChange={(e) => setProcForm({ ...procForm, project_field: e.target.value })} /></div>
-              <div className="field"><label>Date field</label><input placeholder="Modified" value={procForm.date_field || ''} onChange={(e) => setProcForm({ ...procForm, date_field: e.target.value })} /></div>
-              <div className="field"><label>Author field</label><input placeholder="Author" value={procForm.author_field || ''} onChange={(e) => setProcForm({ ...procForm, author_field: e.target.value })} /></div>
-              <div className="field"><label>Doc type field</label><input placeholder="doc_type" value={procForm.doc_type_field || ''} onChange={(e) => setProcForm({ ...procForm, doc_type_field: e.target.value })} /></div>
-            </div>
+            {(procForm.metadata_fields || []).map((row, i) => (
+              <div key={i} className="form-row-2" style={{ alignItems: 'end' }}>
+                <div className="field"><label>Field</label><input placeholder="Project" value={row.field || ''} onChange={(e) => setProcForm({ ...procForm, metadata_fields: procForm.metadata_fields.map((r, j) => j === i ? { ...r, field: e.target.value } : r) })} /></div>
+                <div className="field"><label>Read from question</label><select value={row.read_as || 'project_number'} onChange={(e) => setProcForm({ ...procForm, metadata_fields: procForm.metadata_fields.map((r, j) => j === i ? { ...r, read_as: e.target.value } : r) })}><option value="project_number">Project number</option><option value="keyword">Keyword</option><option value="after_word">After a word</option><option value="sort_date">Sort by date</option></select></div>
+                <div className="field"><label>Keyword or word</label><input placeholder={row.read_as === 'after_word' ? 'by' : 'modification, sow'} value={row.keyword || ''} onChange={(e) => setProcForm({ ...procForm, metadata_fields: procForm.metadata_fields.map((r, j) => j === i ? { ...r, keyword: e.target.value } : r) })} /></div>
+                <button type="button" className="btn btn-sm btn-danger" onClick={() => setProcForm({ ...procForm, metadata_fields: procForm.metadata_fields.filter((_, j) => j !== i) })}>Remove</button>
+              </div>
+            ))}
+            <button type="button" className="btn btn-sm" style={{ marginTop: 8 }} onClick={() => setProcForm({ ...procForm, metadata_fields: [...(procForm.metadata_fields || []), { field: '', read_as: 'project_number', keyword: '' }] })}>+ Add field</button>
           </form>
         </Modal>
       )}

@@ -2,7 +2,7 @@
 
 ## Unreleased
 ### Chroma metadata filter
-- A Chroma processor can name the metadata fields for project, date, author, and document type.
+- A Chroma processor holds a list of metadata fields. Each row is a field name and how to read it from the question: project number, keyword, after a word, or sort by date. Several matches are combined with `$and`.
 - Questions that only name those fields ("latest modification for project 1234") use `collection.get(where=...)` and skip the embedding. Several fields are combined with `$and`.
 - "Latest" / "last N" sorts the filtered hits by the configured date field.
 - Other questions still embed and use semantic search.
