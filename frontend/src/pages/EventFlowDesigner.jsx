@@ -338,6 +338,7 @@ function NodeConfigModal({ node, refs, onClose, onSave, panel }) {
                   <option value="sharepoint_file">SharePoint File</option>
                   <option value="sharepoint_list">SharePoint List</option>
                   <option value="chroma">Chroma</option>
+                  <option value="rest">REST</option>
                   <option value="flow_action">Flow action</option>
                   <option value="pipeline">Pipeline</option>
                 </select>
@@ -356,7 +357,16 @@ function NodeConfigModal({ node, refs, onClose, onSave, panel }) {
                   <label>Chroma processor</label>
                   <select value={data.processorId || ''} onChange={(e) => setData({ ...data, processorId: e.target.value })}>
                     <option value="">Select…</option>
-                    {(refs.chromaProcessors || []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    {(refs.chromaProcessors || []).map((p) => <option key={p.id} value={p.id}>{p.name} ({p.scope || 'global'})</option>)}
+                  </select>
+                </div>
+              )}
+              {data.processingMode === 'rest' && (
+                <div className="field">
+                  <label>REST processor</label>
+                  <select value={data.processorId || ''} onChange={(e) => setData({ ...data, processorId: e.target.value })}>
+                    <option value="">Select…</option>
+                    {(refs.restProcessors || []).map((p) => <option key={p.id} value={p.id}>{p.name} ({p.scope || 'global'})</option>)}
                   </select>
                 </div>
               )}
@@ -866,7 +876,7 @@ export default function EventFlowDesigner() {
   const { projectId } = useProject()
   const [refs, setRefs] = useState({
     rules: [], processors: [], pubs: [], integrations: [], alerts: [],
-    spFileActions: [], spListActions: [], chromaProcessors: [], flowActions: [],
+    spFileActions: [], spListActions: [], chromaProcessors: [], restProcessors: [], flowActions: [],
   })
 
   useEffect(() => {
@@ -876,7 +886,7 @@ export default function EventFlowDesigner() {
       try {
         const pid = projectId ? { project_id: projectId } : {}
         const lib = projectId ? { project_id: projectId, include_global: true } : {}
-        const [c, r, p, i, a, sf, sl, cp] = await Promise.all([
+        const [c, r, p, i, a, sf, sl, cp, rp] = await Promise.all([
           api.get('/events', { params: pid }),
           api.get('/rules', { params: lib }),
           api.get('/processors', { params: lib }),
@@ -885,6 +895,7 @@ export default function EventFlowDesigner() {
           api.get('/sharepoint/file-actions', { params: pid }).catch(() => ({ data: [] })),
           api.get('/sharepoint/list-actions', { params: pid }).catch(() => ({ data: [] })),
           api.get('/chroma/processors', { params: pid }).catch(() => ({ data: [] })),
+          api.get('/rest/processors', { params: pid }).catch(() => ({ data: [] })),
         ])
         if (cancelled) return
         if (!eventId && pipelineId) {
@@ -908,7 +919,7 @@ export default function EventFlowDesigner() {
             pubs: (c.data || []).filter((x) => x.direction === 'publish'),
             integrations: i.data || [], alerts: a.data || [],
             spFileActions: sf.data || [], spListActions: sl.data || [],
-            chromaProcessors: cp.data || [], flowActions: fa.data || [],
+            chromaProcessors: cp.data || [], restProcessors: rp.data || [], flowActions: fa.data || [],
           })
           return
         }
@@ -934,6 +945,7 @@ export default function EventFlowDesigner() {
           spFileActions: sf.data || [],
           spListActions: sl.data || [],
           chromaProcessors: cp.data || [],
+          restProcessors: rp.data || [],
           flowActions: (await api.get('/flow-actions').catch(() => ({ data: [] }))).data || [],
         })
       } catch (err) {

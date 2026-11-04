@@ -1,6 +1,13 @@
 # Changelog
 
 ## Unreleased
+### REST processors
+- Administration and each project have a REST processor collection. Global ones are shared. Project ones belong to that project.
+- A processor has a URL, method, timeout, custom headers, a verify-SSL switch, and a Jinja body template.
+- Test sends a sample payload and shows the response. It does not start a pipeline.
+- A flow processor node can select REST, the same way it selects Chroma. The response becomes Payload_Json__c.
+- Processors in the sidebar is one expandable group: Python, Chroma, REST.
+
 ### Chroma metadata filter
 - A Chroma processor holds a list of metadata fields. Each row is a field name and how to read it from the question: project number, keyword, after a word, or sort by date. Several matches are combined with `$and`.
 - Questions that only name those fields ("latest modification for project 1234") use `collection.get(where=...)` and skip the embedding. Several fields are combined with `$and`.

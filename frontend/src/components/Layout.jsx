@@ -26,14 +26,21 @@ const PROJECT_NAV = [
   { to: '/integrations', label: 'Integrations', icon: Share2, admin: true },
   { to: '/sharepoint', label: 'SharePoint', icon: Cloud, admin: true },
   { to: '/flow-actions', label: 'Flow actions', icon: GitBranch, admin: true },
-  { to: '/chroma/project', label: 'Chroma processors', icon: Database, admin: true },
-  { to: '/processors', label: 'Processors', icon: Cpu, admin: true },
+  { id: 'processors', label: 'Processors', icon: Cpu, children: [
+    { to: '/processors', label: 'Python' },
+    { to: '/chroma/project', label: 'Chroma' },
+    { to: '/rest/project', label: 'REST' },
+  ] },
   { to: '/rules', label: 'Rules', icon: GitBranch, admin: true },
 ]
 
 const ADMIN_NAV = [
   { to: '/projects', label: 'Projects', icon: FolderKanban },
-  { to: '/chroma', label: 'Chroma', icon: Database },
+  { id: 'processors', label: 'Processors', icon: Cpu, children: [
+    { to: '/processors', label: 'Python' },
+    { to: '/chroma', label: 'Chroma' },
+    { to: '/rest', label: 'REST' },
+  ] },
   { to: '/databases', label: 'Databases', icon: Database },
   { to: '/alerts', label: 'Alerts', icon: BellRing },
   { to: '/users', label: 'Users', icon: UsersIcon },
@@ -62,9 +69,24 @@ function NavSection({ id, label, items, collapsed, onToggle }) {
         <span style={{ opacity: 0.7, display: 'inline-flex' }}>{collapsed[id] ? <Plus size={12} /> : <Minus size={12} />}</span>
       </button>
       {!collapsed[id] && items.map((item) => (
-        <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}>
-          <item.icon />{item.label}
-        </NavLink>
+        item.children ? (
+          <div key={item.id || item.label}>
+            <button type="button" className="nav-item" onClick={() => onToggle(id + '-' + (item.id || item.label))}
+              style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
+              <item.icon />{item.label}
+              <span style={{ marginLeft: 'auto', opacity: 0.7 }}>{collapsed[id + '-' + (item.id || item.label)] ? <Plus size={11} /> : <Minus size={11} />}</span>
+            </button>
+            {!collapsed[id + '-' + (item.id || item.label)] && item.children.map((child) => (
+              <NavLink key={child.to} to={child.to} className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')} style={{ paddingLeft: 36 }}>
+                {child.label}
+              </NavLink>
+            ))}
+          </div>
+        ) : (
+          <NavLink key={item.to} to={item.to} end={item.end} className={({ isActive }) => 'nav-item' + (isActive ? ' active' : '')}>
+            <item.icon />{item.label}
+          </NavLink>
+        )
       ))}
     </div>
   )
