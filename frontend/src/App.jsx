@@ -19,6 +19,7 @@ import FlowActions from './pages/FlowActions'
 import Projects from './pages/Projects'
 import Processors from './pages/Processors'
 import Chroma from './pages/Chroma'
+import Rest from './pages/Rest'
 import Databases from './pages/Databases'
 import Rules from './pages/Rules'
 import PipelineCatalog from './pages/PipelineCatalog'
@@ -86,8 +87,10 @@ function AppRoutes() {
         <Route path="/processors" element={<RequireAuth><RequireRole role="admin"><Processors /></RequireRole></RequireAuth>} />
         <Route path="/flow-actions" element={<RequireAuth><RequireRole role="admin"><FlowActions /></RequireRole></RequireAuth>} />
         <Route path="/chroma" element={<RequireAuth><RequireRole role="admin"><Chroma scope="global" /></RequireRole></RequireAuth>} />
+        <Route path="/rest" element={<RequireAuth><RequireRole role="admin"><Rest scope="global" /></RequireRole></RequireAuth>} />
         <Route path="/databases" element={<RequireAuth><RequireRole role="admin"><Databases /></RequireRole></RequireAuth>} />
         <Route path="/chroma/project" element={<RequireAuth><RequireRole role="admin"><Chroma scope="project" /></RequireRole></RequireAuth>} />
+        <Route path="/rest/project" element={<RequireAuth><RequireRole role="admin"><Rest scope="project" /></RequireRole></RequireAuth>} />
         <Route path="/rules" element={<RequireAuth><RequireRole role="admin"><Rules /></RequireRole></RequireAuth>} />
         <Route path="/transactions" element={<RequireAuth><Transactions /></RequireAuth>} />
         <Route path="/logs" element={<RequireAuth><Logs /></RequireAuth>} />

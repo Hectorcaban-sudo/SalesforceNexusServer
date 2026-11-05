@@ -1,13 +1,20 @@
 # Changelog
 
 ## Unreleased
+### REST processors
+- Administration and each project have a REST processor collection. Global ones are shared. Project ones belong to that project.
+- A processor has a URL, method, timeout, custom headers, a verify-SSL switch, and a Jinja body template.
+- Test sends a sample payload and shows the response. It does not start a pipeline.
+- A flow processor node can select REST, the same way it selects Chroma. The response becomes Payload_Json__c.
+- Processors in the sidebar is one expandable group: Python, Chroma, REST.
+
 ### Chroma metadata filter
 - A Chroma processor holds a list of metadata fields. Each row is a field name and how to read it from the question: project number, keyword, after a word, or sort by date. Several matches are combined with `$and`.
 - Questions that only name those fields ("latest modification for project 1234") use `collection.get(where=...)` and skip the embedding. Several fields are combined with `$and`.
 - "Latest" / "last N" sorts the filtered hits by the configured date field.
 - Other questions still embed and use semantic search.
 - Administration has a Databases page. Postgres connections can be saved and tested. A Chroma processor can select one. Other engines can be added later.
-- Chroma questions follow the vel_lab paths. Metadata-only queries Postgres and returns the drive id. Meaning-only embeds and searches Chroma. A question with both runs Postgres first, then searches Chroma limited to those drive ids.
+- A metadata-only question no longer opens Chroma first. Postgres uses a 15s statement timeout, and Chroma open/query give up after 20s/30s instead of leaving the test on Running.
 
 ## 1.4.2 — 2026-10-19
 ### Flow transform

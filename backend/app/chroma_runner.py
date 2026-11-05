@@ -45,6 +45,7 @@ def _postgres_rows(processor: dict, project_id: Optional[str], limit: int) -> li
         password=connection.get("password") or None,
         sslmode="require" if connection.get("ssl") else "prefer",
         connect_timeout=8,
+        options="-c statement_timeout=15000",
     )
     try:
         sql = f'SELECT "{drive_col}", "{project_col}", "{date_col}", link, name FROM "{table}"'
@@ -75,6 +76,19 @@ def _chroma_server_version(host: str, port: int, ssl: bool) -> str:
     return ""
 
 
+def _call_with_timeout(fn, seconds: int, label: str):
+    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import TimeoutError as FuturesTimeout
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        return pool.submit(fn).result(timeout=seconds)
+    except FuturesTimeout as exc:
+        raise RuntimeError(f"{label} timed out after {seconds}s") from exc
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
 def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = None, model: Optional[dict] = None, transaction_id: Optional[str] = None, query_text: Optional[str] = None, n_results: Optional[int] = None) -> dict:
     from .template_renderer import render_template
 
@@ -97,34 +111,6 @@ def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = 
     model_id = model.get("model_id") or processor.get("embed_model_id") or ""
 
     _log(f"chroma query collection={processor.get('collection')}")
-    import chromadb
-
-    headers = {}
-    if processor.get("chroma_token"):
-        headers[processor.get("chroma_header") or "Authorization"] = processor.get("chroma_token")
-    host = processor.get("host") or "localhost"
-    port = int(processor.get("port") or 8000)
-    try:
-        chroma = chromadb.HttpClient(
-            host=host,
-            port=port,
-            ssl=bool(processor.get("ssl")),
-            headers=headers or None,
-        )
-        collection = chroma.get_collection(processor.get("collection") or "")
-    except KeyError as exc:
-        if str(exc).strip("'") == "_type":
-            server_version = _chroma_server_version(host, port, bool(processor.get("ssl")))
-            where = f"{host}:{port}"
-            hint = " In Docker, localhost is the Nexus container, not the Chroma box." if host in ("localhost", "127.0.0.1") else ""
-            raise RuntimeError(
-                "Chroma client/server version mismatch (KeyError: _type). "
-                f"Client chromadb {getattr(chromadb, '__version__', 'unknown')} talking to {where}"
-                f"{f' (server {server_version})' if server_version else ''}. "
-                "The deployed image must use the same chromadb version as that server."
-                + hint
-            ) from exc
-        raise
     n = int(n_results or processor.get("n_results") or 5)
     route = classify_route(query_text)
     project = _PROJECT_ID.search(query_text)
@@ -143,6 +129,39 @@ def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = 
             "matches": matches,
             "steps": [{"name": "postgres", "status": "ok", "detail": f"{len(matches)} rows"}],
         }
+
+    import chromadb
+
+    headers = {}
+    if processor.get("chroma_token"):
+        headers[processor.get("chroma_header") or "Authorization"] = processor.get("chroma_token")
+    host = processor.get("host") or "localhost"
+    port = int(processor.get("port") or 8000)
+
+    def _open():
+        client = chromadb.HttpClient(
+            host=host,
+            port=port,
+            ssl=bool(processor.get("ssl")),
+            headers=headers or None,
+        )
+        return client.get_collection(processor.get("collection") or "")
+
+    try:
+        collection = _call_with_timeout(_open, 20, f"Chroma {host}:{port}")
+    except KeyError as exc:
+        if str(exc).strip("'") == "_type":
+            server_version = _chroma_server_version(host, port, bool(processor.get("ssl")))
+            where = f"{host}:{port}"
+            hint = " In Docker, localhost is the Nexus container, not the Chroma box." if host in ("localhost", "127.0.0.1") else ""
+            raise RuntimeError(
+                "Chroma client/server version mismatch (KeyError: _type). "
+                f"Client chromadb {getattr(chromadb, '__version__', 'unknown')} talking to {where}"
+                f"{f' (server {server_version})' if server_version else ''}. "
+                "The deployed image must use the same chromadb version as that server."
+                + hint
+            ) from exc
+        raise
 
     file_ids = []
     if route == "sql_and_docs":
@@ -167,7 +186,11 @@ def run_chroma_query(processor: dict, payload: dict, cert_path: Optional[str] = 
         http_client.close()
 
     where = {"drive_id": {"$in": file_ids}} if file_ids else None
-    raw = collection.query(query_embeddings=[vector], n_results=n, where=where, include=["documents", "metadatas", "distances"])
+    raw = _call_with_timeout(
+        lambda: collection.query(query_embeddings=[vector], n_results=n, where=where, include=["documents", "metadatas", "distances"]),
+        30,
+        "Chroma query",
+    )
     ids = (raw.get("ids") or [[]])[0]
     docs = (raw.get("documents") or [[]])[0]
     metas = (raw.get("metadatas") or [[]])[0]
