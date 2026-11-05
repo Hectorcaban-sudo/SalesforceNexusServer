@@ -1,0 +1,52 @@
+{
+  "payload": {
+    "Conversation_Id__c": "-4463947122527435884",
+    "User_Message__c": "Retrieve project details for 4130605",
+    "CreatedById": "005t0000002hybhAAA",
+    "CreatedDate": "2026-11-04T18:35:33.344Z",
+    "History_Json__c": null,
+    "User_Id__c": "005t0000002hybhAAA",
+    "Mode__c": "chat"
+  },
+  "result": {
+    "Conversation_Id__c": "-4463947122527435884",
+    "Status__c": "Ok",
+    "Payload_Json__c": "[{\"document\": \"PO 12311429\", \"metadata\": {\"drive_id\": \"01VS5NGNH23SMJNUOSVNEJ2J3OE2K7WHZO\", \"Project\": \"4130605\", \"lastModifiedDateTime\": \"2025-03-13T22:13:52Z\", \"link\": \"https://baesystemsus.sharepoint.us/sites/IS-HQ_DocPortal/Contracts%20Library/PO%2012311429.pdf\", \"name\": \"PO 12311429\"}}, {\"document\": \"PO 12311429\", \"metadata\": {\"drive_id\": \"01VS5NGNH23SMJNUOSVNEJ2J3OE2K7WHZO\", \"Project\": \"4130605\", \"lastModifiedDateTime\": \"2025-03-13T22:13:52Z\", \"link\": \"https://baesystemsus.sharepoint.us/sites/IS-HQ_DocPortal/Contracts%20Library/PO%2012311429.pdf\", \"name\": \"PO 12311429\"}}]",
+    "_steps": [
+      {
+        "name": "postgres",
+        "status": "ok",
+        "detail": "2 rows"
+      }
+    ],
+    "_chroma": {
+      "status": "ok",
+      "matches": [
+        {
+          "id": "01VS5NGNH23SMJNUOSVNEJ2J3OE2K7WHZO",
+          "document": "PO 12311429",
+          "metadata": {
+            "drive_id": "01VS5NGNH23SMJNUOSVNEJ2J3OE2K7WHZO",
+            "Project": "4130605",
+            "lastModifiedDateTime": "2025-03-13T22:13:52Z",
+            "link": "https://baesystemsus.sharepoint.us/sites/IS-HQ_DocPortal/Contracts%20Library/PO%2012311429.pdf",
+            "name": "PO 12311429"
+          },
+          "distance": null
+        },
+        {
+          "id": "01VS5NGNH23SMJNUOSVNEJ2J3OE2K7WHZO",
+          "document": "PO 12311429",
+          "metadata": {
+            "drive_id": "01VS5NGNH23SMJNUOSVNEJ2J3OE2K7WHZO",
+            "Project": "4130605",
+            "lastModifiedDateTime": "2025-03-13T22:13:52Z",
+            "link": "https://baesystemsus.sharepoint.us/sites/IS-HQ_DocPortal/Contracts%20Library/PO%2012311429.pdf",
+            "name": "PO 12311429"
+          },
+          "distance": null
+        }
+      ]
+    }
+  }
+}
