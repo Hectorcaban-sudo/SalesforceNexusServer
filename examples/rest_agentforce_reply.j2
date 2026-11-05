@@ -1,0 +1,33 @@
+{# REST processor -> Agentforce replyText.
+   Paste into the Transform node after the REST processor.
+   Payload_Json__c is a JSON string: { answer, route, sources: [{name, link}] }.
+   answer becomes replyText. sources are appended as markdown links. #}
+{% set ns = namespace(reply='') %}
+{% set raw = result.Payload_Json__c | default('') | fromjson %}
+{% if raw is mapping and raw.answer %}
+{% set links = [] %}
+{% for src in raw.sources or [] %}
+{% if src is mapping and src.link %}
+{% set _ = links.append('- [' ~ (src.name or src.link) ~ '](' ~ src.link ~ ')') %}
+{% elif src is mapping and src.name %}
+{% set _ = links.append('- ' ~ src.name) %}
+{% endif %}
+{% endfor %}
+{% set ns.reply = raw.answer %}
+{% if links %}
+{% set ns.reply = ns.reply ~ '\n\nDocument Links:\n\n' ~ (links | join('\n')) %}
+{% endif %}
+{% elif raw is mapping and raw.replyText %}
+{% set ns.reply = raw.replyText %}
+{% elif result.replyText %}
+{% set ns.reply = result.replyText %}
+{% endif %}
+{
+  "payload": {{ payload | tojson }},
+  "result": {
+    "Conversation_Id__c": {{ (result.Conversation_Id__c or payload.Conversation_Id__c or "") | tojson }},
+    "Status__c": {{ (result.Status__c or "Ok") | tojson }},
+    "Payload_Json__c": {{ {"replyText": ns.reply} | tojson | tojson }}
+  },
+  "replyText": {{ ns.reply | tojson }}
+}
