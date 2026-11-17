@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { ShieldCheck, ScrollText, KeyRound, LockOpen, AlertTriangle } from 'lucide-react'
+import { ShieldCheck, ScrollText, KeyRound, LockOpen, AlertTriangle, Plus, Trash2 } from 'lucide-react'
 import api from '../lib/api'
 import { useToast } from '../lib/ToastContext'
 
 const TABS = [
   { key: 'auth', label: 'Authentication Monitoring', icon: KeyRound },
   { key: 'actions', label: 'Admin Action Audit Log', icon: ScrollText },
+  { key: 'clients', label: 'API clients', icon: KeyRound },
 ]
 
 const EVENT_LABELS = {
@@ -35,21 +36,30 @@ export default function Security() {
   const [authEvents, setAuthEvents] = useState([])
   const [actions, setActions] = useState([])
   const [eventFilter, setEventFilter] = useState('')
+  const [clients, setClients] = useState([])
+  const [projects, setProjects] = useState([])
+  const [name, setName] = useState('')
+  const [projectId, setProjectId] = useState('')
+  const [issued, setIssued] = useState(null)
 
   async function load() {
     const [s, a] = await Promise.all([
       api.get('/audit/summary'),
       tab === 'auth'
         ? api.get('/audit/auth-events', { params: { event_type: eventFilter || undefined } })
-        : api.get('/audit/actions'),
+        : tab === 'actions'
+          ? api.get('/audit/actions')
+          : api.get('/api-clients'),
     ])
     setSummary(s.data)
     if (tab === 'auth') setAuthEvents(a.data)
-    else setActions(a.data)
+    else if (tab === 'actions') setActions(a.data)
+    else setClients(a.data || [])
   }
 
   useEffect(() => {
     load()
+    if (tab === 'clients') api.get('/projects').then((r) => setProjects(r.data || [])).catch(() => {})
     const id = setInterval(load, 8000)
     return () => clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -62,6 +72,39 @@ export default function Security() {
       load()
     } catch (err) {
       toast(err?.response?.data?.detail || 'Failed to unlock user', { kind: 'error' })
+    }
+  }
+
+  async function createClient(ev) {
+    ev.preventDefault()
+    try {
+      const { data } = await api.post('/api-clients', { name, project_id: projectId || null })
+      setIssued(data)
+      setName('')
+      toast('Client created. Copy the secret now.')
+      load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to create client', { kind: 'error' })
+    }
+  }
+
+  async function toggle(c) {
+    try {
+      await api.post(`/api-clients/${c.id}/${c.enabled ? 'disable' : 'enable'}`)
+      load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Failed to update client', { kind: 'error' })
+    }
+  }
+
+  async function remove(c) {
+    if (!confirm('Delete ' + c.name + '?')) return
+    try {
+      await api.delete('/api-clients/' + c.id)
+      toast('Client deleted')
+      load()
+    } catch (err) {
+      toast(err?.response?.data?.detail || 'Delete failed', { kind: 'error' })
     }
   }
 
@@ -183,6 +226,50 @@ export default function Security() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {tab === 'clients' && (
+        <div className="panel">
+          <div className="panel-header"><h3><KeyRound size={15} /> API clients</h3></div>
+          <div className="panel-body">
+            <p className="muted">Send these as X-Consumer-Key and X-Consumer-Secret on POST /api/execute/{'{project}'}/pipeline/{'{pipeline_id}'}. A client can be limited to one project.</p>
+            <form onSubmit={createClient} className="form-row-2" style={{ marginTop: 12 }}>
+              <div className="field"><label>Name</label><input value={name} onChange={(e) => setName(e.target.value)} required /></div>
+              <div className="field"><label>Project</label>
+                <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+                  <option value="">Any project</option>
+                  {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+              <div><button className="btn btn-primary"><Plus size={13} /> Create client</button></div>
+            </form>
+            {issued && (
+              <div className="panel" style={{ marginTop: 12, padding: 12 }}>
+                <p>Copy the secret now. It is not shown again.</p>
+                <div className="mono">Key: {issued.consumer_key}</div>
+                <div className="mono">Secret: {issued.consumer_secret}</div>
+              </div>
+            )}
+            <table style={{ marginTop: 16 }}>
+              <thead><tr><th>Name</th><th>Consumer key</th><th>Project</th><th>Status</th><th></th></tr></thead>
+              <tbody>
+                {clients.length === 0 && <tr><td colSpan={5} className="empty-state">No clients yet</td></tr>}
+                {clients.map((c) => (
+                  <tr key={c.id}>
+                    <td>{c.name}</td>
+                    <td className="mono">{c.consumer_key}</td>
+                    <td>{projects.find((p) => p.id === c.project_id)?.name || (c.project_id ? c.project_id : 'Any')}</td>
+                    <td><span className={`badge ${c.enabled ? 'badge-green' : 'badge-gray'}`}>{c.enabled ? 'Enabled' : 'Disabled'}</span></td>
+                    <td>
+                      <button className="btn btn-sm" onClick={() => toggle(c)}>{c.enabled ? 'Disable' : 'Enable'}</button>
+                      <button className="btn btn-sm btn-danger" onClick={() => remove(c)}><Trash2 size={13} /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
