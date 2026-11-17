@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+### Execute a pipeline
+- `POST /api/execute/pipeline` runs a saved pipeline and returns its result. Pass `pipeline_id` or `name`, plus a `payload`. Optional `org_id`.
+- The call is recorded as a transaction. The response includes that id and the node trace.
+
 ### REST processors
 - Administration and each project have a REST processor collection. Global ones are shared. Project ones belong to that project.
 - A processor has a URL, method, timeout, custom headers, a verify-SSL switch, and a Jinja body template.
