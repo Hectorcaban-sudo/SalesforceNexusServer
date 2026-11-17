@@ -2,7 +2,7 @@
 
 ## Unreleased
 ### Execute a pipeline
-- `POST /api/execute/pipeline` runs a saved pipeline and returns its result. Pass `pipeline_id` or `name`, plus a `payload`. Optional `org_id`.
+- `POST /api/execute/{project}/pipeline/{pipeline_id}` runs a saved pipeline in that project and returns its result. `project` is an id or a name. Body is the payload, plus an optional `org_id`.
 - The call is recorded as a transaction. The response includes that id and the node trace.
 
 ### REST processors
