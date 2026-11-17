@@ -12,6 +12,7 @@ import Logs from './pages/Logs'
 import AdminConfig from './pages/AdminConfig'
 import Users from './pages/Users'
 import Security from './pages/Security'
+import ApiClients from './pages/ApiClients'
 import Integrations from './pages/Integrations'
 import Alerts from './pages/Alerts'
 import SharePoint from './pages/SharePoint'
@@ -97,6 +98,7 @@ function AppRoutes() {
         <Route path="/admin-config" element={<RequireAuth><RequireRole role="admin"><AdminConfig /></RequireRole></RequireAuth>} />
         <Route path="/users" element={<RequireAuth><RequireRole role="admin"><Users /></RequireRole></RequireAuth>} />
         <Route path="/security" element={<RequireAuth><RequireRole role="admin"><Security /></RequireRole></RequireAuth>} />
+        <Route path="/api-clients" element={<RequireAuth><RequireRole role="admin"><ApiClients /></RequireRole></RequireAuth>} />
         <Route path="/integrations" element={<RequireAuth><RequireRole role="admin"><Integrations /></RequireRole></RequireAuth>} />
         <Route path="/alerts" element={<RequireAuth><RequireRole role="admin"><Alerts /></RequireRole></RequireAuth>} />
         <Route path="/sharepoint" element={<RequireAuth><RequireRole role="admin"><SharePoint /></RequireRole></RequireAuth>} />

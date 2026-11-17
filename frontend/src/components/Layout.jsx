@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Building2, Radio, ListTree, ScrollText, Search, LogOut, Settings,
   Users as UsersIcon, Share2, BellRing, ShieldCheck, Cloud,
-  FolderKanban, Cpu, GitBranch, Plus, Minus, Bell, CircleHelp, Workflow, Clock, Database, LayoutTemplate,
+  FolderKanban, Cpu, GitBranch, Plus, Minus, Bell, CircleHelp, Workflow, Clock, Database, LayoutTemplate, KeyRound,
 } from 'lucide-react'
 import api, { logout } from '../lib/api'
 import { useAuth, hasRole } from '../lib/AuthContext'
@@ -45,6 +45,7 @@ const ADMIN_NAV = [
   { to: '/alerts', label: 'Alerts', icon: BellRing },
   { to: '/users', label: 'Users', icon: UsersIcon },
   { to: '/security', label: 'Security', icon: ShieldCheck },
+  { to: '/api-clients', label: 'API clients', icon: KeyRound },
   { to: '/admin-config', label: 'Admin Configuration', icon: Settings },
 ]
 
