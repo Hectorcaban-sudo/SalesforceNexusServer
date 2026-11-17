@@ -39,6 +39,16 @@ def _resolve_pipeline(pipeline_id: Optional[str], name: Optional[str]):
     raise HTTPException(400, "Pass pipeline_id or name")
 
 
+def _child_trace(parent_id: str) -> list:
+    from ..database import transactions_table, Q
+
+    children = transactions_table.search(Q.parent_transaction_id == parent_id) or []
+    if not children:
+        return []
+    child = sorted(children, key=lambda r: r.get("created_at") or 0, reverse=True)[0]
+    return (child.get("result") or {}).get("flow_trace") or child.get("flow_trace") or []
+
+
 @router.post("/dss-client")
 def execute_dss_client(req: ExecuteRequest):
     from ..dss_runner import run_dss_client
@@ -90,8 +100,6 @@ async def execute_pipeline(req: ExecutePipelineRequest):
     )
     try:
         result = await run_subflow(pipeline_id, req.payload or {}, org_id, parent["id"])
-        child = tx.get_transaction(parent["id"]) or {}
-        # run_subflow stores the walk on its own child; the parent is the API call.
         tx.update_transaction(parent["id"], status="published", result=result or {})
         log_event("info", f"Direct execute: pipeline {row.get('name') or pipeline_id} finished", transaction_id=parent["id"])
         return {
@@ -100,7 +108,7 @@ async def execute_pipeline(req: ExecutePipelineRequest):
             "pipeline_name": row.get("name"),
             "transaction_id": parent["id"],
             "result": result or {},
-            "trace": (child.get("result") or {}).get("flow_trace") or [],
+            "trace": _child_trace(parent["id"]),
         }
     except Exception as exc:
         tx.update_transaction(parent["id"], status="failed", error=str(exc))
