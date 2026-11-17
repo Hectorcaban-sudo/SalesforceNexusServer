@@ -1,13 +1,15 @@
 """Direct execution endpoints for DSS, Langflow, and a saved pipeline."""
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 
-from ..auth import require_role
+from ..auth import get_current_user, require_role
 from ..logging_config import log_event
 
-router = APIRouter(prefix="/api/execute", tags=["execute"], dependencies=[Depends(require_role("operator"))])
+router = APIRouter(prefix="/api/execute", tags=["execute"])
+optional_bearer = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 
 class ExecuteRequest(BaseModel):
@@ -17,6 +19,28 @@ class ExecuteRequest(BaseModel):
 class ExecutePipelineRequest(BaseModel):
     payload: dict = {}
     org_id: Optional[str] = None
+
+
+async def require_operator_or_client(
+    request: Request,
+    token: Optional[str] = Depends(optional_bearer),
+) -> dict:
+    """A login token with operator or higher, or a consumer key and secret."""
+    key = (request.headers.get("x-consumer-key") or "").strip()
+    secret = (request.headers.get("x-consumer-secret") or "").strip()
+    if key or secret:
+        from ..api_clients import verify_client
+        client = verify_client(key, secret)
+        if not client:
+            raise HTTPException(401, "Invalid consumer key or secret")
+        return {"kind": "client", "client": client}
+    if not token:
+        raise HTTPException(401, "Missing credentials")
+    user = await get_current_user(token)
+    rank = {"viewer": 0, "operator": 1, "admin": 2}.get(user.get("role", "viewer"), -1)
+    if rank < 1:
+        raise HTTPException(403, "This action requires the 'operator' role or higher")
+    return {"kind": "user", "user": user}
 
 
 def _resolve_project(project: str):
@@ -58,7 +82,7 @@ def _child_trace(parent_id: str) -> list:
     return (child.get("result") or {}).get("flow_trace") or child.get("flow_trace") or []
 
 
-@router.post("/dss-client")
+@router.post("/dss-client", dependencies=[Depends(require_role("operator"))])
 def execute_dss_client(req: ExecuteRequest):
     from ..dss_runner import run_dss_client
 
@@ -71,7 +95,7 @@ def execute_dss_client(req: ExecuteRequest):
         raise HTTPException(400, str(exc))
 
 
-@router.post("/langflow")
+@router.post("/langflow", dependencies=[Depends(require_role("operator"))])
 async def execute_langflow(req: ExecuteRequest):
     from ..worker import run_langflow
 
@@ -85,16 +109,25 @@ async def execute_langflow(req: ExecuteRequest):
 
 
 @router.post("/{project}/pipeline/{pipeline_id}")
-async def execute_pipeline(project: str, pipeline_id: str, req: ExecutePipelineRequest):
+async def execute_pipeline(
+    project: str,
+    pipeline_id: str,
+    req: ExecutePipelineRequest,
+    auth: dict = Depends(require_operator_or_client),
+):
     """Run a saved pipeline in a project and return its result.
 
-    project is a project id or name. pipeline_id is the pipeline id. The call
-    is recorded as a transaction. The response includes that id.
+    Auth is a login token, or the X-Consumer-Key and X-Consumer-Secret headers.
+    project is a project id or name. The call is recorded as a transaction.
     """
     from .. import transactions as tx
     from ..pipeline_mode import run_subflow
 
     proj = _resolve_project(project)
+    if auth.get("kind") == "client":
+        scoped = (auth.get("client") or {}).get("project_id")
+        if scoped and scoped != proj["id"]:
+            raise HTTPException(403, "This client is not allowed to call this project")
     row = _resolve_pipeline(pipeline_id, proj["id"])
     org_id = req.org_id or row.get("org_id") or ""
     parent = tx.record_transaction(
