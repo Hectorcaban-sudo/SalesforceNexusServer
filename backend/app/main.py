@@ -43,6 +43,7 @@ from .routers import chroma as chroma_router
 from .routers import rest as rest_router
 from .routers import databases as databases_router
 from .routers import flow_actions as flow_actions_router
+from .routers import api_clients as api_clients_router
 from .audit import AuditMiddleware
 
 install_chroma_mode()
@@ -134,6 +135,7 @@ app.include_router(chroma_router.router)
 app.include_router(rest_router.router)
 app.include_router(databases_router.router)
 app.include_router(flow_actions_router.router)
+app.include_router(api_clients_router.router)
 
 
 @app.get("/api/health")
