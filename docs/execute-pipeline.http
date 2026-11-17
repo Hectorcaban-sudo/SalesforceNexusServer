@@ -1,0 +1,107 @@
+### Salesforce Nexus AI Server — Execute Pipeline API tests
+### Compatible with VS Code REST Client and JetBrains HTTP Client
+###
+### Setup:
+### 1. Set the variables below (or use environment variables / .env)
+### 2. Create an API client in the admin UI: Administration → API clients
+###    (secret is shown only once — copy it)
+### 3. Find your project name/id and pipeline_id from the UI or API
+### 4. Send the requests
+
+@baseUrl = http://localhost:8000
+@project = default
+@pipelineId = YOUR_PIPELINE_ID_HERE
+
+# Consumer key auth (recommended for non-interactive calls)
+@consumerKey = YOUR_CONSUMER_KEY
+@consumerSecret = YOUR_CONSUMER_SECRET
+
+# Optional: login credentials for JWT auth
+@username = admin
+@password = admin123
+
+### -------------------------------------------------------
+### 1. Login (get JWT token) — optional if using consumer key
+### -------------------------------------------------------
+# @name login
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "{{username}}",
+  "password": "{{password}}"
+}
+
+### -------------------------------------------------------
+### 2. Execute pipeline — Consumer Key + Secret
+### -------------------------------------------------------
+POST {{baseUrl}}/api/execute/{{project}}/pipeline/{{pipelineId}}
+Content-Type: application/json
+X-Consumer-Key: {{consumerKey}}
+X-Consumer-Secret: {{consumerSecret}}
+
+{
+  "payload": {
+    "User_Message__c": "show me the latest modification for Project 4130650"
+  },
+  "org_id": null
+}
+
+### -------------------------------------------------------
+### 3. Execute pipeline — Bearer token (from login above)
+### -------------------------------------------------------
+POST {{baseUrl}}/api/execute/{{project}}/pipeline/{{pipelineId}}
+Content-Type: application/json
+Authorization: Bearer {{login.response.body.access_token}}
+
+{
+  "payload": {
+    "User_Message__c": "What is the status of project 4130650?"
+  }
+}
+
+### -------------------------------------------------------
+### 4. Direct DSS execute (JWT only)
+### -------------------------------------------------------
+POST {{baseUrl}}/api/execute/dss-client
+Content-Type: application/json
+Authorization: Bearer {{login.response.body.access_token}}
+
+{
+  "payload": {
+    "User_Message__c": "Hello from HTTP client"
+  }
+}
+
+### -------------------------------------------------------
+### 5. Direct Langflow execute (JWT only)
+### -------------------------------------------------------
+POST {{baseUrl}}/api/execute/langflow
+Content-Type: application/json
+Authorization: Bearer {{login.response.body.access_token}}
+
+{
+  "payload": {
+    "User_Message__c": "Hello from HTTP client"
+  }
+}
+
+### -------------------------------------------------------
+### 6. List API clients (admin JWT required)
+### -------------------------------------------------------
+GET {{baseUrl}}/api/api-clients
+Authorization: Bearer {{login.response.body.access_token}}
+
+### -------------------------------------------------------
+### 7. Create an API client (admin JWT required)
+###    The secret is returned only once — save it immediately
+### -------------------------------------------------------
+POST {{baseUrl}}/api/api-clients
+Content-Type: application/json
+Authorization: Bearer {{login.response.body.access_token}}
+
+{
+  "name": "Test Client from HTTP",
+  "project_id": null,
+  "enabled": true
+}
