@@ -15,28 +15,37 @@ class ExecuteRequest(BaseModel):
 
 
 class ExecutePipelineRequest(BaseModel):
-    pipeline_id: Optional[str] = None
-    name: Optional[str] = None
     payload: dict = {}
     org_id: Optional[str] = None
 
 
-def _resolve_pipeline(pipeline_id: Optional[str], name: Optional[str]):
-    from ..database import event_pipelines_table, Q
+def _resolve_project(project: str):
+    from ..database import projects_table, Q
 
-    if pipeline_id:
-        row = event_pipelines_table.get(Q.id == pipeline_id)
-        if not row:
-            raise HTTPException(404, f"Pipeline not found: {pipeline_id}")
+    row = projects_table.get(Q.id == project)
+    if row:
         return row
-    if name:
-        matches = [r for r in event_pipelines_table.all() if (r.get("name") or "").strip() == name.strip()]
-        if not matches:
-            raise HTTPException(404, f"Pipeline not found: {name}")
-        if len(matches) > 1:
-            raise HTTPException(400, f"More than one pipeline named {name}. Pass pipeline_id.")
-        return matches[0]
-    raise HTTPException(400, "Pass pipeline_id or name")
+    matches = [p for p in projects_table.all() if (p.get("name") or "").strip().lower() == project.strip().lower()]
+    if not matches:
+        raise HTTPException(404, f"Project not found: {project}")
+    if len(matches) > 1:
+        raise HTTPException(400, f"More than one project named {project}. Pass the project id.")
+    return matches[0]
+
+
+def _resolve_pipeline(pipeline_id: str, project_id: str):
+    from ..database import event_pipelines_table, event_configs_table, Q
+
+    row = event_pipelines_table.get(Q.id == pipeline_id)
+    if not row:
+        raise HTTPException(404, f"Pipeline not found: {pipeline_id}")
+    owner = row.get("project_id")
+    if not owner and row.get("event_id"):
+        ev = event_configs_table.get(Q.id == row.get("event_id")) or {}
+        owner = ev.get("project_id")
+    if owner and owner != project_id:
+        raise HTTPException(404, "Pipeline is not in this project")
+    return row
 
 
 def _child_trace(parent_id: str) -> list:
@@ -75,18 +84,18 @@ async def execute_langflow(req: ExecuteRequest):
         raise HTTPException(400, str(exc))
 
 
-@router.post("/pipeline")
-async def execute_pipeline(req: ExecutePipelineRequest):
-    """Run a saved pipeline with the given payload and return its result.
+@router.post("/{project}/pipeline/{pipeline_id}")
+async def execute_pipeline(project: str, pipeline_id: str, req: ExecutePipelineRequest):
+    """Run a saved pipeline in a project and return its result.
 
-    The call is recorded as a transaction. The response includes that id so
-    the caller can open the trace on the Transactions page.
+    project is a project id or name. pipeline_id is the pipeline id. The call
+    is recorded as a transaction. The response includes that id.
     """
     from .. import transactions as tx
     from ..pipeline_mode import run_subflow
 
-    row = _resolve_pipeline(req.pipeline_id, req.name)
-    pipeline_id = row["id"]
+    proj = _resolve_project(project)
+    row = _resolve_pipeline(pipeline_id, proj["id"])
     org_id = req.org_id or row.get("org_id") or ""
     parent = tx.record_transaction(
         org_id=org_id,
@@ -101,9 +110,11 @@ async def execute_pipeline(req: ExecutePipelineRequest):
     try:
         result = await run_subflow(pipeline_id, req.payload or {}, org_id, parent["id"])
         tx.update_transaction(parent["id"], status="published", result=result or {})
-        log_event("info", f"Direct execute: pipeline {row.get('name') or pipeline_id} finished", transaction_id=parent["id"])
+        log_event("info", f"Direct execute: pipeline {row.get('name') or pipeline_id} finished", transaction_id=parent["id"], project_id=proj["id"])
         return {
             "detail": "ok",
+            "project_id": proj["id"],
+            "project_name": proj.get("name"),
             "pipeline_id": pipeline_id,
             "pipeline_name": row.get("name"),
             "transaction_id": parent["id"],
@@ -112,5 +123,5 @@ async def execute_pipeline(req: ExecutePipelineRequest):
         }
     except Exception as exc:
         tx.update_transaction(parent["id"], status="failed", error=str(exc))
-        log_event("error", f"Direct execute: pipeline failed: {exc}", transaction_id=parent["id"])
+        log_event("error", f"Direct execute: pipeline failed: {exc}", transaction_id=parent["id"], project_id=proj["id"])
         raise HTTPException(400, str(exc))
