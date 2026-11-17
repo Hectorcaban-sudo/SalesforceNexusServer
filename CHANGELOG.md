@@ -4,6 +4,7 @@
 ### Execute a pipeline
 - `POST /api/execute/{project}/pipeline/{pipeline_id}` runs a saved pipeline in that project and returns its result. `project` is an id or a name. Body is the payload, plus an optional `org_id`.
 - The call is recorded as a transaction. The response includes that id and the node trace.
+- Auth is a login token, or a consumer key and secret. Send `X-Consumer-Key` and `X-Consumer-Secret`. Create clients on the Security page, API clients tab. A client can be limited to one project. The secret is shown once.
 
 ### REST processors
 - Administration and each project have a REST processor collection. Global ones are shared. Project ones belong to that project.
