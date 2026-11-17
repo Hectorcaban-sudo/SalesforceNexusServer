@@ -1,0 +1,104 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Salesforce Nexus — Execute Pipeline API",
+    "version": "1.5.0",
+    "description": "Run a saved pipeline and return the result. Auth is a consumer key + secret (X-Consumer-Key and X-Consumer-Secret headers)."
+  },
+  "servers": [
+    { "url": "https://your-nexus-host" }
+  ],
+  "paths": {
+    "/api/execute/{project}/pipeline/{pipeline_id}": {
+      "post": {
+        "summary": "Execute a saved pipeline",
+        "operationId": "executePipeline",
+        "tags": ["execute"],
+        "security": [
+          { "ConsumerKey": [] }
+        ],
+        "parameters": [
+          {
+            "name": "project",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Project id or project name"
+          },
+          {
+            "name": "pipeline_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Pipeline id"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "payload": {
+                    "type": "object",
+                    "description": "Data passed into the pipeline"
+                  },
+                  "org_id": {
+                    "type": "string",
+                    "nullable": true
+                  }
+                }
+              },
+              "example": {
+                "payload": {
+                  "User_Message__c": "show me the latest modification for Project 4130650"
+                },
+                "org_id": null
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Pipeline finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detail": { "type": "string" },
+                    "project_id": { "type": "string" },
+                    "project_name": { "type": "string" },
+                    "pipeline_id": { "type": "string" },
+                    "pipeline_name": { "type": "string" },
+                    "transaction_id": { "type": "string" },
+                    "result": { "type": "object" },
+                    "trace": { "type": "array" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Pipeline failed or has no flow" },
+          "401": { "description": "Invalid consumer key or secret" },
+          "403": { "description": "Client not allowed for this project" },
+          "404": { "description": "Project or pipeline not found" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ConsumerKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Consumer-Key",
+        "description": "Also send the X-Consumer-Secret header with the matching secret"
+      }
+    }
+  },
+  "security": [
+    { "ConsumerKey": [] }
+  ]
+}
