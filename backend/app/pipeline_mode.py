@@ -24,10 +24,19 @@ async def run_subflow(pipeline_id: str, payload: dict, org_id: str, transaction_
     if not graph.get("nodes"):
         raise RuntimeError(f"Pipeline {row.get('name') or pipeline_id} has no flow")
     from . import transactions as tx
+    # Inherit project from the parent transaction so API-driven runs stay scoped.
+    parent = tx.get_transaction(transaction_id) or {}
     # Run under its own child transaction so the child's status/trace never overwrite the parent's.
     child = tx.record_transaction(
-        org_id=org_id, org_name=None, direction="internal", channel=row.get("name") or "subflow",
-        status="processing", payload=payload or {}, parent_transaction_id=transaction_id,
+        org_id=org_id,
+        org_name=None,
+        direction="internal",
+        channel=row.get("name") or "subflow",
+        status="processing",
+        payload=payload or {},
+        parent_transaction_id=transaction_id,
+        project_id=parent.get("project_id"),
+        project_name=parent.get("project_name"),
     )
     token = _stack.set(stack + (pipeline_id,))
     try:

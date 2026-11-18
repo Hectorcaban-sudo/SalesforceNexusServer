@@ -139,6 +139,8 @@ async def execute_pipeline(
         payload=req.payload or {},
         pipeline_id=pipeline_id,
         pipeline_name=row.get("name"),
+        project_id=proj["id"],
+        project_name=proj.get("name"),
     )
     try:
         result = await run_subflow(pipeline_id, req.payload or {}, org_id, parent["id"])
