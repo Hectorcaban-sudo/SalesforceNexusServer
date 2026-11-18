@@ -14,7 +14,7 @@ LOG_DIR.mkdir(exist_ok=True)
 
 class Settings(BaseSettings):
     app_name: str = "Salesforce Nexus AI Server"
-    app_version: str = "1.4.0"
+    app_version: str = "1.5.0"
 
     secret_key: str = "CHANGE_ME_super_secret_key_please_rotate"
     algorithm: str = "HS256"

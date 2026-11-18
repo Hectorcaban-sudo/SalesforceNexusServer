@@ -32,8 +32,15 @@ def record_transaction(
     pipeline_id: Optional[str] = None,
     pipeline_name: Optional[str] = None,
     event_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    project_name: Optional[str] = None,
 ) -> dict:
-    project_id, project_name = _resolve_project(org_id)
+    # Prefer an explicit project (e.g. from the execute API). Fall back to org lookup.
+    if not project_id:
+        project_id, project_name = _resolve_project(org_id)
+    elif not project_name and project_id:
+        proj = projects_table.get(Q.id == project_id)
+        project_name = (proj or {}).get("name")
     record = {
         "id": new_id(),
         "org_id": org_id,
