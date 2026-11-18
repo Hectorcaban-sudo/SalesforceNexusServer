@@ -292,11 +292,11 @@ class TransactionStatus(str, Enum):
 
 class TransactionOut(BaseModel):
     id: str
-    org_id: str
+    org_id: Optional[str] = ""
     org_name: Optional[str] = None
     project_id: Optional[str] = None
     project_name: Optional[str] = None
-    direction: EventDirection
+    direction: str   # subscribe | publish | api | internal
     channel: str
     status: TransactionStatus
     payload: dict
@@ -484,7 +484,7 @@ class SharePointConnectionOut(BaseModel):
     name: str
     tenant_id: str
     client_id: str
-    client_secret: str = "••••••••"  # always masked in API
+    client_secret: str = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"  # always masked in API
     enabled: bool = True
     cloud: str = "gcchigh"
 
